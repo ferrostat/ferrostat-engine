@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn lines() {
         let s = "* comment\ngen x = 1 // note\nreg y x, ///\n   robust\n/* block\ncomment */ list\n";
-        assert_eq!(logical_lines(s), ["gen x = 1", "reg y x,     robust", "list"]);
+        assert_eq!(logical_lines(s), ["gen x = 1", "reg y x,    robust", "list"]);
     }
 
     #[test]

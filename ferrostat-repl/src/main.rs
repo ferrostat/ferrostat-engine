@@ -1,87 +1,73 @@
 use std::env;
-use std::fs::File;
 use std::io::{self, BufRead, Write};
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let mut interpreter = ferrostat_ado::interpreter::AdoInterpreter::new();
+use ferrostat_ado::interpreter::{err_message, rc_of, AdoInterpreter};
 
-    // Batch mode: ferrostat --do file.do
-    if args.len() >= 3 && args[1] == "--do" {
-        let path = &args[2];
-        match run_do_file(&mut interpreter, path) {
-            Ok(_) => {}
-            Err(e) => eprintln!("Error: {}", e),
-        }
-        return;
-    }
-
-    println!("Ferrostat statistical engine v{}", env!("CARGO_PKG_VERSION"));
-    println!("Type a command, or 'exit' to quit.");
-
-    let stdin = io::stdin();
-
-    loop {
-        print!(". ");
-        io::stdout().flush().unwrap();
-
-        let mut line = String::new();
-        if stdin.read_line(&mut line).is_err() {
-            break;
-        }
-
-        let line = line.trim_end();
-        if line.is_empty() {
-            continue;
-        }
-
-        if line.to_lowercase().starts_with("do ") {
-            let path = line[3..].trim().trim_matches('"');
-            match run_do_file(&mut interpreter, path) {
-                Ok(_) => {}
-                Err(e) => eprintln!("r({}); {}", 198, e),
+fn print_result(res: Result<String, String>) -> bool {
+    match res {
+        Ok(out) => {
+            let exit = out.ends_with("__EXIT__");
+            let text = out.trim_end_matches("__EXIT__").trim_end();
+            if !text.is_empty() {
+                println!("{text}");
             }
-            continue;
+            exit
         }
-
-        match interpreter.run_line(line) {
-            Ok(output) => {
-                if output == "__EXIT__" {
-                    break;
-                }
-                if !output.is_empty() {
-                    println!("{}", output);
-                }
+        Err(e) => {
+            let msg = err_message(&e);
+            if !msg.trim().is_empty() {
+                eprintln!("{}", msg.trim_end());
             }
-            Err(e) => {
-                eprintln!("r({}); {}", 198, e);
-            }
+            eprintln!("r({});", rc_of(&e));
+            false
         }
     }
 }
 
-fn run_do_file(interpreter: &mut ferrostat_ado::interpreter::AdoInterpreter, path: &str) -> Result<(), String> {
-    let file = File::open(path).map_err(|e| format!("cannot open {}: {}", path, e))?;
-    let reader = io::BufReader::new(file);
-    for line in reader.lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('*') || trimmed.starts_with("//") {
-            continue;
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    let mut interp = AdoInterpreter::new();
+
+    // Batch mode: ferrostat --do file.do [args]  (also: ferrostat -b do file.do)
+    let batch = args.iter().position(|a| a == "--do" || a == "do");
+    if let Some(i) = batch {
+        let Some(path) = args.get(i + 1) else {
+            eprintln!("usage: ferrostat --do file.do [args]");
+            std::process::exit(198);
+        };
+        let rest = args[i + 2..].join(" ");
+        interp.set_echo(true);
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(_) => {
+                eprintln!("file {path} not found\nr(601);");
+                std::process::exit(601);
+            }
+        };
+        let _ = rest;
+        let res = interp.run_script(&text);
+        let failed = res.is_err();
+        let code = res.as_ref().err().map(|e| rc_of(e)).unwrap_or(0);
+        print_result(res);
+        if failed {
+            std::process::exit(code.max(1));
         }
-        match interpreter.run_line(trimmed) {
-            Ok(output) => {
-                if output == "__EXIT__" {
-                    return Ok(());
-                }
-                if !output.is_empty() {
-                    println!("{}", output);
-                }
-            }
-            Err(e) => {
-                eprintln!("r({}); {}", 198, e);
-            }
+        return;
+    }
+
+    println!("Ferrostat {} — statistics engine (Stata-compatible command language)", env!("CARGO_PKG_VERSION"));
+    println!("Type a command, or 'exit' to quit.");
+    let stdin = io::stdin();
+    loop {
+        print!("{}", if interp.is_pending() { "> " } else { ". " });
+        io::stdout().flush().unwrap();
+        let mut line = String::new();
+        match stdin.lock().read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        if print_result(interp.run_line(line.trim_end_matches(['\n', '\r']))) {
+            break;
         }
     }
-    Ok(())
 }

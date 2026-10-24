@@ -93,7 +93,7 @@ impl Session {
     /// Evaluate a scalar expression through `display` (e.g. `r(mean)`,
     /// `_b[x]`, `e(N)`) and parse the printed number.
     pub fn scalar(&mut self, expr: &str) -> f64 {
-        let out = self.run(&format!("display {expr}"));
+        let out = self.run(&format!("display %21.0g {expr}"));
         out.trim().parse::<f64>().unwrap_or_else(|_| {
             panic!("`display {expr}` did not print a number, got: {out:?}")
         })
@@ -118,7 +118,13 @@ impl Session {
     /// Numeric column; missing values come back as NaN.
     pub fn nums(&self, var: &str) -> Vec<f64> {
         let v = self.ds().get_var(var).unwrap_or_else(|| panic!("no variable {var}"));
-        v.data.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect()
+        v.data
+            .iter()
+            .map(|x| {
+                let n = x.num();
+                if ferrostat_core::is_missing(n) { f64::NAN } else { n }
+            })
+            .collect()
     }
 
     /// String column.
