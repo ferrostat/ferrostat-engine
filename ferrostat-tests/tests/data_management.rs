@@ -654,3 +654,26 @@ fn rename_case_options() {
     s.run("rename x_big, proper");
     assert!(s.has_var("X_big"));
 }
+
+#[test]
+fn replace_is_sequential_for_recursive_formulas() {
+    // Stata evaluates replace observation by observation, so
+    // y[_n-1] sees the value just replaced
+    let mut s = Session::new();
+    s.run("set obs 5");
+    s.run("generate double y = 1");
+    s.run("replace y = y[_n-1] * 2 if _n > 1");
+    assert_eq!(s.nums("y"), [1.0, 2.0, 4.0, 8.0, 16.0]);
+    s.run("generate double c = 0");
+    s.run("replace c = c[_n-1] + _n if _n > 1");
+    assert_eq!(s.nums("c"), [0.0, 2.0, 5.0, 9.0, 14.0]);
+}
+
+#[test]
+fn rename_star_lower_keeps_underscore_names() {
+    // Spatial.do: shp2dta genid(_ID), then `rename *, lower`, then `keep _ID ...`
+    let mut s = Session::new();
+    s.script("set obs 2\ngenerate _ID = _n\ngenerate NOME_PROV = \"x\"");
+    s.run("rename *, lower");
+    assert!(s.has_var("_ID") && s.has_var("nome_prov"));
+}

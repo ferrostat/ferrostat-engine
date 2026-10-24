@@ -96,11 +96,13 @@ pub struct Env<'a> {
     /// Captures of the last `regexm()` match, for `regexs()`.
     regex_caps: RefCell<Vec<String>>,
     rng: Option<&'a RefCell<crate::rng::Rng>>,
+    /// (panel, time) -> observation index, built on first time-series lookup.
+    ts_index: RefCell<Option<HashMap<(u64, u64), usize>>>,
 }
 
 impl<'a> Env<'a> {
     pub fn new(ds: &'a DataSet) -> Self {
-        Env { ds, st: None, groups: None, running: Default::default(), regex_caps: Default::default(), rng: None }
+        Env { ds, st: None, groups: None, running: Default::default(), regex_caps: Default::default(), rng: None, ts_index: Default::default() }
     }
 
     pub fn with_store(ds: &'a DataSet, st: &'a Store) -> Self {
@@ -111,6 +113,7 @@ impl<'a> Env<'a> {
             running: Default::default(),
             regex_caps: Default::default(),
             rng: Some(&st.rng),
+            ts_index: Default::default(),
         }
     }
 
@@ -279,12 +282,21 @@ impl<'a> Env<'a> {
             if guess >= 0 && (guess as usize) < n && check(guess as usize) {
                 return self.cell(vi, guess as usize).num();
             }
-            for j in 0..n {
-                if check(j) {
-                    return self.cell(vi, j).num();
+            let mut idx = self.ts_index.borrow_mut();
+            let map = idx.get_or_insert_with(|| {
+                let mut m = HashMap::with_capacity(n);
+                for j in 0..n {
+                    let tj = self.ds.vars[ti].num(j);
+                    let pj = pi.map_or(0.0, |p| self.ds.vars[p].num(j));
+                    m.entry((pj.to_bits(), tj.to_bits())).or_insert(j);
                 }
-            }
-            return Ok(SYSMISS);
+                m
+            });
+            let key = (p0.unwrap_or(0.0).to_bits(), target.to_bits());
+            return match map.get(&key) {
+                Some(&j) => self.cell(vi, j).num(),
+                None => Ok(SYSMISS),
+            };
         }
         let (s, e) = self.group_bounds(row);
         let j = row as i64 - k;

@@ -36,14 +36,6 @@ pub enum Factor {
     Level(String, f64),
 }
 
-impl Factor {
-    fn var(&self) -> &str {
-        match self {
-            Factor::Cont(v) => crate::util::base_name(v),
-            Factor::Cat(v, _) | Factor::Level(v, _) => v,
-        }
-    }
-}
 
 /// Parse one factor token like `i.g`, `ib3.g`, `ib(last).g`, `c.x`, `L.x`, `2.g`.
 fn parse_factor(tok: &str) -> Result<Factor, String> {

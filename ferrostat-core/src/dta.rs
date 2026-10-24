@@ -135,7 +135,6 @@ fn decode_str(b: &[u8], utf8: bool) -> String {
 /// Layout constants that differ by release.
 #[derive(Clone, Copy)]
 struct Layout {
-    release: u16,
     name_w: usize,
     fmt_w: usize,
     lblname_w: usize,
@@ -153,7 +152,7 @@ impl Layout {
             118 | 119 => (129, 57, 129, 321, true),
             _ => return Err(DtaError::UnsupportedRelease(r)),
         };
-        Ok(Self { release: r, name_w, fmt_w, lblname_w, varlbl_w, datalbl_w: 81, utf8 })
+        Ok(Self { name_w, fmt_w, lblname_w, varlbl_w, datalbl_w: 81, utf8 })
     }
 }
 
@@ -214,7 +213,7 @@ fn read_tagged(data: &[u8]) -> Result<DataSet> {
     c.expect(b"</map>")?;
 
     let mut types = Vec::with_capacity(k);
-    let mut sec = |c: &mut Cursor, off: u64, tag: &[u8]| -> Result<()> {
+    let sec = |c: &mut Cursor, off: u64, tag: &[u8]| -> Result<()> {
         c.pos = off as usize;
         c.expect(tag)
     };

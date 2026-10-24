@@ -191,6 +191,50 @@ pub fn parse_type(t: &str) -> Result<VarType, String> {
     VarType::from_type_str(t).ok_or_else(|| rc_err(198, format!("{t} invalid type")))
 }
 
+/// Does the expression read the target variable at other observations
+/// (`x[_n-1]`, `L.x`)? Then replace must run observation by observation.
+fn refers_back(e: &ferrostat_parser::Expr, target: &str) -> bool {
+    use ferrostat_parser::Expr::*;
+    match e {
+        Index(b, i) => matches!(&**b, Var(n) if n == target) || refers_back(b, target) || refers_back(i, target),
+        Var(n) => n.split_once('.').map_or(false, |(op, v)| v == target && op.chars().all(|c| "lfdsLFDS0123456789".contains(c))),
+        Binary(a, _, b) => refers_back(a, target) || refers_back(b, target),
+        Unary(_, a) | Paren(a) => refers_back(a, target),
+        Call(_, args) => args.iter().any(|a| refers_back(a, target)),
+        _ => false,
+    }
+}
+
+/// Sequential replace: each observation sees the values already replaced.
+fn replace_sequential(ds: &mut DataSet, st: &mut Store, name: &str, e: &ferrostat_parser::Expr, mask: &[bool]) -> Result<String, String> {
+    let vi = ds.var_index[name];
+    if ds.vars[vi].var_type != VarType::Double {
+        let old = ds.vars[vi].var_type;
+        // promote so intermediate results are not truncated
+        let nt = promote(old, VarType::Double);
+        ds.vars[vi].data = ds.vars[vi].data.iter().map(|v| typed_value(nt, v.num())).collect();
+        ds.vars[vi].var_type = nt;
+    }
+    let groups = st.by_groups.clone();
+    let mut changes = 0;
+    for i in 0..ds.n_obs {
+        if !mask[i] {
+            continue;
+        }
+        let v = {
+            let env = Env::with_store(ds, st).groups(groups.as_ref());
+            env.eval(e, i)?.num()?
+        };
+        let old = ds.vars[vi].data[i].num();
+        if old != v {
+            changes += 1;
+        }
+        ds.vars[vi].data[i] = store_num(ds.vars[vi].var_type, v);
+    }
+    st.data_changed = true;
+    Ok(format!("({} made)", plural(changes, "real change")))
+}
+
 pub struct Replace;
 
 impl CommandHandler for Replace {
@@ -202,6 +246,10 @@ impl CommandHandler for Replace {
         let (lhs, rhs) = split_assignment(cmd)?;
         let name = varlist::resolve_name(ds, lhs.trim())?;
         let mask = util::touse(ds, st, cmd)?;
+        let parsed = parse_expression(&rhs).map_err(|e| rc_err(198, e.message))?;
+        if refers_back(&parsed, &name) && !ds.vars[ds.var_index[&name]].var_type.is_string() {
+            return replace_sequential(ds, st, &name, &parsed, &mask);
+        }
         let vals = eval_over(ds, st, &rhs, &mask)?;
         let vi = ds.var_index[&name];
         let is_str = ds.vars[vi].var_type.is_string();
@@ -340,7 +388,13 @@ impl CommandHandler for Rename {
         let case = ["lower", "upper", "proper"].into_iter().find(|c| cmd.has_opt(c, 3));
         if let Some(case) = case {
             let vars = if text.is_empty() || text == "*" || text == "_all" { ds.varlist() } else { varlist::expand(ds, text.trim_start_matches('(').trim_end_matches(')'))? };
+            let wildcard = text.is_empty() || text == "*" || text == "_all";
             for v in vars {
+                // system-style names such as _ID are left alone by `rename *, lower`
+                // (observed in Stata's log for test-andrea/Spatial.do)
+                if wildcard && v.starts_with('_') {
+                    continue;
+                }
                 let new = match case {
                     "lower" => v.to_lowercase(),
                     "upper" => v.to_uppercase(),

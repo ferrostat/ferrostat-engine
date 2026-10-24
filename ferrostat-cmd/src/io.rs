@@ -161,10 +161,6 @@ pub fn locale_from(cmd: &Command) -> NumLocale {
 }
 
 /// Infer the narrowest type for a column of text cells.
-fn infer_column(cells: &[String], stringcols: bool) -> (VarType, Vec<Value>) {
-    infer_column_locale(cells, stringcols, NumLocale { decimal: '.', group: None })
-}
-
 fn infer_column_locale(cells: &[String], stringcols: bool, loc: NumLocale) -> (VarType, Vec<Value>) {
     let is_missing_text = |s: &str| s.is_empty() || s == "." || s.eq_ignore_ascii_case("na");
     let numeric = !stringcols

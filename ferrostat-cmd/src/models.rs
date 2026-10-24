@@ -2146,16 +2146,91 @@ fn rmse4(v: f64) -> String {
 // xtivreg, fe
 // ---------------------------------------------------------------------------
 
-pub struct Xtivreg;
+pub struct Xtivreg {
+    /// `xtivreg2`: also report identification and overidentification tests
+    pub ivreg2: bool,
+}
+
+/// Columns of a design restricted to active variables.
+fn active_cols(d: &Design) -> Vec<Vec<f64>> {
+    d.active().iter().map(|&j| d.cols[j].clone()).collect()
+}
+
+/// Two-step efficient GMM Hansen J statistic (cluster-robust when `cl` given).
+fn hansen_j(x: &[Vec<f64>], z: &[Vec<f64>], y: &[f64], cl: Option<&[f64]>) -> (f64, f64) {
+    let n = y.len();
+    let (kx, kz) = (x.len(), z.len());
+    if kz <= kx {
+        return (0.0, 0.0);
+    }
+    let mat = |cols: &[Vec<f64>]| {
+        let mut m = Matrix::zeros(n, cols.len());
+        for (j, c) in cols.iter().enumerate() {
+            for t in 0..n {
+                m[(t, j)] = c[t];
+            }
+        }
+        m
+    };
+    let (xm, zm, ym) = (mat(x), mat(z), Matrix::col_vector(y));
+    let zt = zm.transpose();
+    let zz = zt.mul(&zm).unwrap();
+    let (zzi, _) = zz.sym_inverse(1e-14);
+    let zx = zt.mul(&xm).unwrap();
+    let zy = zt.mul(&ym).unwrap();
+    let gmm = |w: &Matrix| -> Vec<f64> {
+        let a = zx.transpose().mul(w).unwrap();
+        let (ai, _) = a.mul(&zx).unwrap().sym_inverse(1e-14);
+        ai.mul(&a.mul(&zy).unwrap()).unwrap().data
+    };
+    let resid = |b: &[f64]| -> Vec<f64> { (0..n).map(|t| y[t] - (0..kx).map(|j| x[j][t] * b[j]).sum::<f64>()).collect() };
+    let s_of = |u: &[f64]| -> Matrix {
+        let mut s = Matrix::zeros(kz, kz);
+        let mut add = |g: &[f64]| {
+            for a in 0..kz {
+                for c in 0..kz {
+                    s[(a, c)] += g[a] * g[c];
+                }
+            }
+        };
+        match cl {
+            Some(cl) => {
+                let mut sums: std::collections::BTreeMap<u64, Vec<f64>> = Default::default();
+                for t in 0..n {
+                    let e = sums.entry(cl[t].to_bits()).or_insert_with(|| vec![0.0; kz]);
+                    for a in 0..kz {
+                        e[a] += z[a][t] * u[t];
+                    }
+                }
+                sums.values().for_each(|g| add(g));
+            }
+            None => {
+                for t in 0..n {
+                    let g: Vec<f64> = (0..kz).map(|a| z[a][t] * u[t]).collect();
+                    add(&g);
+                }
+            }
+        }
+        s
+    };
+    let b1 = gmm(&zzi);
+    let s = s_of(&resid(&b1));
+    let (si, _) = s.sym_inverse(1e-14);
+    let b2 = gmm(&si);
+    let u2 = resid(&b2);
+    let g: Vec<f64> = (0..kz).map(|a| (0..n).map(|t| z[a][t] * u2[t]).sum()).collect();
+    let j: f64 = (0..kz).map(|a| (0..kz).map(|c| g[a] * si[(a, c)] * g[c]).sum::<f64>()).sum();
+    (j, (kz - kx) as f64)
+}
 
 impl CommandHandler for Xtivreg {
     fn name(&self) -> &'static str {
-        "xtivreg"
+        if self.ivreg2 { "xtivreg2" } else { "xtivreg" }
     }
 
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         if !cmd.has_opt("fe", 2) {
-            return Err(rc_err(198, "xtivreg: only the fe estimator is supported"));
+            return Err(rc_err(198, format!("{}: only the fe estimator is supported", self.name())));
         }
         let rest = cmd.main.trim();
         let open = rest.find('(').ok_or_else(|| rc_err(198, "(varlist2 = instlist) required"))?;
@@ -2228,7 +2303,34 @@ impl CommandHandler for Xtivreg {
         let df_r = n - ng as f64 - kx;
         let s2 = rss / df_r;
         let (bread, _) = est::cross(&xhat, &ax).sym_inverse(1e-14);
-        let v = est::expand_v(&bread.scale(s2), &ax, dx.k());
+        let vce = est::parse_vce(cmd, Vce::Ols)?;
+        let small = cmd.has_opt("small", 2);
+        let clv: Option<Vec<f64>> = match &vce {
+            Vce::Cluster(c) => {
+                let cc = util::col(ds, &crate::varlist::resolve_name(ds, c)?)?;
+                Some(dx.rows.iter().map(|&i| cc[i]).collect())
+            }
+            _ => None,
+        };
+        let mut n_clust = None;
+        let vact = match &vce {
+            Vce::Ols | Vce::Oim => bread.scale(s2),
+            _ => {
+                let scores: Vec<Vec<f64>> = (0..dx.n()).map(|t| ax.iter().map(|&j| xhat.cols[j][t] * resid[t]).collect()).collect();
+                let (vv, gcount) = est::sandwich(&bread, &scores, clv.as_deref(), 1.0);
+                let kk = ax.len() as f64;
+                if clv.is_some() {
+                    n_clust = Some(gcount);
+                    let g = gcount as f64;
+                    if small { vv.scale(g / (g - 1.0) * (n - 1.0) / (n - kk)) } else { vv }
+                } else if small {
+                    vv.scale(n / (n - kk))
+                } else {
+                    vv
+                }
+            }
+        };
+        let v = est::expand_v(&vact, &ax, dx.k());
         let cons = dx.names.iter().position(|nm| nm == "_cons").unwrap();
         // fixed effects, sigma_u, R-squared measures
         let slope = |x: &dyn Fn(usize) -> f64| -> f64 { (0..dx.k()).filter(|&j| j != cons).map(|j| b[j] * x(j)).sum() };
@@ -2283,10 +2385,71 @@ impl CommandHandler for Xtivreg {
         out.push(format!("{:>lw$} | {:>10}", "sigma_e", g10(se), lw = tbl_lw(&out)));
         out.push(format!("{:>lw$} | {:>10}   (fraction of variance due to u_i)", "rho", g10(rho), lw = tbl_lw(&out)));
         out.push("-".repeat(tbl_lw(&out) + 66));
+        if let Some(g) = n_clust {
+            out.push(format!("(Std. err. adjusted for {} clusters)", g));
+        }
+        let mut diag: Vec<(String, f64)> = Vec::new();
+        if self.ivreg2 {
+            // identification: cluster/robust first-stage F of the excluded instruments
+            let excluded: Vec<usize> = az.iter().copied().filter(|&j| !dx.names.contains(&dz.names[j])).collect();
+            let endog_cols: Vec<usize> = ax.iter().copied().filter(|&j| !dz.names.contains(&dx.names[j])).collect();
+            out.push(String::new());
+            out.push("Identification and overidentification statistics".to_string());
+            for &j in &endog_cols {
+                let mut d1 = dz.clone();
+                d1.y = dx.cols[j].clone();
+                let full = est::ols(&d1, if clv.is_some() { &vce } else { &Vce::Robust }, clv.as_deref())?;
+                let q = excluded.len();
+                let mut vsub = Matrix::zeros(q, q);
+                for (a, &ea) in excluded.iter().enumerate() {
+                    for (c, &ec) in excluded.iter().enumerate() {
+                        vsub[(a, c)] = full.v[(ea, ec)];
+                    }
+                }
+                let (vi, _) = vsub.sym_inverse(1e-14);
+                let bs: Vec<f64> = excluded.iter().map(|&e| full.b[e]).collect();
+                let w: f64 = (0..q).map(|a| (0..q).map(|c| bs[a] * vi[(a, c)] * bs[c]).sum::<f64>()).sum();
+                let df2 = full.n_clust.map_or(full.df_r, |g| g as f64 - 1.0);
+                out.push(format!("  First-stage F({}, {}) for {} (excluded instruments) = {:.3}   Prob > F = {:.4}", q, df2, dx.names[j], w / q as f64, dist::ftail(q as f64, df2, w / q as f64)));
+                out.push(format!("  Robust Wald chi2({}) for {} = {:.3}   Prob > chi2 = {:.4}", q, dx.names[j], w, dist::chi2tail(q as f64, w)));
+                diag.push((format!("F_{}", dx.names[j]), w / q as f64));
+            }
+            let xc = active_cols(&dx);
+            let zc = active_cols(&dz);
+            let (j, jdf) = hansen_j(&xc, &zc, &dx.y, clv.as_deref());
+            if jdf > 0.0 {
+                out.push(format!("  Hansen J statistic (overidentification): chi2({}) = {:.3}   P-val = {:.4}", jdf, j, dist::chi2tail(jdf, j)));
+                diag.push(("j".into(), j));
+                diag.push(("jdf".into(), jdf));
+            } else {
+                out.push("  Hansen J statistic: 0.000 (equation exactly identified)".to_string());
+                diag.push(("j".into(), 0.0));
+            }
+            if let Some(evars) = cmd.opt("endog", 3) {
+                // C statistic: J with the variables treated as exogenous minus J as specified
+                let test: Vec<usize> = endog_cols.iter().copied().filter(|&jj| evars.split_whitespace().any(|v| v.eq_ignore_ascii_case(&dx.names[jj]))).collect();
+                let mut zc2 = zc.clone();
+                for &jj in &test {
+                    zc2.push(dx.cols[jj].clone());
+                }
+                let (j2, _) = hansen_j(&xc, &zc2, &dx.y, clv.as_deref());
+                let c = (j2 - j).max(0.0);
+                let cdf = test.len() as f64;
+                out.push(format!("  Endogeneity test of {}: chi2({}) = {:.3}   P-val = {:.4}", evars.trim(), cdf, c, dist::chi2tail(cdf, c)));
+                diag.push(("estat".into(), c));
+            }
+        }
         out.push(format!("Endogenous: {}", endog.trim()));
         out.push(format!("Exogenous:  {}", zlist.split_whitespace().collect::<Vec<_>>().join(" ")));
         let text = out.join("\n");
-        est::post(st, "xtivreg", &dx, &b, &v, &|e: &mut Results| {
+        let cmdname = self.name();
+        est::post(st, cmdname, &dx, &b, &v, &|e: &mut Results| {
+            for (k, val) in &diag {
+                e.set(k, *val);
+            }
+            if let Some(g) = n_clust {
+                e.set("N_clust", g as f64);
+            }
             e.set("sigma_u", su);
             e.set("sigma_e", se);
             e.set("rho", rho);

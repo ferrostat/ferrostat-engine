@@ -211,7 +211,13 @@ impl Engine {
             ("xtreg", Box::new(models::Xtreg)),
             ("areg", Box::new(models::Areg)),
             ("ivregress", Box::new(models::Ivregress)),
-            ("xtivreg", Box::new(models::Xtivreg)),
+            ("xtivreg", Box::new(models::Xtivreg { ivreg2: false })),
+            ("xtivreg2", Box::new(models::Xtivreg { ivreg2: true })),
+            ("xtpmg", Box::new(ferrostat_cmd::panel_ardl::Xtpmg)),
+            ("hausman", Box::new(ferrostat_cmd::panel_ardl::Hausman)),
+            ("shp2dta", Box::new(ferrostat_cmd::spatial::Shp2dta)),
+            ("spmat", Box::new(ferrostat_cmd::spatial::Spmat)),
+            ("spmap", Box::new(ferrostat_cmd::spatial::Spmap)),
             ("glm", Box::new(models::Glm)),
             ("qreg", Box::new(models::Qreg)),
             ("predict", Box::new(postest::Predict)),
@@ -408,12 +414,16 @@ impl Engine {
                 self.store.globals.insert("S_level".into(), v.trim().to_string());
                 Ok(String::new())
             }
+            "rmsg" => {
+                self.store.rmsg = v.trim() == "on";
+                Ok(String::new())
+            }
             "varabbrev" => {
                 self.store.varabbrev = v.trim() == "on";
                 Ok(String::new())
             }
             // accepted for compatibility; no effect
-            "more" | "maxvar" | "matsize" | "linesize" | "pagesize" | "graphics" | "scheme" | "trace" | "tracedepth" | "logtype" | "rmsg"
+            "more" | "maxvar" | "matsize" | "linesize" | "pagesize" | "graphics" | "scheme" | "trace" | "tracedepth" | "logtype"
             | "output" | "processors" | "niceness" | "dp" | "emptycells" | "fvlabel" | "showbaselevels" | "cformat" | "pformat"
             | "sformat" | "maxiter" | "checksum" | "autotabgraphs" | "segmentsize" | "max_memory" | "min_memory" | "copycolor" | "locale_functions"
             | "locale_ui" | "charset" | "httpproxy" | "update_query" | "timeout1" | "timeout2" | "printcolor" | "haverdir" | "odbcmgr" | "notifyuser"

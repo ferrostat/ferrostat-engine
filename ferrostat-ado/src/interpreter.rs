@@ -273,7 +273,12 @@ impl AdoInterpreter {
         if self.depth == 0 {
             self.log_write(&s.text, true);
         }
-        self.exec_text(&text, s.body.as_deref())
+        let started = std::time::Instant::now();
+        let flow = self.exec_text(&text, s.body.as_deref())?;
+        if self.engine.store.rmsg && self.depth == 0 {
+            self.emit(&format!("r; t={:.2}", started.elapsed().as_secs_f64()));
+        }
+        Ok(flow)
     }
 
     /// Execute already-expanded statement text (with optional block body).

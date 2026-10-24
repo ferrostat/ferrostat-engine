@@ -14,7 +14,7 @@ use crate::store::{Results, Store};
 use crate::util;
 
 fn g9(v: f64) -> String {
-    fmt_g(v, 9)
+    fmt_g(v, 8)
 }
 
 fn need_e(st: &Store) -> Result<(&Matrix, &Matrix, String), String> {

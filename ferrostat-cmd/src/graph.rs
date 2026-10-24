@@ -47,6 +47,18 @@ pub struct Graph {
     /// Reference lines from yline()/xline().
     pub ylines: Vec<f64>,
     pub xlines: Vec<f64>,
+    /// Choropleth polygons (spmap) and their legend.
+    pub polygons: Vec<MapPolygon>,
+    pub map_legend: Vec<(String, (u8, u8, u8))>,
+    /// Sub-graphs laid out in a grid (graph combine).
+    pub children: Vec<Graph>,
+    pub cols: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapPolygon {
+    pub points: Vec<(f64, f64)>,
+    pub fill: (u8, u8, u8),
 }
 
 fn opt_text(cmd: &Command, name: &str, min: usize) -> Option<String> {
@@ -346,7 +358,20 @@ impl CommandHandler for GraphCmd {
                 st.graph = Some(g);
                 Ok(String::new())
             }
-            "combine" => Err(rc_err(198, "graph combine not supported")),
+            "combine" => {
+                let c = parse_line(&format!("combine {rest}")).map_err(|e| rc_err(198, e))?;
+                let mut children = Vec::new();
+                for n in c.main.split_whitespace() {
+                    let g = st.graphs.get(n).cloned().or_else(|| load_gph(&util::unquote(n)).ok()).ok_or_else(|| rc_err(111, format!("graph {n} not found")))?;
+                    children.push(g);
+                }
+                if children.is_empty() {
+                    return Err(rc_err(198, "graph combine requires graph names"));
+                }
+                let cols = util::opt_num(&c, "cols", 3)?.map(|v| v as usize).unwrap_or_else(|| (children.len() as f64).sqrt().ceil() as usize).max(1);
+                let mut g = Graph { children, cols, ..Default::default() };
+                finish(&mut g, &c, st)
+            }
             _ => Err(rc_err(198, format!("graph {sub}: invalid subcommand"))),
         }
     }
@@ -556,6 +581,20 @@ where
 {
     let e = |x: DrawingAreaErrorKind<DB::ErrorType>| rc_err(603, format!("could not render graph: {x:?}"));
     root.fill(&WHITE).map_err(e)?;
+    if !g.children.is_empty() {
+        let cols = g.cols.max(1);
+        let rows = (g.children.len() + cols - 1) / cols;
+        let area = if g.title.is_empty() { root.clone() } else { root.titled(&g.title, ("sans-serif", 20)).map_err(e)? };
+        let cells = area.split_evenly((rows, cols));
+        for (child, cell) in g.children.iter().zip(cells.iter()) {
+            draw(child, cell)?;
+        }
+        root.present().map_err(e)?;
+        return Ok(());
+    }
+    if !g.polygons.is_empty() {
+        return draw_map(g, root);
+    }
     let mut xs: Vec<f64> = g.layers.iter().flat_map(|l| l.points.iter().map(|p| p.0)).collect();
     let mut ys: Vec<f64> = g.layers.iter().flat_map(|l| l.points.iter().map(|p| p.1)).collect();
     for l in &g.layers {
@@ -642,6 +681,44 @@ where
     }
     if g.legend {
         chart.configure_series_labels().background_style(WHITE.mix(0.8)).border_style(BLACK).draw().map_err(e)?;
+    }
+    root.present().map_err(e)?;
+    Ok(())
+}
+
+fn draw_map<DB: DrawingBackend>(g: &Graph, root: &DrawingArea<DB, plotters::coord::Shift>) -> Result<(), String>
+where
+    DB::ErrorType: 'static,
+{
+    let e = |x: DrawingAreaErrorKind<DB::ErrorType>| rc_err(603, format!("could not render map: {x:?}"));
+    let xs = g.polygons.iter().flat_map(|p| p.points.iter().map(|q| q.0));
+    let ys = g.polygons.iter().flat_map(|p| p.points.iter().map(|q| q.1));
+    let (x0, x1) = xs.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+    let (y0, y1) = ys.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+    // keep the aspect ratio of the map
+    let (w, h) = root.dim_in_pixel();
+    let (sx, sy) = ((x1 - x0).max(1e-12), (y1 - y0).max(1e-12));
+    let scale = ((w as f64 * 0.9) / sx).min((h as f64 * 0.85) / sy);
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let half_w = w as f64 / scale / 2.0;
+    let half_h = h as f64 / scale / 2.0;
+    let mut chart = ChartBuilder::on(root)
+        .caption(&g.title, ("sans-serif", 18))
+        .margin(5)
+        .build_cartesian_2d((cx - half_w)..(cx + half_w), (cy - half_h)..(cy + half_h))
+        .map_err(e)?;
+    for p in &g.polygons {
+        let col = RGBColor(p.fill.0, p.fill.1, p.fill.2);
+        chart.draw_series(std::iter::once(Polygon::new(p.points.clone(), col.filled()))).map_err(e)?;
+        chart.draw_series(std::iter::once(PathElement::new(p.points.clone(), BLACK.stroke_width(1)))).map_err(e)?;
+    }
+    // legend in the bottom-left corner
+    for (k, (label, c)) in g.map_legend.iter().enumerate() {
+        let y = (h as i32) - 20 - 18 * (g.map_legend.len() - k) as i32;
+        let col = RGBColor(c.0, c.1, c.2);
+        root.draw(&Rectangle::new([(10, y), (24, y + 12)], col.filled())).map_err(e)?;
+        root.draw(&Rectangle::new([(10, y), (24, y + 12)], BLACK.stroke_width(1))).map_err(e)?;
+        root.draw(&Text::new(label.clone(), (30, y), ("sans-serif", 12))).map_err(e)?;
     }
     root.present().map_err(e)?;
     Ok(())

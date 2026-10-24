@@ -292,3 +292,85 @@ fn estat_firststage_after_ivregress() {
     assert_close(f, t * t, 1e-8);
     assert!(s.scalar("F[1,1]") > 0.0 && s.scalar("F[1,1]") <= 1.0);
 }
+
+/// Small balanced panel generated deterministically (no RNG dependence).
+fn ardl_panel(s: &mut Session) {
+    s.run("clear");
+    s.run("set obs 120");
+    s.run("generate id = ceil(_n / 30)");
+    s.run("bysort id: generate t = _n");
+    s.run("generate double x = sin(_n * 0.7) * 3 + id");
+    s.run("generate double y = 0");
+    s.run("xtset id t");
+    // y_t = 0.5 y_{t-1} + 0.4 x_t + id-specific shock pattern
+    s.run("by id: replace y = 0.5 * y[_n-1] + 0.4 * x + 0.1 * cos(_n * 1.3 + id) if _n > 1");
+}
+
+#[test]
+fn xtpmg_mean_group_averages_panel_estimates() {
+    // used by test-andrea/Spatial.do Task 6
+    let mut s = Session::new();
+    ardl_panel(&mut s);
+    s.run("xtpmg d.y d.x, lr(l.y x) ec(ec) mg replace");
+    let mg = s.scalar("_b[ec:x]");
+    // panel-by-panel: theta_i = -b_x / b_ly from D.y on L.y x D.x
+    let mut thetas = Vec::new();
+    for i in 1..=4 {
+        s.run(&format!("quietly regress D.y L.y x D.x if id == {i}"));
+        thetas.push(-s.scalar("_b[x]") / s.scalar("_b[L.y]"));
+    }
+    assert_close(mg, thetas.iter().sum::<f64>() / 4.0, 1e-9);
+    assert!(s.has_var("ec"));
+}
+
+#[test]
+fn xtpmg_pooled_mean_group_and_hausman() {
+    let mut s = Session::new();
+    ardl_panel(&mut s);
+    s.run("xtpmg d.y d.x, lr(l.y x) ec(ec) pmg replace");
+    s.run("estimates store PMG");
+    let ll = s.scalar("e(ll)");
+    assert!(ll.is_finite());
+    // the long-run coefficient is close to the true value 0.4 / (1 - 0.5) = 0.8
+    assert!((s.scalar("_b[ec:x]") - 0.8).abs() < 0.05, "{}", s.scalar("_b[ec:x]"));
+    s.run("xtpmg d.y d.x, lr(l.y x) ec(ec) mg replace");
+    s.run("estimates store MG");
+    s.run("hausman MG PMG");
+    assert_eq!(s.scalar("r(df)"), 1.0);
+}
+
+fn iv_panel(s: &mut Session) {
+    s.run("clear");
+    s.run("set obs 200");
+    s.run("generate id = ceil(_n / 10)");
+    s.run("bysort id: generate t = _n");
+    s.run("xtset id t");
+    s.run("generate double z1 = sin(_n * 0.37)");
+    s.run("generate double z2 = cos(_n * 1.91)");
+    s.run("generate double e = sin(_n * 2.3) * 0.5");
+    s.run("generate double x = z1 + 0.5 * z2 + e + id / 10");
+    s.run("generate double y = 2 * x + e + id");
+}
+
+#[test]
+fn xtivreg2_matches_xtivreg_and_reports_diagnostics() {
+    // test-andrea/Spatial.do Task 5 uses xtivreg2 ..., fe cluster() endog()
+    let mut s = Session::new();
+    iv_panel(&mut s);
+    s.run("xtivreg y (x = z1 z2), fe");
+    let b = s.scalar("_b[x]");
+    let se = s.scalar("_se[x]");
+    s.run("xtivreg2 y (x = z1 z2), fe endog(x)");
+    assert_close(s.scalar("_b[x]"), b, 1e-10);
+    assert_close(s.scalar("_se[x]"), se, 1e-10);
+    assert!(s.scalar("e(j)") >= 0.0);
+    assert_eq!(s.scalar("e(jdf)"), 1.0);
+    assert!(s.scalar("e(estat)") >= 0.0);
+    // clustering changes only the standard errors
+    s.run("xtivreg2 y (x = z1 z2), fe cluster(id)");
+    assert_close(s.scalar("_b[x]"), b, 1e-10);
+    assert_eq!(s.scalar("e(N_clust)"), 20.0);
+    // exactly identified: J = 0
+    s.run("xtivreg2 y (x = z1), fe");
+    assert_eq!(s.scalar("e(j)"), 0.0);
+}

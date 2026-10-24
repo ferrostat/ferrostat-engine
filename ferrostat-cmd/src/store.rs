@@ -100,6 +100,8 @@ pub struct Store {
     /// Confidence level for estimation output (`set level`).
     pub level: f64,
     pub varabbrev: bool,
+    /// `set rmsg on`: report elapsed time after each command.
+    pub rmsg: bool,
     /// Return code of the last command (`_rc`).
     pub rc: i32,
     /// Panel and time variables set by tsset/xtset.
@@ -136,6 +138,7 @@ impl Default for Store {
             estimates: BTreeMap::new(),
             level: 95.0,
             varabbrev: true,
+            rmsg: false,
             rc: 0,
             tsset: None,
             data_changed: false,
