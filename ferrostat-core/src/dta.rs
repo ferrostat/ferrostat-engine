@@ -121,7 +121,7 @@ impl DtaReader {
     fn parse_header(&mut self) -> Result<(), DtaError> {
         // Ensure it starts with <stata_dta>
         if !self.data.starts_with(b"<stata_dta>") {
-            return Err(DtaError::InvalidFormat("Missing <stata_dta> tag".into()));
+            return Err(DtaError::InvalidFormat("Invalid DTA file header".into()));
         }
 
         // Find header bounds

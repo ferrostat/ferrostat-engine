@@ -16,7 +16,7 @@ fn main() {
         return;
     }
 
-    println!("Ferrostat clean-room engine v{}", env!("CARGO_PKG_VERSION"));
+    println!("Ferrostat statistical engine v{}", env!("CARGO_PKG_VERSION"));
     println!("Type a command, or 'exit' to quit.");
 
     let stdin = io::stdin();

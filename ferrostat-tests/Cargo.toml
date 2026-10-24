@@ -1,0 +1,15 @@
+[package]
+name = "ferrostat-tests"
+description = "Behavioural test suite for Ferrostat, written against the documented command language"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrostat-core = { path = "../ferrostat-core" }
+ferrostat-parser = { path = "../ferrostat-parser" }
+ferrostat-engine = { path = "../ferrostat-engine" }
+ferrostat-cmd = { path = "../ferrostat-cmd" }
+ferrostat-ado = { path = "../ferrostat-ado" }

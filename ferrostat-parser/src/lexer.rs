@@ -1,6 +1,6 @@
 //! Ferrostat full-featured lexer.
 //!
-//! Handles quoted strings, numbers, operators, punctuation, and Stata-specific tokens.
+//! Handles quoted strings, numbers, operators, punctuation, and language-specific tokens.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -364,7 +364,7 @@ impl Lexer {
                         let n = s.parse::<f64>().unwrap_or(0.0);
                         Token::Num(n)
                     } else if self.current_char == Some('_') || self.current_char.map_or(false, |c| c.is_numeric()) {
-                        // Stata missing value: .a or .1
+                        // Missing value: .a or .1
                         // Keep as special dot+ident
                         let mut s = String::from(".");
                         while let Some(c2) = self.current_char {

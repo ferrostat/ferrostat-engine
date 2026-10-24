@@ -307,6 +307,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrostat-tests"
+version = "0.1.0"
+dependencies = [
+ "ferrostat-ado",
+ "ferrostat-cmd",
+ "ferrostat-core",
+ "ferrostat-engine",
+ "ferrostat-parser",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"

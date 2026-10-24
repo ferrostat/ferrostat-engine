@@ -1,4 +1,4 @@
-//! Full recursive-descent parser for Ferrostat/Stata syntax.
+//! Full recursive-descent parser for Ferrostat command syntax.
 
 use crate::lexer::{Lexer, Token};
 use crate::token::{BinOp, UnaryOp};
