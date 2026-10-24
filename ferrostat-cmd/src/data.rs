@@ -12,7 +12,7 @@ use crate::util::{self, best_numeric_type, fits, promote, typed_value};
 use crate::varlist;
 
 fn plural(n: usize, word: &str) -> String {
-    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+    format!("{} {word}{}", crate::util::commas(n), if n == 1 { "" } else { "s" })
 }
 
 /// Split `[type] name = exp` from the main text of generate/replace.
@@ -337,6 +337,28 @@ impl CommandHandler for Rename {
     }
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         let text = cmd.main.trim();
+        let case = ["lower", "upper", "proper"].into_iter().find(|c| cmd.has_opt(c, 3));
+        if let Some(case) = case {
+            let vars = if text.is_empty() || text == "*" || text == "_all" { ds.varlist() } else { varlist::expand(ds, text.trim_start_matches('(').trim_end_matches(')'))? };
+            for v in vars {
+                let new = match case {
+                    "lower" => v.to_lowercase(),
+                    "upper" => v.to_uppercase(),
+                    _ => {
+                        let mut c = v.chars();
+                        match c.next() {
+                            Some(f) => f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase(),
+                            None => v.clone(),
+                        }
+                    }
+                };
+                if new != v {
+                    rename_one(ds, &v, &new)?;
+                }
+            }
+            st.data_changed = true;
+            return Ok(String::new());
+        }
         let (old, new): (Vec<String>, Vec<String>) = if text.starts_with('(') {
             let close = text.find(')').ok_or_else(|| rc_err(198, "invalid syntax"))?;
             let a = &text[1..close];

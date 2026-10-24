@@ -22,7 +22,7 @@ fn split_call(s: &str) -> Result<(String, String), String> {
 }
 
 fn plural(n: usize) -> String {
-    format!("({} missing value{} generated)", n, if n == 1 { "" } else { "s" })
+    format!("({} missing value{} generated)", crate::util::commas(n), if n == 1 { "" } else { "s" })
 }
 
 /// Per-observation group id according to by-variables (or the by prefix).

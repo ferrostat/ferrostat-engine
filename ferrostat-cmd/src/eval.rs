@@ -721,7 +721,21 @@ fn wildcard_match(pat: &str, text: &str) -> bool {
 
 /// Convert Stata-style regex to Rust regex syntax (mostly compatible).
 fn regex(pat: &str) -> Result<regex::Regex, String> {
-    regex::Regex::new(pat).map_err(|e| rc_err(198, format!("invalid regular expression: {e}")))
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, regex::Regex>> = RefCell::new(HashMap::new());
+    }
+    if let Some(r) = CACHE.with(|c| c.borrow().get(pat).cloned()) {
+        return Ok(r);
+    }
+    let r = regex::Regex::new(pat).map_err(|e| rc_err(198, format!("invalid regular expression: {e}")))?;
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > 256 {
+            c.clear();
+        }
+        c.insert(pat.to_string(), r.clone());
+    });
+    Ok(r)
 }
 
 fn real(s: &str) -> f64 {

@@ -16,7 +16,7 @@ use crate::util::{self, WeightKind};
 use crate::varlist;
 
 fn plural(n: usize, w: &str) -> String {
-    format!("{n} {w}{}", if n == 1 { "" } else { "s" })
+    format!("{} {w}{}", crate::util::commas(n), if n == 1 { "" } else { "s" })
 }
 
 /// Build a dataset from selected observations (in the given order).

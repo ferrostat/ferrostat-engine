@@ -223,6 +223,30 @@ impl Lexer {
         Token::Num(n)
     }
 
+    /// Factor-variable names such as `2.group`, `1b.group`, `3o.x`.
+    fn try_factor_ident(&mut self) -> Option<Token> {
+        let rest: Vec<char> = self.input[self.pos..].chars().collect();
+        let mut i = 0;
+        while i < rest.len() && rest[i].is_ascii_digit() {
+            i += 1;
+        }
+        while i < rest.len() && matches!(rest[i], 'b' | 'o' | 'n') {
+            i += 1;
+        }
+        if i < rest.len() && rest[i] == '.' && rest.get(i + 1).map_or(false, |c| c.is_alphabetic() || *c == '_') {
+            let mut j = i + 1;
+            while j < rest.len() && (rest[j].is_alphanumeric() || rest[j] == '_' || rest[j] == '.' || rest[j] == '#') {
+                j += 1;
+            }
+            let s: String = rest[..j].iter().collect();
+            for _ in 0..j {
+                self.advance();
+            }
+            return Some(Token::Ident(s));
+        }
+        None
+    }
+
     fn read_ident(&mut self) -> Token {
         let mut s = String::new();
         while let Some(c) = self.current_char {
@@ -406,7 +430,13 @@ impl Lexer {
                     }
                 }
                 '#' => { self.advance(); Token::Pound }
-                c if c.is_ascii_digit() => self.read_number(),
+                c if c.is_ascii_digit() => {
+                    if let Some(tok) = self.try_factor_ident() {
+                        tok
+                    } else {
+                        self.read_number()
+                    }
+                }
                 c if c.is_alphabetic() || c == '_' => self.read_ident(),
                 _ => {
                     self.advance();

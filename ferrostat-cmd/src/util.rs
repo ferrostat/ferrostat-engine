@@ -406,3 +406,16 @@ pub fn level(cmd: &Command, st: &Store) -> Result<f64, String> {
 pub fn rule(widths: &[usize]) -> String {
     widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join("+")
 }
+
+/// Integer with thousands separators, as in Stata messages (`76,038`).
+pub fn commas(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}

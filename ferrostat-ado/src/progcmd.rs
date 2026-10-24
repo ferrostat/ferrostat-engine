@@ -213,6 +213,7 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             return Err(rc_err(code, error_text(code)));
         }
         "putexcel" => crate::putexcel::putexcel(me, r)?,
+        "outreg2" | "outreg" => crate::outreg::outreg2(me, r)?,
         "mata" | "mata:" | "python" | "python:" => return Err(rc_err(3000, "mata/python are not supported by Ferrostat")),
         _ => {
             let _ = full;
@@ -879,8 +880,26 @@ fn results_mut(me: &mut AdoInterpreter, prefix: char) -> &mut Results {
 fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
     let zero = me.engine.store.local("0").cloned().unwrap_or_default();
     let cmd = parse_line(&format!("__syntax {zero}")).map_err(|e| rc_err(198, e.message))?;
-    let (spec_main, spec_opts) = match find_top_level(spec, ',') {
-        Some(i) => (spec[..i].to_string(), spec[i + 1..].to_string()),
+    // the option list starts at the first comma outside parentheses
+    // (it is usually inside `[ ]`)
+    let comma = {
+        let mut depth = 0i32;
+        let mut found = None;
+        for (i, c) in spec.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    found = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        found
+    };
+    let (spec_main, spec_opts) = match comma {
+        Some(i) => (spec[..i].trim_end().trim_end_matches('[').to_string(), spec[i + 1..].to_string()),
         None => (spec.to_string(), String::new()),
     };
     let spec_main = spec_main.replace("[,", " ");

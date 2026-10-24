@@ -39,24 +39,21 @@ fn generate_refuses_existing_name() {
 }
 
 #[test]
-#[ignore = "bug: generate with an undefined variable silently fills missing; Stata errors with r(111)"]
 fn generate_with_unknown_variable_fails() {
     let mut s = Session::with_fixture();
     s.fails("generate w = nosuchvar + 1");
 }
 
 #[test]
-#[ignore = "missing: `generate ... if` leaves non-matching observations missing"]
 fn generate_with_if() {
     let mut s = Session::with_fixture();
-    s.run("generate w = y if group == 2");
+    s.run("generate double w = y if group == 2");
     let w = s.nums("w");
     assert!(w[0].is_nan());
     assert_eq!(w[4], Y[4]);
 }
 
 #[test]
-#[ignore = "missing: the `gen` abbreviation (and other command abbreviations)"]
 fn command_abbreviations() {
     let mut s = Session::with_fixture();
     s.run("gen w = 1");
@@ -66,7 +63,6 @@ fn command_abbreviations() {
 }
 
 #[test]
-#[ignore = "missing: storage type in generate (byte/int/long/float/double/strN)"]
 fn generate_storage_types() {
     let mut s = Session::with_fixture();
     s.run("generate byte b = 1");
@@ -98,7 +94,6 @@ fn replace_unknown_variable_fails() {
 }
 
 #[test]
-#[ignore = "missing: `replace ... in` range"]
 fn replace_with_in() {
     let mut s = Session::with_fixture();
     s.run("replace y = 0 in 1/2");
@@ -124,7 +119,6 @@ fn drop_if() {
 }
 
 #[test]
-#[ignore = "missing: `drop in` range"]
 fn drop_in() {
     let mut s = Session::with_fixture();
     s.run("drop in 1/3");
@@ -162,7 +156,6 @@ fn keep_in() {
 }
 
 #[test]
-#[ignore = "bug: `drop if` with missing condition values — Stata drops when the expression is true, and `. > 5` is true"]
 fn drop_if_missing_greater() {
     let mut s = Session::with_missing_fixture();
     s.run("drop if y > 20");
@@ -208,7 +201,6 @@ fn sort_puts_missing_last() {
 }
 
 #[test]
-#[ignore = "missing: gsort (descending sorts)"]
 fn gsort_descending() {
     let mut s = Session::with_fixture();
     s.run("gsort -y");
@@ -218,7 +210,6 @@ fn gsort_descending() {
 // ---- renaming, ordering, labelling ----------------------------------------------
 
 #[test]
-#[ignore = "missing: rename"]
 fn rename_variable() {
     let mut s = Session::with_fixture();
     s.run("rename y outcome");
@@ -226,7 +217,6 @@ fn rename_variable() {
 }
 
 #[test]
-#[ignore = "missing: order / move"]
 fn order_variables() {
     let mut s = Session::with_fixture();
     s.run("order y x");
@@ -234,7 +224,6 @@ fn order_variables() {
 }
 
 #[test]
-#[ignore = "missing: label variable / label data"]
 fn label_variable_and_data() {
     let mut s = Session::with_fixture();
     s.run("label variable y \"Outcome\"");
@@ -244,7 +233,6 @@ fn label_variable_and_data() {
 }
 
 #[test]
-#[ignore = "missing: label define / label values"]
 fn label_define_and_values() {
     let mut s = Session::with_fixture();
     s.run("label define grp 1 \"north\" 2 \"south\" 3 \"west\"");
@@ -255,7 +243,6 @@ fn label_define_and_values() {
 }
 
 #[test]
-#[ignore = "missing: encode / decode"]
 fn encode_and_decode() {
     let mut s = Session::with_fixture();
     s.run("encode name, generate(name_n)");
@@ -265,7 +252,6 @@ fn encode_and_decode() {
 }
 
 #[test]
-#[ignore = "missing: destring / tostring"]
 fn destring_and_tostring() {
     let mut s = Session::with_fixture();
     s.run("tostring x, generate(xs)");
@@ -275,7 +261,6 @@ fn destring_and_tostring() {
 }
 
 #[test]
-#[ignore = "missing: recode"]
 fn recode_values() {
     let mut s = Session::with_fixture();
     s.run("recode group (1 2 = 0) (3 = 1), generate(g3)");
@@ -283,7 +268,6 @@ fn recode_values() {
 }
 
 #[test]
-#[ignore = "missing: format command for display formats"]
 fn format_command() {
     let mut s = Session::with_fixture();
     s.run("format y %9.2f");
@@ -291,7 +275,6 @@ fn format_command() {
 }
 
 #[test]
-#[ignore = "missing: compress"]
 fn compress_demotes_types() {
     let mut s = Session::with_fixture();
     s.run("compress");
@@ -301,7 +284,6 @@ fn compress_demotes_types() {
 // ---- creating data ----------------------------------------------------------
 
 #[test]
-#[ignore = "missing: set obs"]
 fn set_obs() {
     let mut s = Session::new();
     s.run("set obs 5");
@@ -310,7 +292,6 @@ fn set_obs() {
 }
 
 #[test]
-#[ignore = "missing: input ... end"]
 fn input_block() {
     let mut s = Session::new();
     s.script("input a b\n1 2\n3 4\nend");
@@ -319,7 +300,6 @@ fn input_block() {
 }
 
 #[test]
-#[ignore = "missing: preserve / restore"]
 fn preserve_restore() {
     let mut s = Session::with_fixture();
     s.run("preserve");
@@ -374,11 +354,11 @@ fn egen_rowtotal_treats_missing_as_zero() {
 #[test]
 fn egen_column_statistics() {
     let mut s = Session::with_fixture();
-    s.run("egen m = mean(y)");
-    s.run("egen sd = sd(y)");
-    s.run("egen mx = max(y)");
-    s.run("egen mn = min(y)");
-    s.run("egen t = total(y)");
+    s.run("egen double m = mean(y)");
+    s.run("egen double sd = sd(y)");
+    s.run("egen double mx = max(y)");
+    s.run("egen double mn = min(y)");
+    s.run("egen double t = total(y)");
     s.run("egen c = count(y)");
     assert_close(s.nums("m")[5], reference::Y_MEAN, 1e-12);
     assert_close(s.nums("sd")[5], reference::Y_SD, 1e-12);
@@ -389,12 +369,11 @@ fn egen_column_statistics() {
 }
 
 #[test]
-#[ignore = "missing: `by` / `bysort` prefix and egen ..., by()"]
 fn egen_by_group() {
     let mut s = Session::with_fixture();
-    s.run("bysort group: egen gm = mean(y)");
+    s.run("bysort group: egen double gm = mean(y)");
     assert_all_close(&[s.nums("gm")[0], s.nums("gm")[4], s.nums("gm")[8]], &reference::GROUP_MEAN_Y, 1e-12);
-    s.run("egen gm2 = mean(y), by(group)");
+    s.run("egen double gm2 = mean(y), by(group)");
     assert_eq!(s.nums("gm"), s.nums("gm2"));
 }
 
@@ -413,7 +392,6 @@ fn egen_group_numbers_categories() {
 }
 
 #[test]
-#[ignore = "bug: egen rank() must give tied values the average rank"]
 fn egen_rank_with_ties_averaged() {
     let mut s = Session::with_fixture();
     s.run("egen r = rank(z)");
@@ -433,16 +411,15 @@ fn egen_seq() {
 }
 
 #[test]
-#[ignore = "missing: egen median/pctile/iqr/tag/cut/std/mode/concat/anymatch"]
 fn egen_more_functions() {
     let mut s = Session::with_fixture();
-    s.run("egen med = median(y)");
+    s.run("egen double med = median(y)");
     assert_close(s.nums("med")[0], reference::Y_P50, 1e-12);
-    s.run("egen p75 = pctile(y), p(75)");
+    s.run("egen double p75 = pctile(y), p(75)");
     assert_close(s.nums("p75")[0], reference::Y_P75, 1e-12);
     s.run("egen t = tag(group)");
     assert_eq!(s.nums("t").iter().sum::<f64>(), 3.0);
-    s.run("egen sy = std(y)");
+    s.run("egen double sy = std(y)");
     assert_close(s.nums("sy")[0], (Y[0] - reference::Y_MEAN) / reference::Y_SD, 1e-12);
     s.run("egen c = cut(x), at(0 4 8 13)");
     assert_eq!(s.nums("c")[4], 4.0);
@@ -457,7 +434,6 @@ fn egen_unknown_function_fails() {
 // ---- by-group processing ------------------------------------------------------
 
 #[test]
-#[ignore = "missing: by-group _n/_N (bysort group: gen n = _n)"]
 fn by_group_running_counter() {
     let mut s = Session::with_fixture();
     s.run("bysort group: generate k = _n");
@@ -467,7 +443,6 @@ fn by_group_running_counter() {
 }
 
 #[test]
-#[ignore = "missing: `by` prefix on reporting commands"]
 fn by_prefix_summarize() {
     let mut s = Session::with_fixture();
     let out = s.run("by group, sort: summarize y");
@@ -477,7 +452,6 @@ fn by_prefix_summarize() {
 // ---- collapse / contract ------------------------------------------------------
 
 #[test]
-#[ignore = "bug: collapse statistic tokens `(mean)` are split by the lexer and never recognised"]
 fn collapse_mean_by_group() {
     let mut s = Session::with_fixture();
     s.run("collapse (mean) y, by(group)");
@@ -486,7 +460,6 @@ fn collapse_mean_by_group() {
 }
 
 #[test]
-#[ignore = "bug: collapse without by() drops the collapsed variables"]
 fn collapse_default_statistic_is_mean() {
     let mut s = Session::with_fixture();
     s.run("collapse y x");
@@ -496,7 +469,6 @@ fn collapse_default_statistic_is_mean() {
 }
 
 #[test]
-#[ignore = "bug: collapse, by() returns groups in hash order instead of sorted by the by-variables"]
 fn collapse_by_without_stat_is_mean() {
     let mut s = Session::with_fixture();
     s.run("collapse y, by(group)");
@@ -506,7 +478,6 @@ fn collapse_by_without_stat_is_mean() {
 }
 
 #[test]
-#[ignore = "bug: collapse statistic tokens `(sum)`, `(sd)`, `(count)` are not recognised"]
 fn collapse_multiple_statistics_with_rename() {
     let mut s = Session::with_fixture();
     s.run("collapse (sum) ys=y (sd) ysd=y (count) n=y, by(group)");
@@ -534,7 +505,6 @@ fn expand_constant() {
 }
 
 #[test]
-#[ignore = "bug: expand deletes observations whose count is < 1; Stata keeps them once"]
 fn expand_by_variable() {
     let mut s = Session::with_fixture();
     s.run("expand cnt");
@@ -544,7 +514,6 @@ fn expand_by_variable() {
 }
 
 #[test]
-#[ignore = "bug: fillin collapses duplicate observations instead of keeping them"]
 fn fillin_rectangularizes() {
     let mut s = Session::with_fixture();
     s.run("keep group z");
@@ -568,7 +537,6 @@ fn reshape_wide_to_long() {
 }
 
 #[test]
-#[ignore = "bug: reshape long ignores j() and creates a string `j` instead of a numeric year variable"]
 fn reshape_long_numeric_j() {
     let mut s = Session::new();
     s.load(small(&[("id", &[1., 2.]), ("inc1", &[10., 20.]), ("inc2", &[11., 21.])]));
@@ -578,7 +546,6 @@ fn reshape_long_numeric_j() {
 }
 
 #[test]
-#[ignore = "bug: reshape wide does not create stub+j variables (inc1, inc2)"]
 fn reshape_long_to_wide() {
     let mut s = Session::new();
     s.load(small(&[("id", &[1., 1., 2., 2.]), ("year", &[1., 2., 1., 2.]), ("inc", &[10., 11., 20., 21.])]));
@@ -604,7 +571,6 @@ fn append_using() {
 }
 
 #[test]
-#[ignore = "bug: merge parses `1:1` as key variables `:` and `1`"]
 fn merge_one_to_one() {
     let dir = temp_dir("merge11");
     let other = dir.join("other.dta");
@@ -619,7 +585,6 @@ fn merge_one_to_one() {
 }
 
 #[test]
-#[ignore = "bug: merge parses `m:1` as key variables"]
 fn merge_many_to_one() {
     let dir = temp_dir("mergem1");
     let other = dir.join("groups.dta");
@@ -631,7 +596,6 @@ fn merge_many_to_one() {
 }
 
 #[test]
-#[ignore = "missing: merge options keep(), nogenerate, assert()"]
 fn merge_options() {
     let dir = temp_dir("mergeopts");
     let other = dir.join("other.dta");
@@ -643,7 +607,6 @@ fn merge_options() {
 }
 
 #[test]
-#[ignore = "missing: joinby / cross"]
 fn joinby_and_cross() {
     let dir = temp_dir("cross");
     let other = dir.join("other.dta");
@@ -656,7 +619,6 @@ fn joinby_and_cross() {
 // ---- duplicates, misc ---------------------------------------------------------
 
 #[test]
-#[ignore = "missing: duplicates report/tag/drop"]
 fn duplicates_drop() {
     let mut s = Session::with_fixture();
     s.run("keep group");
@@ -665,7 +627,6 @@ fn duplicates_drop() {
 }
 
 #[test]
-#[ignore = "missing: xpose / stack / separate"]
 fn xpose() {
     let mut s = Session::with_fixture();
     s.run("keep x y");
@@ -674,10 +635,22 @@ fn xpose() {
 }
 
 #[test]
-#[ignore = "missing: sample (random subsample)"]
 fn sample_fraction() {
     let mut s = Session::with_fixture();
     s.run("set seed 1");
     s.run("sample 50");
     assert_eq!(s.n(), 6);
+}
+
+#[test]
+fn rename_case_options() {
+    // `rename *, lower` (test-andrea/Spatial.do)
+    let mut s = Session::with_fixture();
+    s.run("rename x X_Big");
+    s.run("rename *, upper");
+    assert!(s.has_var("X_BIG") && s.has_var("ID"));
+    s.run("rename *, lower");
+    assert!(s.has_var("x_big") && s.has_var("id"));
+    s.run("rename x_big, proper");
+    assert!(s.has_var("X_big"));
 }

@@ -3,7 +3,13 @@ use std::io::{self, BufRead, Write};
 
 use ferrostat_ado::interpreter::{err_message, rc_of, AdoInterpreter};
 
-fn print_result(res: Result<String, String>) -> bool {
+fn print_result(interp: &mut AdoInterpreter, res: Result<String, String>) -> bool {
+    if res.is_err() {
+        let partial = std::mem::take(&mut interp.partial_output);
+        if !partial.trim().is_empty() {
+            println!("{}", partial.trim_end());
+        }
+    }
     match res {
         Ok(out) => {
             let exit = out.ends_with("__EXIT__");
@@ -48,7 +54,7 @@ fn main() {
         let res = interp.run_script(&text);
         let failed = res.is_err();
         let code = res.as_ref().err().map(|e| rc_of(e)).unwrap_or(0);
-        print_result(res);
+        print_result(&mut interp, res);
         if failed {
             std::process::exit(code.max(1));
         }
@@ -66,7 +72,8 @@ fn main() {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
-        if print_result(interp.run_line(line.trim_end_matches(['\n', '\r']))) {
+        let r = interp.run_line(line.trim_end_matches(['\n', '\r']));
+        if print_result(&mut interp, r) {
             break;
         }
     }

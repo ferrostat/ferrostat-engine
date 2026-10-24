@@ -1390,7 +1390,17 @@ impl CommandHandler for Xtreg {
                 let (wald, q) = est::wald_all(&dw, &fit.b, &vv);
                 let f = wald / q;
                 // F test that all u_i = 0
-                let pooled = est::ols(&d, &Vce::Ols, None)?;
+                let mut dp = d.clone();
+                dp.omitted = dw.omitted.clone();
+                let pooled = est::ols(&dp, &Vce::Ols, None)?;
+                let ui_obs: Vec<f64> = (0..d.n()).map(|t| ui[g[t]]).collect();
+                let corr_u_xb = {
+                    let (ma, mb) = (util::mean(&ui_obs), util::mean(&fitted));
+                    let sab: f64 = ui_obs.iter().zip(&fitted).map(|(a, b)| (a - ma) * (b - mb)).sum();
+                    let saa: f64 = ui_obs.iter().map(|a| (a - ma).powi(2)).sum();
+                    let sbb: f64 = fitted.iter().map(|b| (b - mb).powi(2)).sum();
+                    sab / (saa * sbb).sqrt()
+                };
                 let fu = ((pooled.rss - fit.rss) / (ng as f64 - 1.0)) / (fit.rss / df_r);
                 stats = vec![
                     ("sigma_u".into(), su),
@@ -1403,28 +1413,33 @@ impl CommandHandler for Xtreg {
                     ("df_r".into(), df_r),
                     ("df_m".into(), q),
                     ("F_f".into(), fu),
+                    ("corr".into(), corr_u_xb),
                     ("df_a".into(), ng as f64 - 1.0),
                 ];
+                out.extend(dw.notes.iter().cloned());
+                if !dw.notes.is_empty() {
+                    out.push(String::new());
+                }
                 out.push(format!("{:<52}{:<15} = {:>10}", "Fixed-effects (within) regression", "Number of obs", g10(n)));
                 out.push(format!("{:<52}{:<15} = {:>10}", format!("Group variable: {panel}"), "Number of groups", ng));
                 out.push(String::new());
                 out.push(format!("{:<52}{}", "R-squared:", "Obs per group:"));
                 out.push(format!("     Within  = {:<37.4}{:>15} = {:>10}", r2_w, "min", g10(tcount.iter().cloned().fold(f64::INFINITY, f64::min))));
-                out.push(format!("     Between = {:<37.4}{:>15} = {:>10}", r2_b, "avg", fmt_g(n / ng as f64, 4)));
+                out.push(format!("     Between = {:<37.4}{:>15} = {:>10.1}", r2_b, "avg", n / ng as f64));
                 out.push(format!("     Overall = {:<37.4}{:>15} = {:>10}", r2_o, "max", g10(tcount.iter().cloned().fold(0.0, f64::max))));
                 out.push(String::new());
-                out.push(format!("{:<52}{:<15} = {:>10}", "", format!("F({},{})", q, df_r), f2(f)));
-                out.push(format!("{:<52}{:<15} = {:>10}", "corr(u_i, Xb) = ", "Prob > F", f4(dist::ftail(q, df_r, f))));
+                out.push(format!("{:<52}{:<15} = {:>10}", "", format!("F({}, {})", q, df_r), f2(f)));
+                out.push(format!("{:<52}{:<15} = {:>10}", format!("corr(u_i, Xb) = {:.4}", corr_u_xb), "Prob > F", f4(dist::ftail(q, df_r, f))));
                 out.push(String::new());
                 b = fit.b.clone();
                 v = vv;
                 out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &dw.names, b: &b, v: &v, omitted: &dw.omitted, is_base: &dw.is_base, df: Some(if cl.is_some() { ng as f64 - 1.0 } else { df_r }), level, eform: None, coef_title: "Coefficient" }));
                 out.pop();
-                out.push(format!("{}+{}", "-".repeat(13), "-".repeat(64)));
-                out.push(format!("{:>12} | {:>10}", "sigma_u", g10(su)));
-                out.push(format!("{:>12} | {:>10}", "sigma_e", g10(sigma_e)));
-                out.push(format!("{:>12} | {:>10}   (fraction of variance due to u_i)", "rho", g10(rho)));
-                out.push("-".repeat(78));
+                out.push(format!("{}+{}", "-".repeat(tbl_lw(&out) + 1), "-".repeat(64)));
+                out.push(format!("{:>lw$} | {:>10}", "sigma_u", g10(su), lw = tbl_lw(&out)));
+                out.push(format!("{:>lw$} | {:>10}", "sigma_e", g10(sigma_e), lw = tbl_lw(&out)));
+                out.push(format!("{:>lw$} | {:>10}   (fraction of variance due to u_i)", "rho", g10(rho), lw = tbl_lw(&out)));
+                out.push("-".repeat(tbl_lw(&out) + 66));
                 out.push(format!("F test that all u_i=0: F({}, {}) = {:.2}{:>18}Prob > F = {:.4}", ng - 1, df_r, fu, "", dist::ftail(ng as f64 - 1.0, df_r, fu)));
                 d = dw;
             }
@@ -1514,11 +1529,11 @@ impl CommandHandler for Xtreg {
                 v = vv;
                 out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &d.names, b: &b, v: &v, omitted: &d.omitted, is_base: &d.is_base, df: None, level, eform: None, coef_title: "Coefficient" }));
                 out.pop();
-                out.push(format!("{}+{}", "-".repeat(13), "-".repeat(64)));
-                out.push(format!("{:>12} | {:>10}", "sigma_u", g10(sigma_u)));
-                out.push(format!("{:>12} | {:>10}", "sigma_e", g10(sigma_e)));
-                out.push(format!("{:>12} | {:>10}   (fraction of variance due to u_i)", "rho", g10(rho)));
-                out.push("-".repeat(78));
+                out.push(format!("{}+{}", "-".repeat(tbl_lw(&out) + 1), "-".repeat(64)));
+                out.push(format!("{:>lw$} | {:>10}", "sigma_u", g10(sigma_u), lw = tbl_lw(&out)));
+                out.push(format!("{:>lw$} | {:>10}", "sigma_e", g10(sigma_e), lw = tbl_lw(&out)));
+                out.push(format!("{:>lw$} | {:>10}   (fraction of variance due to u_i)", "rho", g10(rho), lw = tbl_lw(&out)));
+                out.push("-".repeat(tbl_lw(&out) + 66));
             }
         }
         let text = out.join("\n");
@@ -2056,4 +2071,9 @@ impl CommandHandler for Qreg {
         });
         Ok(text)
     }
+}
+
+/// Width of the label column of the last coefficient table in `out`.
+fn tbl_lw(out: &[String]) -> usize {
+    out.iter().rev().find(|l| l.contains("+---")).and_then(|l| l.find('+')).map_or(12, |p| p.saturating_sub(1))
 }

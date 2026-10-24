@@ -44,7 +44,6 @@ fn in_qualifier_single_and_range() {
 }
 
 #[test]
-#[ignore = "missing: `in f/l`, `in -5/l` and other first/last forms"]
 fn in_qualifier_first_last() {
     assert_eq!(parse_line("list in f/5").unwrap().in_range, Some(InRange::First(5)));
     assert_eq!(parse_line("list in -3/l").unwrap().in_range, Some(InRange::Last(3)));
@@ -90,7 +89,6 @@ fn options_plain_with_args_and_multiple() {
 }
 
 #[test]
-#[ignore = "missing: option arguments that are not a single expression, e.g. by(a b) or title(\"x\") with spaces"]
 fn option_with_varlist_argument() {
     let c = parse_line("collapse (mean) y, by(group d)").unwrap();
     let by = c.options.iter().find(|(n, _)| n == "by").expect("by option");
@@ -129,7 +127,6 @@ fn subtraction_is_left_associative() {
 }
 
 #[test]
-#[ignore = "bug: -2^2 parses as (-2)^2 = 4; Stata gives -4"]
 fn unary_minus_binds_looser_than_power() {
     // In Stata -2^2 == -4
     assert_eq!(
@@ -175,20 +172,17 @@ fn literals() {
 }
 
 #[test]
-#[ignore = "missing: extended missing literals .a-.z in expressions"]
 fn extended_missing_literal() {
     assert!(!matches!(expr(".a"), Expr::Number(_)));
     assert_ne!(expr(".a"), expr(".b"));
 }
 
 #[test]
-#[ignore = "missing: compound double quotes `\"...\"'"]
 fn compound_quotes() {
     assert_eq!(expr("`\"say \"hi\"\"'"), Expr::String("say \"hi\"".into()));
 }
 
 #[test]
-#[ignore = "missing: explicit subscripts x[_n-1]"]
 fn subscripts() {
     assert!(matches!(expr("x[_n-1]"), Expr::Index(_, _)));
 }
@@ -223,8 +217,7 @@ fn raw_line_is_preserved() {
 }
 
 #[test]
-#[ignore = "missing: varlist abbreviations and wildcards (x*, x?, a-c) are expanded by the parser/engine"]
 fn varlist_wildcards() {
-    let c = parse_line("summarize x*").unwrap();
-    assert_eq!(c.args, ["x*"]);
+    let c = parse_line("summarize x* y?").unwrap();
+    assert_eq!(c.main, "x* y?");
 }

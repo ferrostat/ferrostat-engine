@@ -58,6 +58,11 @@ pub struct AdoInterpreter {
     pub(crate) depth: usize,
     pub(crate) echo: bool,
     pub(crate) putexcel: crate::putexcel::PutExcel,
+    /// Outcome of the last top-level `if`, so a later `else` line can see it.
+    top_last_if: Option<bool>,
+    /// Output produced before the error of the last failed `run_script`.
+    pub partial_output: String,
+    pub(crate) outreg_tables: std::collections::HashMap<String, crate::outreg::Table>,
 }
 
 impl Default for AdoInterpreter {
@@ -82,6 +87,9 @@ impl AdoInterpreter {
             depth: 0,
             echo: false,
             putexcel: Default::default(),
+            top_last_if: None,
+            partial_output: String::new(),
+            outreg_tables: Default::default(),
         }
     }
 
@@ -150,22 +158,31 @@ impl AdoInterpreter {
         self.out.clear();
         let lines = script::logical_lines(text);
         let stmts = script::parse_block(&lines)?;
-        let res = self.exec_block(&stmts);
+        let mut last_if = if self.depth == 0 { self.top_last_if.take() } else { None };
+        let res = self.exec_block_with(&stmts, &mut last_if);
+        if self.depth == 0 {
+            self.top_last_if = last_if;
+        }
         let out = std::mem::take(&mut self.out).join("\n");
         match res {
             Ok(Flow::Exit) if self.depth == 0 => Ok(if out.is_empty() { "__EXIT__".into() } else { format!("{out}\n__EXIT__") }),
             Ok(_) => Ok(out),
             Err(e) => {
                 self.log_write(&err_message(&e), false);
-                if out.is_empty() { Err(e) } else { Err(format!("{out}\n{e}")) }
+                self.partial_output = out;
+                Err(e)
             }
         }
     }
 
     pub(crate) fn exec_block(&mut self, stmts: &[Stmt]) -> Result<Flow, String> {
         let mut last_if: Option<bool> = None;
+        self.exec_block_with(stmts, &mut last_if)
+    }
+
+    fn exec_block_with(&mut self, stmts: &[Stmt], last_if: &mut Option<bool>) -> Result<Flow, String> {
         for s in stmts {
-            let flow = self.exec_stmt(s, &mut last_if)?;
+            let flow = self.exec_stmt(s, last_if)?;
             if flow != Flow::Next {
                 return Ok(flow);
             }

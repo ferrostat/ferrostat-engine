@@ -44,6 +44,9 @@ pub struct Graph {
     pub xlabels: Vec<(f64, String)>,
     pub legend: bool,
     pub name: String,
+    /// Reference lines from yline()/xline().
+    pub ylines: Vec<f64>,
+    pub xlines: Vec<f64>,
 }
 
 fn opt_text(cmd: &Command, name: &str, min: usize) -> Option<String> {
@@ -62,6 +65,13 @@ fn finish(graph: &mut Graph, cmd: &Command, st: &mut Store) -> Result<String, St
     }
     if let Some(l) = cmd.opt("legend", 3) {
         graph.legend = !l.contains("off");
+    }
+    let nums = |s: &str| -> Vec<f64> { s.split(',').next().unwrap_or("").split_whitespace().filter_map(|x| x.parse().ok()).collect() };
+    if let Some(y) = cmd.opt("yline", 5) {
+        graph.ylines = nums(y);
+    }
+    if let Some(x) = cmd.opt("xline", 5) {
+        graph.xlines = nums(x);
     }
     graph.name = cmd.opt("name", 4).map(|s| s.split(',').next().unwrap().trim().to_string()).unwrap_or_else(|| "Graph".into());
     let mut msg = String::new();
@@ -309,7 +319,34 @@ impl CommandHandler for GraphCmd {
             }
             "dir" => Ok(st.graphs.keys().cloned().collect::<Vec<_>>().join("\n")),
             "display" => Ok(String::new()),
-            "combine" | "save" | "use" => Err(rc_err(198, format!("graph {sub} not supported"))),
+            "save" => {
+                let c = parse_line(&format!("save {rest}")).map_err(|e| rc_err(198, e))?;
+                let words = split_top_level_words(c.main.trim());
+                let (name, file) = match words.as_slice() {
+                    [f] => (None, util::unquote(f)),
+                    [n, f] => (Some(n.clone()), util::unquote(f)),
+                    _ => return Err(rc_err(198, "graph save [graphname] filename")),
+                };
+                let file = if file.contains('.') { file } else { format!("{file}.gph") };
+                if std::path::Path::new(&file).exists() && !c.has_opt("replace", 3) {
+                    return Err(rc_err(602, format!("file {file} already exists")));
+                }
+                let g = match name {
+                    Some(n) => st.graphs.get(&n).cloned(),
+                    None => st.graph.clone(),
+                }
+                .ok_or_else(|| rc_err(693, "no graph in memory"))?;
+                save_gph(&g, &file)?;
+                Ok(format!("file {file} saved"))
+            }
+            "use" => {
+                let file = util::unquote(rest.split(',').next().unwrap_or(""));
+                let g = load_gph(&file)?;
+                st.graphs.insert(g.name.clone(), g.clone());
+                st.graph = Some(g);
+                Ok(String::new())
+            }
+            "combine" => Err(rc_err(198, "graph combine not supported")),
             _ => Err(rc_err(198, format!("graph {sub}: invalid subcommand"))),
         }
     }
@@ -390,13 +427,127 @@ const COLORS: [RGBColor; 6] = [RGBColor(26, 71, 111), RGBColor(144, 53, 59), RGB
 
 /// Render a graph to a file (PNG by default, SVG for .svg).
 pub fn render(g: &Graph, path: &str, w: u32, h: u32) -> Result<(), String> {
-    if path.ends_with(".svg") {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".svg") {
         let root = SVGBackend::new(path, (w, h)).into_drawing_area();
         draw(g, &root)
+    } else if lower.ends_with(".pdf") {
+        // rasterise, then embed the bitmap in a single-page PDF
+        let mut buf = vec![0u8; (w * h * 3) as usize];
+        {
+            let root = BitMapBackend::with_buffer(&mut buf, (w, h)).into_drawing_area();
+            draw(g, &root)?;
+        }
+        std::fs::write(path, pdf_with_image(&buf, w, h)).map_err(|e| rc_err(603, e))
+    } else if lower.ends_with(".gph") {
+        save_gph(g, path)
     } else {
         let root = BitMapBackend::new(path, (w, h)).into_drawing_area();
         draw(g, &root)
     }
+}
+
+/// Minimal PDF 1.4 document with one page showing an RGB image.
+pub fn pdf_with_image(rgb: &[u8], w: u32, h: u32) -> Vec<u8> {
+    // page size in points: fit the longer side to 720pt
+    let scale = 720.0 / (w.max(h) as f64);
+    let (pw, ph) = ((w as f64 * scale).round(), (h as f64 * scale).round());
+    let content = format!("q {pw} 0 0 {ph} 0 0 cm /Im0 Do Q");
+    let mut objs: Vec<Vec<u8>> = Vec::new();
+    objs.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
+    objs.push(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec());
+    objs.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw} {ph}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>").into_bytes());
+    let mut img = format!("<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {} >>\nstream\n", rgb.len()).into_bytes();
+    img.extend_from_slice(rgb);
+    img.extend_from_slice(b"\nendstream");
+    objs.push(img);
+    objs.push(format!("<< /Length {} >>\nstream\n{}\nendstream", content.len(), content).into_bytes());
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for off in offsets {
+        out.extend_from_slice(format!("{:010} 00000 n \n", off).as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n", objs.len() + 1, xref).as_bytes());
+    out
+}
+
+/// Save a graph in Ferrostat's own text-based .gph format.
+pub fn save_gph(g: &Graph, path: &str) -> Result<(), String> {
+    let mut s = String::from("ferrostat-graph 1\n");
+    s.push_str(&format!("title\t{}\nxtitle\t{}\nytitle\t{}\nlegend\t{}\n", g.title, g.xtitle, g.ytitle, g.legend));
+    s.push_str(&format!("ylines\t{}\nxlines\t{}\n", join(&g.ylines), join(&g.xlines)));
+    for (x, l) in &g.xlabels {
+        s.push_str(&format!("xlabel\t{x}\t{l}\n"));
+    }
+    for l in &g.layers {
+        s.push_str(&format!("layer\t{:?}\t{}\t{}\n", l.kind, l.width, l.label));
+        for (x, y) in &l.points {
+            s.push_str(&format!("p\t{x}\t{y}\n"));
+        }
+        for b in &l.boxes {
+            s.push_str(&format!("b\t{}\n", join(b)));
+        }
+    }
+    std::fs::write(path, s).map_err(|e| rc_err(603, e))
+}
+
+fn join(v: &[f64]) -> String {
+    v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ")
+}
+
+pub fn load_gph(path: &str) -> Result<Graph, String> {
+    let text = std::fs::read_to_string(path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
+    if !text.starts_with("ferrostat-graph") {
+        return Err(rc_err(610, format!("{path} is not a Ferrostat graph file")));
+    }
+    let mut g = Graph::default();
+    let nums = |s: &str| -> Vec<f64> { s.split_whitespace().filter_map(|x| x.parse().ok()).collect() };
+    for line in text.lines().skip(1) {
+        let f: Vec<&str> = line.split('\t').collect();
+        match f[0] {
+            "title" => g.title = f.get(1).unwrap_or(&"").to_string(),
+            "xtitle" => g.xtitle = f.get(1).unwrap_or(&"").to_string(),
+            "ytitle" => g.ytitle = f.get(1).unwrap_or(&"").to_string(),
+            "legend" => g.legend = f.get(1) == Some(&"true"),
+            "ylines" => g.ylines = nums(f.get(1).unwrap_or(&"")),
+            "xlines" => g.xlines = nums(f.get(1).unwrap_or(&"")),
+            "xlabel" => g.xlabels.push((f[1].parse().unwrap_or(0.0), f.get(2).unwrap_or(&"").to_string())),
+            "layer" => {
+                let kind = match f[1] {
+                    "Scatter" => LayerKind::Scatter,
+                    "Line" => LayerKind::Line,
+                    "Connected" => LayerKind::Connected,
+                    "Area" => LayerKind::Area,
+                    "Bar" => LayerKind::Bar,
+                    _ => LayerKind::Box,
+                };
+                g.layers.push(Layer { kind, points: Vec::new(), label: f.get(3).unwrap_or(&"").to_string(), width: f[2].parse().unwrap_or(0.0), boxes: Vec::new() });
+            }
+            "p" => {
+                if let Some(l) = g.layers.last_mut() {
+                    l.points.push((f[1].parse().unwrap_or(0.0), f[2].parse().unwrap_or(0.0)));
+                }
+            }
+            "b" => {
+                if let Some(l) = g.layers.last_mut() {
+                    let v = nums(f[1]);
+                    if v.len() == 5 {
+                        l.boxes.push([v[0], v[1], v[2], v[3], v[4]]);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(g)
 }
 
 fn draw<DB: DrawingBackend>(g: &Graph, root: &DrawingArea<DB, plotters::coord::Shift>) -> Result<(), String>
@@ -416,6 +567,8 @@ where
             xs.extend(l.points.iter().flat_map(|p| [p.0 - l.width / 2.0, p.0 + l.width / 2.0]));
         }
     }
+    ys.extend(g.ylines.iter().copied());
+    xs.extend(g.xlines.iter().copied());
     for (x, _) in &g.xlabels {
         xs.push(x - 0.5);
         xs.push(x + 0.5);
@@ -480,6 +633,12 @@ where
                 }
             }
         }
+    }
+    for &y in &g.ylines {
+        chart.draw_series(std::iter::once(PathElement::new(vec![(x0 - px, y), (x1 + px, y)], RGBColor(144, 53, 59).stroke_width(2)))).map_err(e)?;
+    }
+    for &x in &g.xlines {
+        chart.draw_series(std::iter::once(PathElement::new(vec![(x, y0 - py), (x, y1 + py)], RGBColor(144, 53, 59).stroke_width(2)))).map_err(e)?;
     }
     if g.legend {
         chart.configure_series_labels().background_style(WHITE.mix(0.8)).border_style(BLACK).draw().map_err(e)?;

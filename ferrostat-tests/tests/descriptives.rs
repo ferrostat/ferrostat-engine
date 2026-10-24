@@ -45,7 +45,6 @@ fn summarize_if_and_in() {
 }
 
 #[test]
-#[ignore = "bug: sd of a single observation is reported as 0; Stata reports missing"]
 fn summarize_single_observation_has_no_sd() {
     let mut s = Session::with_fixture();
     let out = s.run("summarize x in 1");
@@ -56,7 +55,6 @@ fn summarize_single_observation_has_no_sd() {
 }
 
 #[test]
-#[ignore = "missing: stored results r(N), r(mean), r(sd), r(min), r(max), r(sum)"]
 fn summarize_stored_results() {
     let mut s = Session::with_fixture();
     s.run("summarize y");
@@ -70,7 +68,6 @@ fn summarize_stored_results() {
 }
 
 #[test]
-#[ignore = "missing: summarize, detail (percentiles, skewness, kurtosis)"]
 fn summarize_detail() {
     let mut s = Session::with_fixture();
     s.run("summarize y, detail");
@@ -84,7 +81,6 @@ fn summarize_detail() {
 }
 
 #[test]
-#[ignore = "missing: weights in summarize ([aw=], [fw=])"]
 fn summarize_with_frequency_weights() {
     let mut s = Session::with_fixture();
     s.run("summarize x [fw=cnt]");
@@ -117,7 +113,6 @@ fn tabulate_string_variable() {
 }
 
 #[test]
-#[ignore = "bug: tabulate sorts numeric values as formatted strings (50.0000 before 6.0000)"]
 fn tabulate_orders_numeric_values_numerically() {
     let mut s = Session::with_fixture();
     s.run("replace z = z * 10 if z > 4");
@@ -129,12 +124,11 @@ fn tabulate_orders_numeric_values_numerically() {
 #[test]
 fn tabulate_twoway_with_chi2() {
     let mut s = Session::with_fixture();
-    let out = s.run("tabulate group d");
+    let out = s.run("tabulate group d, chi2");
     assert_close(stat(&out, "Pearson chi2(2) =").expect("chi2 line"), r::CHI2_GD, 1e-9);
 }
 
 #[test]
-#[ignore = "missing: tabulate shows value labels instead of codes"]
 fn tabulate_uses_value_labels() {
     let mut s = Session::with_fixture();
     let out = s.run("tabulate d");
@@ -142,7 +136,6 @@ fn tabulate_uses_value_labels() {
 }
 
 #[test]
-#[ignore = "missing: tabulate, missing (count missing as a category)"]
 fn tabulate_missing_option() {
     let mut s = Session::with_missing_fixture();
     let without = s.run("tabulate y");
@@ -152,7 +145,6 @@ fn tabulate_missing_option() {
 }
 
 #[test]
-#[ignore = "missing: tabulate stored results r(N), r(r), r(c), r(chi2), r(p) and options row/col/exact/lrchi2"]
 fn tabulate_stored_results() {
     let mut s = Session::with_fixture();
     s.run("tabulate group d, chi2 row col");
@@ -164,7 +156,6 @@ fn tabulate_stored_results() {
 }
 
 #[test]
-#[ignore = "missing: tab1 / tab2 / table / tabstat"]
 fn tabstat_by_group() {
     let mut s = Session::with_fixture();
     let out = s.run("tabstat y, by(group) statistics(mean sd n)");
@@ -183,25 +174,24 @@ fn correlate_matrix() {
     let rz = row(&out, "z").unwrap();
     assert_close(rz[0], r::CORR_XZ, 1e-4);
     assert_close(rz[1], r::CORR_YZ, 1e-4);
-    assert_eq!(stat(&out, "obs ="), Some(12.0));
+    assert_eq!(stat(&out, "(obs="), Some(12.0));
 }
 
 #[test]
-fn correlate_needs_two_variables() {
+fn correlate_single_variable_is_allowed() {
     let mut s = Session::with_fixture();
-    s.fails("correlate x");
+    s.run("correlate x");
+    assert_eq!(s.scalar("el(r(C), 1, 1)"), 1.0);
 }
 
 #[test]
-#[ignore = "bug: correlate must use casewise deletion; it drops missing values per variable and misaligns pairs"]
 fn correlate_casewise_deletion() {
     let mut s = Session::with_missing_fixture();
     let out = s.run("correlate x y z");
-    assert_eq!(stat(&out, "obs ="), Some(10.0));
+    assert_eq!(stat(&out, "(obs="), Some(10.0));
 }
 
 #[test]
-#[ignore = "missing: correlate stored results r(rho), r(N) and covariance option"]
 fn correlate_stored_results_and_covariance() {
     let mut s = Session::with_fixture();
     s.run("correlate x y");
@@ -211,7 +201,6 @@ fn correlate_stored_results_and_covariance() {
 }
 
 #[test]
-#[ignore = "missing: pwcorr / spearman"]
 fn pwcorr_and_spearman() {
     let mut s = Session::with_fixture();
     s.run("spearman x z");
@@ -230,7 +219,6 @@ fn count_all_if_in() {
 }
 
 #[test]
-#[ignore = "bug: `count if ... in ...` ignores the if condition when in is also given"]
 fn count_if_and_in_combined() {
     let mut s = Session::with_fixture();
     assert_eq!(s.run("count if d == 1 in 1/6").trim(), "2");
@@ -257,7 +245,8 @@ fn list_with_if() {
 fn list_shows_missing_as_dot() {
     let mut s = Session::with_missing_fixture();
     let out = s.run("list y in 12");
-    assert!(out.lines().last().unwrap().trim() == ".", "{out}");
+    let row = out.lines().find(|l| l.trim_start().starts_with("12.")).unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(row.trim_end().trim_end_matches('|').trim_end().split_whitespace().last(), Some("."), "{out}");
 }
 
 #[test]
@@ -265,14 +254,13 @@ fn describe_lists_variables_and_types() {
     let mut s = Session::with_fixture();
     let out = s.run("describe");
     for (v, ty) in [("id", "int"), ("name", "str4"), ("group", "byte"), ("x", "double")] {
-        let line = out.lines().find(|l| l.split_whitespace().next() == Some(v)).unwrap_or_else(|| panic!("{v}\n{out}"));
+        let line = out.lines().find(|l| l.split_whitespace().next() == Some(v) && l.contains('%')).unwrap_or_else(|| panic!("{v}\n{out}"));
         assert!(line.contains(ty), "{line}");
     }
     assert!(out.contains("Binary outcome"));
 }
 
 #[test]
-#[ignore = "missing: describe header (obs, vars, data label) and r(N), r(k)"]
 fn describe_stored_results() {
     let mut s = Session::with_fixture();
     s.run("describe");
@@ -281,7 +269,6 @@ fn describe_stored_results() {
 }
 
 #[test]
-#[ignore = "missing: codebook / inspect / misstable"]
 fn codebook() {
     let mut s = Session::with_missing_fixture();
     let out = s.run("misstable summarize");
@@ -294,14 +281,13 @@ fn codebook() {
 #[test]
 fn kdensity_reports_bandwidth_and_density() {
     let mut s = Session::with_fixture();
-    let out = s.run("kdensity x, kernel(gaussian)");
+    let out = s.run("kdensity x, kernel(gaussian) n(51)");
     assert_close(stat(&out, "Bandwidth:").unwrap(), r::KD_H, 1e-3);
     let at = out.lines().map(numbers).find(|v| v.len() == 2 && (v[0] - 6.5).abs() < 1e-9).expect("grid point 6.5");
     assert_close(at[1], r::KD_AT_6_5, 1e-3);
 }
 
 #[test]
-#[ignore = "bug: kdensity uses the Gaussian kernel and iqr/1.34 by default; Stata defaults to Epanechnikov and iqr/1.349"]
 fn kdensity_default_kernel_is_epanechnikov() {
     let mut s = Session::with_fixture();
     let out = s.run("kdensity x");
@@ -309,7 +295,6 @@ fn kdensity_default_kernel_is_epanechnikov() {
 }
 
 #[test]
-#[ignore = "missing: kdensity options at(), n(), bwidth(), generate()"]
 fn kdensity_generate() {
     let mut s = Session::with_fixture();
     s.run("kdensity x, kernel(gaussian) bwidth(2) n(12) generate(gx gd) nograph");

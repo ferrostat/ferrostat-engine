@@ -50,16 +50,16 @@ impl CommandHandler for Use {
             ferrostat_core::dta::DtaError::Io(_) => rc_err(601, format!("file {path} not found")),
             other => rc_err(610, format!("file {path} not Stata format ({other})")),
         })?;
-        if !vars_text.is_empty() {
-            let keep = varlist::expand(&new, &vars_text)?;
-            new.keep_variables(&keep);
-        }
         let mut sub = cmd.clone();
         sub.main.clear();
         if cmd.if_expr.is_some() || cmd.in_range.is_some() {
             let tmp = Store::new();
             let mask = util::touse(&new, &tmp, &sub)?;
             new.keep_if(&mask)?;
+        }
+        if !vars_text.is_empty() {
+            let keep = varlist::expand(&new, &vars_text)?;
+            new.keep_variables(&keep);
         }
         *ds = new;
         st.data_changed = false;
@@ -106,13 +106,71 @@ impl CommandHandler for Save {
     }
 }
 
+/// Number formatting conventions for text import.
+#[derive(Clone, Copy)]
+pub struct NumLocale {
+    pub decimal: char,
+    pub group: Option<char>,
+}
+
+impl NumLocale {
+    pub fn parse(&self, s: &str) -> Option<f64> {
+        let t = s.trim();
+        if self.decimal == '.' && self.group.is_none() {
+            return t.parse::<f64>().ok();
+        }
+        let mut cleaned = String::with_capacity(t.len());
+        for c in t.chars() {
+            if Some(c) == self.group {
+                continue;
+            }
+            cleaned.push(if c == self.decimal { '.' } else { c });
+        }
+        cleaned.parse::<f64>().ok()
+    }
+}
+
+/// Decimal/group separators from parselocale(), decimalseparator() and
+/// groupseparator().
+pub fn locale_from(cmd: &Command) -> NumLocale {
+    let mut loc = NumLocale { decimal: '.', group: None };
+    if let Some(l) = cmd.opt("parselocale", 6) {
+        let lang = l.trim().to_lowercase();
+        let lang = lang.split(['_', '-']).next().unwrap_or("");
+        match lang {
+            "it" | "de" | "es" | "pt" | "nl" | "da" | "id" | "tr" | "el" => loc = NumLocale { decimal: ',', group: Some('.') },
+            "fr" | "ru" | "pl" | "cs" | "sv" | "fi" | "nb" | "no" | "uk" => loc = NumLocale { decimal: ',', group: Some(' ') },
+            "de_ch" => loc = NumLocale { decimal: '.', group: Some('\'') },
+            _ => loc = NumLocale { decimal: '.', group: Some(',') },
+        }
+    }
+    let sep = |v: &str| -> Option<char> {
+        let u = util::unquote(v);
+        u.chars().next()
+    };
+    if let Some(d) = cmd.opt("decimalseparator", 3).and_then(sep) {
+        loc.decimal = d;
+        if loc.group == Some(d) {
+            loc.group = Some(if d == ',' { '.' } else { ',' });
+        }
+    }
+    if let Some(g) = cmd.opt("groupseparator", 3).and_then(sep) {
+        loc.group = Some(g);
+    }
+    loc
+}
+
 /// Infer the narrowest type for a column of text cells.
 fn infer_column(cells: &[String], stringcols: bool) -> (VarType, Vec<Value>) {
+    infer_column_locale(cells, stringcols, NumLocale { decimal: '.', group: None })
+}
+
+fn infer_column_locale(cells: &[String], stringcols: bool, loc: NumLocale) -> (VarType, Vec<Value>) {
     let is_missing_text = |s: &str| s.is_empty() || s == "." || s.eq_ignore_ascii_case("na");
     let numeric = !stringcols
         && cells.iter().all(|s| {
             let t = s.trim();
-            is_missing_text(t) || t.parse::<f64>().is_ok() || (t.len() == 2 && t.starts_with('.') && t.as_bytes()[1].is_ascii_lowercase())
+            is_missing_text(t) || loc.parse(t).is_some() || (t.len() == 2 && t.starts_with('.') && t.as_bytes()[1].is_ascii_lowercase())
         })
         && cells.iter().any(|s| !is_missing_text(s.trim()));
     if numeric {
@@ -123,7 +181,7 @@ fn infer_column(cells: &[String], stringcols: bool) -> (VarType, Vec<Value>) {
                 if t.len() == 2 && t.starts_with('.') && t.as_bytes()[1].is_ascii_lowercase() {
                     ferrostat_core::missing::missing_letter(t.chars().nth(1).unwrap()).unwrap()
                 } else {
-                    t.parse::<f64>().unwrap_or(SYSMISS)
+                    loc.parse(t).unwrap_or(SYSMISS)
                 }
             })
             .collect();
@@ -173,6 +231,7 @@ pub fn import_delimited(path: &str, cmd: &Command) -> Result<DataSet, String> {
     let (header, body) = if has_header && !rows.is_empty() { (Some(rows[0].clone()), &rows[1..]) } else { (None, &rows[..]) };
     let ncols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
     let case = cmd.opt("case", 2).map(|s| s.trim().to_lowercase()).unwrap_or_else(|| "lower".into());
+    let locale = locale_from(cmd);
     let stringcols_all = cmd.has_opt("stringcols", 4) && cmd.opt("stringcols", 4).map_or(false, |s| s.trim() == "_all");
     let mut ds = DataSet::new();
     let mut used = std::collections::HashSet::new();
@@ -186,7 +245,7 @@ pub fn import_delimited(path: &str, cmd: &Command) -> Result<DataSet, String> {
             name = format!("{name}_{c}");
         }
         used.insert(name.clone());
-        let (ty, data) = infer_column(&cells, stringcols_all);
+        let (ty, data) = infer_column_locale(&cells, stringcols_all, locale);
         let mut v = Variable::new(&name, ty);
         if let Some(h) = header.as_ref().and_then(|h| h.get(c)) {
             if h.trim() != name {

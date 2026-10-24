@@ -197,6 +197,10 @@ pub fn fmt_g(v: f64, width: usize) -> String {
     if v == 0.0 {
         return "0".into();
     }
+    // the sign does not count against the digit budget (as in %w.0g columns)
+    if v < 0.0 {
+        return format!("-{}", fmt_g(-v, width));
+    }
     if v.fract() == 0.0 && v.abs() < 1e15 {
         let s = format!("{}", v as i64);
         if s.len() <= width {

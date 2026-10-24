@@ -51,7 +51,6 @@ fn roundtrip_preserves_values() {
 }
 
 #[test]
-#[ignore = "bug: value-label tables are lost when a file is written and read back"]
 fn roundtrip_preserves_labels() {
     let ds = roundtrip(&fixture());
     assert_eq!(ds.datalabel, "Ferrostat test fixture");
@@ -64,7 +63,6 @@ fn roundtrip_preserves_labels() {
 }
 
 #[test]
-#[ignore = "bug: missing values in byte/int/long variables are written as 0 instead of the missing code"]
 fn roundtrip_system_missing_in_every_numeric_type() {
     let mut ds = DataSet::new();
     for (name, ty) in [("b", VarType::Byte), ("i", VarType::Int), ("l", VarType::Long), ("f", VarType::Float), ("d", VarType::Double)] {
@@ -77,12 +75,11 @@ fn roundtrip_system_missing_in_every_numeric_type() {
     for name in ["b", "i", "l", "f", "d"] {
         let v = &back.get_var(name).unwrap().data;
         assert_eq!(v[0].as_f64(), Some(1.0), "{name}[1]");
-        assert!(v[1].as_f64().map_or(true, f64::is_nan), "{name}[2] should be missing");
+        assert!(v[1].is_missing(), "{name}[2] should be missing");
     }
 }
 
 #[test]
-#[ignore = "missing: extended missing values (.a-.z) are collapsed to system missing on read"]
 fn roundtrip_extended_missing_values() {
     let mut ds = DataSet::new();
     let mut v = Variable::new("v", VarType::Double);
@@ -99,7 +96,6 @@ fn roundtrip_extended_missing_values() {
 }
 
 #[test]
-#[ignore = "bug: missing-value codes differ from the .dta spec (byte . is 101, int . is 32741, long . is 2147483621); float/double detection requires NaN"]
 fn missing_value_encodings_follow_dta_spec() {
     // Values from the published .dta format description.
     assert_eq!(encode_missing_byte(None), 101);
@@ -177,13 +173,14 @@ fn reads_format_119_header() {
 }
 
 #[test]
-#[ignore = "missing: reading pre-117 binary formats (113-115, older DTA variants)"]
 fn reads_format_115() {
     // Minimal 115 header: ds_format, byteorder (LOHI), filetype, unused, nvar, nobs
     let mut buf = vec![115u8, 2, 1, 0];
     buf.extend_from_slice(&0u16.to_le_bytes());
     buf.extend_from_slice(&0u32.to_le_bytes());
     buf.extend_from_slice(&[0u8; 81 + 18]);
+    buf.extend_from_slice(&[0u8; 2]); // sort list (K + 1 entries)
+    buf.extend_from_slice(&[0u8; 5]); // end of expansion fields
     let ds = DtaReader::from_bytes(buf).expect("format 115 should be readable");
     assert_eq!(ds.n_obs, 0);
 }
@@ -221,7 +218,6 @@ fn use_missing_file_fails() {
 }
 
 #[test]
-#[ignore = "missing: `save` refuses to overwrite without explicit replace flag"]
 fn save_requires_replace_to_overwrite() {
     let dir = temp_dir("save_replace");
     let path = dir.join("a.dta");
@@ -232,7 +228,6 @@ fn save_requires_replace_to_overwrite() {
 }
 
 #[test]
-#[ignore = "missing: `use` refuses to discard changed data without `clear`"]
 fn use_requires_clear_when_data_in_memory() {
     let dir = temp_dir("use_clear");
     let path = dir.join("a.dta");
@@ -244,7 +239,6 @@ fn use_requires_clear_when_data_in_memory() {
 }
 
 #[test]
-#[ignore = "missing: `use varlist if using`"]
 fn use_subset_of_variables_and_observations() {
     let dir = temp_dir("use_subset");
     let path = dir.join("a.dta");
@@ -256,7 +250,6 @@ fn use_subset_of_variables_and_observations() {
 }
 
 #[test]
-#[ignore = "missing: `saveold` / `save, version()` to write formats 117 and 119"]
 fn saveold_writes_format_117() {
     let dir = temp_dir("saveold");
     let path = dir.join("old.dta");

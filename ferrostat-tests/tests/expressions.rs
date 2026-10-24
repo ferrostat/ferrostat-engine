@@ -5,7 +5,7 @@ use ferrostat_tests::*;
 /// Evaluate `e` for every observation of the fixture.
 fn evalv(e: &str) -> Vec<f64> {
     let mut s = Session::with_fixture();
-    s.run(&format!("generate r = {e}"));
+    s.run(&format!("generate double r = {e}"));
     s.nums("r")
 }
 
@@ -52,7 +52,6 @@ fn missing_propagates_through_arithmetic() {
 }
 
 #[test]
-#[ignore = "bug: -2^2 evaluates to 4; Stata gives -4"]
 fn negative_power_precedence() {
     assert_eq!(val("-2^2"), -4.0);
 }
@@ -79,7 +78,6 @@ fn logical_operators() {
 }
 
 #[test]
-#[ignore = "bug: missing compares greater than every number (`. > 5` is true in Stata); here comparisons with missing yield missing"]
 fn missing_is_greater_than_any_number() {
     assert_eq!(val(". > 1e300"), 1.0);
     assert_eq!(val(". == ."), 1.0);
@@ -87,7 +85,6 @@ fn missing_is_greater_than_any_number() {
 }
 
 #[test]
-#[ignore = "bug: in logical context missing is true (nonzero) in Stata; `!.` is 0"]
 fn missing_is_true_in_logical_context() {
     assert_eq!(val(". & 1"), 1.0);
     assert_eq!(val("!."), 0.0);
@@ -102,7 +99,6 @@ fn string_comparison() {
 }
 
 #[test]
-#[ignore = "bug: comparing a string to a number should be a type mismatch error (r(109))"]
 fn string_number_comparison_is_type_mismatch() {
     let mut s = Session::with_fixture();
     s.fails("generate r = name == 1");
@@ -142,7 +138,6 @@ fn round_one_argument() {
 }
 
 #[test]
-#[ignore = "missing: round(x, y) rounds to units of y"]
 fn round_two_arguments() {
     assert_close(val("round(3.14159, 0.01)"), 3.14, 1e-12);
     assert_eq!(val("round(17, 5)"), 15.0);
@@ -155,7 +150,6 @@ fn row_min_max_over_arguments() {
 }
 
 #[test]
-#[ignore = "missing: mod(), comb(), lnfactorial(), logit(), invlogit(), exp/log helpers"]
 fn more_math_functions() {
     assert_eq!(val("mod(17, 5)"), 2.0);
     assert_eq!(val("comb(5, 2)"), 10.0);
@@ -166,7 +160,6 @@ fn more_math_functions() {
 }
 
 #[test]
-#[ignore = "missing: statistical distribution functions"]
 fn distribution_functions() {
     assert_close(val("normal(1.96)"), 0.9750021048517795, 1e-9);
     assert_close(val("invnormal(0.975)"), 1.959963984540054, 1e-9);
@@ -178,7 +171,6 @@ fn distribution_functions() {
 }
 
 #[test]
-#[ignore = "missing: missing(), inlist(), inrange(), cond()"]
 fn programming_functions() {
     let mut s = Session::with_missing_fixture();
     s.run("generate m = missing(y)");
@@ -191,7 +183,6 @@ fn programming_functions() {
 }
 
 #[test]
-#[ignore = "missing: random-number functions and `set seed`"]
 fn random_numbers_are_reproducible() {
     let mut s = Session::with_fixture();
     s.run("set seed 12345");
@@ -206,14 +197,12 @@ fn random_numbers_are_reproducible() {
 // ---- system variables -------------------------------------------------------
 
 #[test]
-#[ignore = "missing: _n and _N system variables"]
 fn underscore_n_and_big_n() {
     assert_eq!(evalv("_n"), X);
     assert_eq!(evalv("_N"), [12.0; 12]);
 }
 
 #[test]
-#[ignore = "missing: lag/lead via explicit subscripts y[_n-1]"]
 fn explicit_subscripts() {
     let r = evalv("y[_n-1]");
     assert!(r[0].is_nan());
@@ -221,7 +210,6 @@ fn explicit_subscripts() {
 }
 
 #[test]
-#[ignore = "missing: `_pi` and `c()` constants"]
 fn builtin_constants() {
     assert_close(val("_pi"), std::f64::consts::PI, 1e-15);
     assert_eq!(val("c(N)"), 12.0);
@@ -235,13 +223,11 @@ fn string_literal_assignment() {
 }
 
 #[test]
-#[ignore = "missing: string concatenation with +"]
 fn string_concatenation() {
     assert_eq!(sgen("name + \"-\" + \"x\"")[0], "ant-x");
 }
 
 #[test]
-#[ignore = "missing: string functions (strlen, substr, upper, lower, trim, strpos, subinstr, word, real, string)"]
 fn string_functions() {
     assert_eq!(evalv("strlen(name)")[8], 4.0);
     assert_eq!(sgen("substr(name, 2, 2)")[0], "nt");
@@ -256,7 +242,6 @@ fn string_functions() {
 }
 
 #[test]
-#[ignore = "missing: regular-expression functions"]
 fn regex_functions() {
     assert_eq!(evalv("regexm(name, \"^[a-c]\")")[..4], [1., 1., 1., 0.]);
     assert_eq!(sgen("ustrregexra(name, \"[aeiou]\", \"\")")[0], "nt");
@@ -265,7 +250,6 @@ fn regex_functions() {
 // ---- dates ------------------------------------------------------------------
 
 #[test]
-#[ignore = "missing: date functions (mdy, date, year, month, day, dow)"]
 fn date_functions() {
     // Stata dates count days since 01jan1960.
     assert_eq!(val("mdy(1, 1, 1960)"), 0.0);

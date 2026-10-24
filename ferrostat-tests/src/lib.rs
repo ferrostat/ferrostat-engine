@@ -23,15 +23,27 @@ use ferrostat_core::{DataSet, Value, ValueLabel, VarType, Variable};
 /// run concurrently.
 static SESSION_LOCK: Mutex<()> = Mutex::new(());
 
+thread_local! {
+    /// Sessions currently open on this thread (the lock is re-entrant per thread).
+    static HELD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub struct Session {
     interp: AdoInterpreter,
-    _guard: MutexGuard<'static, ()>,
+    _guard: Option<MutexGuard<'static, ()>>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        HELD.with(|h| h.set(h.get() - 1));
+    }
 }
 
 impl Session {
     /// An empty session (no data in memory).
     pub fn new() -> Self {
-        let guard = SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = if HELD.with(|h| h.get()) == 0 { Some(SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner())) } else { None };
+        HELD.with(|h| h.set(h.get() + 1));
         Self { interp: AdoInterpreter::new(), _guard: guard }
     }
 

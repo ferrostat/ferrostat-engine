@@ -697,25 +697,37 @@ pub struct TableSpec<'a> {
 }
 
 fn cell(v: f64) -> String {
-    fmt_g(v, 9)
+    fmt_g(v, 8)
 }
 
 /// Stata-style coefficient table.
 pub fn coef_table(s: &TableSpec) -> Vec<String> {
     let stat = if s.df.is_some() { "t" } else { "z" };
+    // label column: at least 12, widened for long names (max 32)
+    let mut lw = 12usize.max(s.depvar.chars().count().min(32));
+    for (j, name) in s.names.iter().enumerate() {
+        if s.is_base[j] {
+            continue;
+        }
+        let nm = name.rsplit(':').next().unwrap_or(name);
+        let (label, header) = display_name(nm);
+        lw = lw.max(label.chars().count()).max(header.map_or(0, |h| h.chars().count()));
+    }
+    let lw = lw.min(32);
+    let ab = |x: &str| crate::summarize::abbrev(x, lw);
     let mut out = Vec::new();
-    let bar = "-".repeat(78);
+    let bar = "-".repeat(lw + 66);
     out.push(bar.clone());
     let title = s.eform.unwrap_or(s.coef_title);
     out.push(format!(
-        "{:>12} | {:>11}  Std. err.  {:>6}    P>|{}|     [{}% conf. interval]",
-        crate::summarize::abbrev(s.depvar, 12),
+        "{:>lw$} | {:>11}  Std. err.  {:>6}    P>|{}|     [{}% conf. interval]",
+        ab(s.depvar),
         title,
         stat,
         stat,
         fmt_g(s.level, 4)
     ));
-    out.push(format!("{}+{}", "-".repeat(13), "-".repeat(64)));
+    out.push(format!("{}+{}", "-".repeat(lw + 1), "-".repeat(64)));
     let crit = match s.df {
         Some(df) => dist::invttail(df, (1.0 - s.level / 100.0) / 2.0),
         None => dist::invnormal(1.0 - (1.0 - s.level / 100.0) / 2.0),
@@ -723,37 +735,40 @@ pub fn coef_table(s: &TableSpec) -> Vec<String> {
     let mut last_header = String::new();
     let mut last_eq = String::new();
     for (j, name) in s.names.iter().enumerate() {
+        if s.is_base[j] {
+            continue;
+        }
         let (eq, nm) = match name.split_once(':') {
             Some((e, n)) => (e.to_string(), n.to_string()),
             None => (String::new(), name.clone()),
         };
         if !eq.is_empty() && eq != last_eq {
             if !last_eq.is_empty() {
-                out.push(format!("{}+{}", "-".repeat(13), "-".repeat(64)));
+                out.push(format!("{}+{}", "-".repeat(lw + 1), "-".repeat(64)));
             }
-            out.push(format!("{:<12} |", crate::summarize::abbrev(&eq, 12)));
+            out.push(format!("{:<lw$} |", ab(&eq)));
             last_eq = eq.clone();
             last_header.clear();
         }
-        // factor-variable display: header line with variable, rows with level
         let (label, header) = display_name(&nm);
         if let Some(h) = header {
             if h != last_header {
-                out.push(format!("{:>12} |", crate::summarize::abbrev(&h, 12)));
+                let after_rule = out.last().map_or(true, |l| l.ends_with(&"-".repeat(10)) || l.trim_end().ends_with('|'));
+                if !after_rule {
+                    out.push(format!("{:>lw$} |", ""));
+                }
+                out.push(format!("{:>lw$} |", ab(&h)));
                 last_header = h;
             }
-        } else {
+        } else if !last_header.is_empty() {
+            out.push(format!("{:>lw$} |", ""));
             last_header.clear();
         }
         let b = s.b[j];
         let se = s.v[(j, j)].max(0.0).sqrt();
         if s.omitted[j] {
-            let tag = if s.is_base[j] { "(base)" } else { "(omitted)" };
-            out.push(format!("{:>12} | {:>10}  {}", crate::summarize::abbrev(&label, 12), if s.eform.is_some() { "1" } else { "0" }, tag));
+            out.push(format!("{:>lw$} | {:>10}  (omitted)", ab(&label), if s.eform.is_some() { "1" } else { "0" }));
             continue;
-        }
-        if nm == "_cons" && s.eform.is_some() {
-            // Stata reports exp(_cons) in eform tables
         }
         let t = b / se;
         let p = match s.df {
@@ -766,8 +781,8 @@ pub fn coef_table(s: &TableSpec) -> Vec<String> {
             (b, se, b - crit * se, b + crit * se)
         };
         out.push(format!(
-            "{:>12} | {:>10}  {:>9}  {:>7.2}   {:.3}    {:>10}  {:>10}",
-            crate::summarize::abbrev(&label, 12),
+            "{:>lw$} | {:>10}  {:>9}  {:>7.2}   {:.3}    {:>9}   {:>9}",
+            ab(&label),
             cell(est),
             cell(sev),
             t,
@@ -780,9 +795,11 @@ pub fn coef_table(s: &TableSpec) -> Vec<String> {
     out
 }
 
-/// "2.g" -> ("2", Some("g")); "2.g#c.x" -> ("2#c.x", Some("g#c.x")) ...
+/// Row label and optional group header for a coefficient name:
+/// "2.g" -> ("2", "g"); "L.x" -> ("L1.", "x"); "2.g#c.x" -> ("2#c.x", "g#c.x").
 fn display_name(n: &str) -> (String, Option<String>) {
     let clean = |s: &str| s.trim_end_matches(['b', 'o', 'n']).to_string();
+    let n = n.strip_prefix("o.").unwrap_or(n);
     if n.contains('#') {
         let parts: Vec<&str> = n.split('#').collect();
         let mut header = Vec::new();
@@ -806,6 +823,11 @@ fn display_name(n: &str) -> (String, Option<String>) {
     }
     match n.split_once('.') {
         Some((l, v)) if l.trim_end_matches(['b', 'o', 'n']).parse::<f64>().is_ok() => (clean(l), Some(v.to_string())),
+        Some((op, v)) if op.chars().all(|c| "LFDSlfds0123456789".contains(c)) => {
+            let up = op.to_uppercase();
+            let label = if up.len() == 1 { format!("{up}1.") } else { format!("{up}.") };
+            (label, Some(v.to_string()))
+        }
         _ => (n.to_string(), None),
     }
 }

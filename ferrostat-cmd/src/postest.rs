@@ -392,7 +392,7 @@ impl CommandHandler for Predict {
             out.push(msg);
         }
         if nmiss > 0 {
-            out.push(format!("({} missing value{} generated)", nmiss, if nmiss == 1 { "" } else { "s" }));
+            out.push(format!("({} missing value{} generated)", crate::util::commas(nmiss), if nmiss == 1 { "" } else { "s" }));
         }
         Ok(out.join("\n"))
     }
