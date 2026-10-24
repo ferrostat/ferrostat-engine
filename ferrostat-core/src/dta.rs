@@ -1,4 +1,12 @@
-use std::collections::HashMap;
+//! Reading and writing .dta files.
+//!
+//! Implemented from the publicly documented file format:
+//! - releases 117, 118, 119 (tagged XML-like layout), read and write;
+//! - releases 113, 114, 115 (binary layout), read and write (115).
+//!
+//! Sections of the tagged formats are located through the `<map>` offsets,
+//! never by searching the payload for tag bytes.
+
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -21,865 +29,818 @@ pub enum DtaError {
     Utf8(#[from] std::str::Utf8Error),
 }
 
-/// DTA file reader that supports formats 117, 118, and 119.
-pub struct DtaReader {
-    data: Vec<u8>,
+type Result<T> = std::result::Result<T, DtaError>;
+
+fn bad(msg: impl Into<String>) -> DtaError {
+    DtaError::InvalidFormat(msg.into())
+}
+
+// ---------------------------------------------------------------------------
+// Byte cursor
+// ---------------------------------------------------------------------------
+
+struct Cursor<'a> {
+    buf: &'a [u8],
+    pos: usize,
+    big: bool,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(buf: &'a [u8]) -> Self {
+        Self { buf, pos: 0, big: false }
+    }
+
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+        if self.pos + n > self.buf.len() {
+            return Err(bad(format!("unexpected end of file at byte {}", self.pos)));
+        }
+        let s = &self.buf[self.pos..self.pos + n];
+        self.pos += n;
+        Ok(s)
+    }
+
+    fn expect(&mut self, tag: &[u8]) -> Result<()> {
+        let got = self.take(tag.len())?;
+        if got != tag {
+            return Err(bad(format!(
+                "expected {} at byte {}",
+                String::from_utf8_lossy(tag),
+                self.pos - tag.len()
+            )));
+        }
+        Ok(())
+    }
+
+    fn u8(&mut self) -> Result<u8> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn uint(&mut self, n: usize) -> Result<u64> {
+        let b = self.take(n)?;
+        let mut v: u64 = 0;
+        if self.big {
+            for &x in b {
+                v = (v << 8) | x as u64;
+            }
+        } else {
+            for &x in b.iter().rev() {
+                v = (v << 8) | x as u64;
+            }
+        }
+        Ok(v)
+    }
+
+    fn u16(&mut self) -> Result<u16> {
+        Ok(self.uint(2)? as u16)
+    }
+    fn u32(&mut self) -> Result<u32> {
+        Ok(self.uint(4)? as u32)
+    }
+    fn u64(&mut self) -> Result<u64> {
+        self.uint(8)
+    }
+    fn i16(&mut self) -> Result<i16> {
+        Ok(self.u16()? as i16)
+    }
+    fn i32(&mut self) -> Result<i32> {
+        Ok(self.u32()? as i32)
+    }
+    fn f32(&mut self) -> Result<f32> {
+        Ok(f32::from_bits(self.u32()?))
+    }
+    fn f64(&mut self) -> Result<f64> {
+        Ok(f64::from_bits(self.u64()?))
+    }
+
+    /// Fixed-width, NUL-padded string field.
+    fn fixed_str(&mut self, n: usize, utf8: bool) -> Result<String> {
+        Ok(decode_str(self.take(n)?, utf8))
+    }
+}
+
+fn decode_str(b: &[u8], utf8: bool) -> String {
+    let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+    let b = &b[..end];
+    if utf8 {
+        String::from_utf8_lossy(b).into_owned()
+    } else {
+        b.iter().map(|&c| c as char).collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reader
+// ---------------------------------------------------------------------------
+
+/// Layout constants that differ by release.
+#[derive(Clone, Copy)]
+struct Layout {
     release: u16,
-    byteorder: ByteOrder,
-    k: u16,          // number of variables
-    n: u64,          // number of observations
-    label: String,
-    timestamp: String,
-    map_offsets: Vec<u64>,
+    name_w: usize,
+    fmt_w: usize,
+    lblname_w: usize,
+    varlbl_w: usize,
+    datalbl_w: usize,
+    utf8: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ByteOrder {
-    Lsf, // little-endian
-    Msf, // big-endian
-}
-
-impl ByteOrder {
-    fn read_u16(&self, buf: &[u8]) -> u16 {
-        match self {
-            ByteOrder::Lsf => u16::from_le_bytes([buf[0], buf[1]]),
-            ByteOrder::Msf => u16::from_be_bytes([buf[0], buf[1]]),
-        }
-    }
-
-    fn read_u32(&self, buf: &[u8]) -> u32 {
-        match self {
-            ByteOrder::Lsf => u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
-            ByteOrder::Msf => u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
-        }
-    }
-
-    fn read_u64(&self, buf: &[u8]) -> u64 {
-        let mut arr = [0u8; 8];
-        arr.copy_from_slice(buf);
-        match self {
-            ByteOrder::Lsf => u64::from_le_bytes(arr),
-            ByteOrder::Msf => u64::from_be_bytes(arr),
-        }
-    }
-
-    fn read_i8(&self, buf: &[u8]) -> i8 {
-        buf[0] as i8
-    }
-
-    fn read_i16(&self, buf: &[u8]) -> i16 {
-        match self {
-            ByteOrder::Lsf => i16::from_le_bytes([buf[0], buf[1]]),
-            ByteOrder::Msf => i16::from_be_bytes([buf[0], buf[1]]),
-        }
-    }
-
-    fn read_i32(&self, buf: &[u8]) -> i32 {
-        match self {
-            ByteOrder::Lsf => i32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
-            ByteOrder::Msf => i32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
-        }
-    }
-
-    fn read_f32(&self, buf: &[u8]) -> f32 {
-        let bits = self.read_u32(buf);
-        f32::from_bits(bits)
-    }
-
-    fn read_f64(&self, buf: &[u8]) -> f64 {
-        let bits = self.read_u64(buf);
-        f64::from_bits(bits)
+impl Layout {
+    fn for_release(r: u16) -> Result<Self> {
+        let (name_w, fmt_w, lblname_w, varlbl_w, utf8) = match r {
+            113 => (33, 12, 33, 81, false),
+            114 | 115 => (33, 49, 33, 81, false),
+            117 => (33, 49, 33, 81, false),
+            118 | 119 => (129, 57, 129, 321, true),
+            _ => return Err(DtaError::UnsupportedRelease(r)),
+        };
+        Ok(Self { release: r, name_w, fmt_w, lblname_w, varlbl_w, datalbl_w: 81, utf8 })
     }
 }
+
+pub struct DtaReader;
 
 impl DtaReader {
     /// Read a .dta file from disk.
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<DataSet, DtaError> {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<DataSet> {
         let mut f = File::open(path)?;
         let mut data = Vec::new();
         f.read_to_end(&mut data)?;
         Self::from_bytes(data)
     }
 
-    /// Parse a .dta from an in-memory byte vector.
-    pub fn from_bytes(data: Vec<u8>) -> Result<DataSet, DtaError> {
-        let mut reader = DtaReader {
-            data,
-            release: 0,
-            byteorder: ByteOrder::Lsf,
-            k: 0,
-            n: 0,
-            label: String::new(),
-            timestamp: String::new(),
-            map_offsets: Vec::new(),
-        };
-        reader.parse_header()?;
-        reader.read_map()?;
-        reader.parse_data()
-    }
-
-    fn parse_header(&mut self) -> Result<(), DtaError> {
-        // Ensure it starts with <stata_dta>
-        if !self.data.starts_with(b"<stata_dta>") {
-            return Err(DtaError::InvalidFormat("Invalid DTA file header".into()));
+    /// Parse a .dta from memory.
+    pub fn from_bytes(data: Vec<u8>) -> Result<DataSet> {
+        if data.starts_with(b"<stata_dta>") {
+            read_tagged(&data)
+        } else if !data.is_empty() && matches!(data[0], 113 | 114 | 115) {
+            read_binary(&data)
+        } else if data.is_empty() {
+            Err(bad("empty file"))
+        } else {
+            Err(bad("not a .dta file"))
         }
-
-        // Find header bounds
-        let header_start = Self::find_tag(&self.data, b"<header>").ok_or_else(||
-            DtaError::InvalidFormat("Missing <header> tag".into()))?;
-        let header_end = Self::find_tag(&self.data, b"</header>").ok_or_else(||
-            DtaError::InvalidFormat("Missing </header> tag".into()))?;
-        let header = &self.data[header_start..header_end + 9];
-
-        // Release
-        let rel_start = Self::find_tag(header, b"<release>").ok_or_else(||
-            DtaError::InvalidFormat("Missing <release>".into()))?;
-        let rel_end = Self::find_tag(header, b"</release>").ok_or_else(||
-            DtaError::InvalidFormat("Missing </release>".into()))?;
-        let rel_str = std::str::from_utf8(&header[rel_start + 9..rel_end])?;
-        self.release = rel_str.parse().map_err(|_|
-            DtaError::InvalidFormat(format!("Invalid release: {}", rel_str)))?;
-
-        if self.release != 117 && self.release != 118 && self.release != 119 {
-            return Err(DtaError::UnsupportedRelease(self.release));
-        }
-
-        // Byte order
-        let bo_start = Self::find_tag(header, b"<byteorder>").ok_or_else(||
-            DtaError::InvalidFormat("Missing <byteorder>".into()))?;
-        let bo_end = Self::find_tag(header, b"</byteorder>").ok_or_else(||
-            DtaError::InvalidFormat("Missing </byteorder>".into()))?;
-        let bo_str = std::str::from_utf8(&header[bo_start + 11..bo_end])?;
-        self.byteorder = match bo_str {
-            "LSF" => ByteOrder::Lsf,
-            "MSF" => ByteOrder::Msf,
-            _ => return Err(DtaError::InvalidFormat(format!("Unknown byteorder: {}", bo_str))),
-        };
-
-        // K (number of variables) - 2 bytes
-        let k_pos = Self::find_tag(header, b"<K>").ok_or_else(||
-            DtaError::InvalidFormat("Missing <K>".into()))?;
-        let k_end = Self::find_tag(header, b"</K>").ok_or_else(||
-            DtaError::InvalidFormat("Missing </K>".into()))?;
-        let k_bytes = &header[k_pos + 3..k_end];
-        if k_bytes.len() != 2 {
-            return Err(DtaError::InvalidFormat("Invalid K length".into()));
-        }
-        self.k = self.byteorder.read_u16(k_bytes);
-
-        // N (number of observations) - 8 bytes
-        let n_pos = Self::find_tag(header, b"<N>").ok_or_else(||
-            DtaError::InvalidFormat("Missing <N>".into()))?;
-        let n_end = Self::find_tag(header, b"</N>").ok_or_else(||
-            DtaError::InvalidFormat("Missing </N>".into()))?;
-        let n_bytes = &header[n_pos + 3..n_end];
-        if n_bytes.len() != 8 {
-            return Err(DtaError::InvalidFormat("Invalid N length".into()));
-        }
-        self.n = self.byteorder.read_u64(n_bytes);
-
-        // Label (2-byte length + text)
-        let label_pos = Self::find_tag(header, b"<label>");
-        if let Some(lp) = label_pos {
-            let label_end = Self::find_tag(header, b"</label>").unwrap_or(lp + 7);
-            let label_data = &header[lp + 7..label_end];
-            if label_data.len() >= 2 {
-                let len = self.byteorder.read_u16(&label_data[..2]) as usize;
-                if len > 0 && label_data.len() >= 2 + len {
-                    self.label = String::from_utf8_lossy(&label_data[2..2 + len]).into_owned();
-                }
-            }
-        }
-
-        // Timestamp (1-byte length + text)
-        let ts_pos = Self::find_tag(header, b"<timestamp>");
-        if let Some(tp) = ts_pos {
-            let ts_end = Self::find_tag(header, b"</timestamp>").unwrap_or(tp + 11);
-            let ts_data = &header[tp + 11..ts_end];
-            if !ts_data.is_empty() {
-                let len = ts_data[0] as usize;
-                if len > 0 && ts_data.len() >= 1 + len {
-                    self.timestamp = String::from_utf8_lossy(&ts_data[1..1 + len]).into_owned();
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn read_map(&mut self) -> Result<(), DtaError> {
-        let map_tag = Self::find_tag(&self.data, b"<map>").ok_or_else(||
-            DtaError::InvalidFormat("Missing <map>".into()))?;
-        let map_end = Self::find_tag(&self.data, b"</map>").ok_or_else(||
-            DtaError::InvalidFormat("Missing </map>".into()))?;
-        let map_data = &self.data[map_tag + 5..map_end];
-
-        // Map entries are 8-byte u64 each
-        if map_data.len() % 8 != 0 {
-            return Err(DtaError::InvalidFormat("Map data not aligned".into()));
-        }
-
-        let num_entries = map_data.len() / 8;
-        let mut offsets = Vec::with_capacity(num_entries);
-        for i in 0..num_entries {
-            offsets.push(self.byteorder.read_u64(&map_data[i * 8..(i + 1) * 8]));
-        }
-        self.map_offsets = offsets;
-        Ok(())
-    }
-
-    fn parse_data(&mut self) -> Result<DataSet, DtaError> {
-        let mut ds = DataSet::new();
-        ds.datalabel = self.label.clone();
-        ds.time_stamp = self.timestamp.clone();
-
-        // Parse variable types
-        let var_types = self.read_variable_types()?;
-
-        // Parse variable names
-        let varnames = self.read_varnames()?;
-        if varnames.len() != self.k as usize {
-            return Err(DtaError::InvalidFormat(format!(
-                "Expected {} varnames, got {}", self.k, varnames.len()
-            )));
-        }
-
-        // Parse sort list
-        let _sortlist = self.read_sortlist();
-
-        // Parse formats
-        let formats = self.read_formats();
-
-        // Parse value label names
-        let val_label_names = self.read_value_label_names();
-
-        // Parse variable labels
-        let var_labels = self.read_variable_labels();
-
-        // Build variables
-        let mut record_size = 0usize;
-        for i in 0..self.k as usize {
-            let vtype = var_types.get(i).copied().unwrap_or(VarType::Double);
-            record_size += vtype.storage_width();
-            let mut var = Variable::new(varnames[i].clone(), vtype);
-            if let Some(fmt) = formats.get(i) {
-                var.format = fmt.clone();
-            }
-            if let Some(vlab) = val_label_names.get(i) {
-                var.value_label_name = vlab.clone();
-            }
-            if let Some(vlbl) = var_labels.get(i) {
-                var.label = vlbl.clone();
-            }
-            ds.add_variable(var).map_err(|e| DtaError::InvalidFormat(e))?;
-        }
-
-        // Parse characteristics
-        let _chars = self.read_characteristics();
-
-        // Parse data matrix
-        self.read_data_matrix(&mut ds, record_size)?;
-
-        // Parse strls
-        let strls = self.read_strls();
-        ds.strls = strls;
-
-        // Parse value labels
-        let vlabels = self.read_value_labels();
-        ds.value_labels = vlabels;
-
-        Ok(ds)
-    }
-
-    fn read_variable_types(&self) -> Result<Vec<VarType>, DtaError> {
-        let start = Self::find_tag(&self.data, b"<variable_types>")
-            .ok_or_else(|| DtaError::InvalidFormat("Missing <variable_types>".into()))?;
-        let end = Self::find_tag(&self.data, b"</variable_types>")
-            .ok_or_else(|| DtaError::InvalidFormat("Missing </variable_types>".into()))?;
-        let data = &self.data[start + 16..end];
-        let mut types = Vec::with_capacity(self.k as usize);
-        for i in 0..self.k as usize {
-            let offset = i * 2;
-            if offset + 2 > data.len() {
-                return Err(DtaError::InvalidFormat("variable_types truncated".into()));
-            }
-            let code = self.byteorder.read_u16(&data[offset..offset + 2]);
-            match VarType::from_type_code(code) {
-                Some(vt) => types.push(vt),
-                None => return Err(DtaError::InvalidFormat(format!(
-                    "Unknown variable type code: {}", code
-                ))),
-            }
-        }
-        Ok(types)
-    }
-
-    fn read_varnames(&self) -> Result<Vec<String>, DtaError> {
-        let start = Self::find_tag(&self.data, b"<varnames>")
-            .ok_or_else(|| DtaError::InvalidFormat("Missing <varnames>".into()))?;
-        let end = Self::find_tag(&self.data, b"</varnames>")
-            .ok_or_else(|| DtaError::InvalidFormat("Missing </varnames>".into()))?;
-        let data = &self.data[start + 10..end];
-        let width = data.len() / self.k as usize;
-        let mut names = Vec::with_capacity(self.k as usize);
-        for i in 0..self.k as usize {
-            let chunk = &data[i * width..(i + 1) * width];
-            let s = chunk.split(|&b| b == 0).next().unwrap_or(chunk);
-            names.push(String::from_utf8_lossy(s).into_owned());
-        }
-        Ok(names)
-    }
-
-    fn read_sortlist(&self) -> Vec<i16> {
-        let Some(start) = Self::find_tag(&self.data, b"<sortlist>") else { return vec![] };
-        let Some(end) = Self::find_tag(&self.data, b"</sortlist>") else { return vec![] };
-        let data = &self.data[start + 10..end];
-        let mut list = Vec::new();
-        for chunk in data.chunks(2) {
-            if chunk.len() == 2 {
-                let val = self.byteorder.read_i16(chunk);
-                list.push(val);
-                if val == 0 { break; }
-            }
-        }
-        list
-    }
-
-    fn read_formats(&self) -> Vec<String> {
-        let Some(start) = Self::find_tag(&self.data, b"<formats>") else { return vec![] };
-        let Some(end) = Self::find_tag(&self.data, b"</formats>") else { return vec![] };
-        let data = &self.data[start + 9..end];
-        let width = data.len() / self.k as usize;
-        (0..self.k as usize)
-            .map(|i| {
-                let chunk = &data[i * width..(i + 1) * width];
-                let s = chunk.split(|&b| b == 0).next().unwrap_or(chunk);
-                String::from_utf8_lossy(s).into_owned()
-            })
-            .collect()
-    }
-
-    fn read_value_label_names(&self) -> Vec<String> {
-        let Some(start) = Self::find_tag(&self.data, b"<value_label_names>") else { return vec![] };
-        let Some(end) = Self::find_tag(&self.data, b"</value_label_names>") else { return vec![] };
-        let data = &self.data[start + 19..end];
-        let width = data.len() / self.k as usize;
-        (0..self.k as usize)
-            .map(|i| {
-                let chunk = &data[i * width..(i + 1) * width];
-                let s = chunk.split(|&b| b == 0).next().unwrap_or(chunk);
-                String::from_utf8_lossy(s).into_owned()
-            })
-            .collect()
-    }
-
-    fn read_variable_labels(&self) -> Vec<String> {
-        let Some(start) = Self::find_tag(&self.data, b"<variable_labels>") else { return vec![] };
-        let Some(end) = Self::find_tag(&self.data, b"</variable_labels>") else { return vec![] };
-        let data = &self.data[start + 17..end];
-        let width = data.len() / self.k as usize;
-        (0..self.k as usize)
-            .map(|i| {
-                let chunk = &data[i * width..(i + 1) * width];
-                let s = chunk.split(|&b| b == 0).next().unwrap_or(chunk);
-                String::from_utf8_lossy(s).into_owned()
-            })
-            .collect()
-    }
-
-    fn read_characteristics(&self) -> HashMap<String, HashMap<String, String>> {
-        let Some(start) = Self::find_tag(&self.data, b"<characteristics>") else {
-            return HashMap::new();
-        };
-        let Some(end) = Self::find_tag(&self.data, b"</characteristics>") else {
-            return HashMap::new();
-        };
-        let data = &self.data[start + 17..end];
-        let mut chars: HashMap<String, HashMap<String, String>> = HashMap::new();
-
-        // Parse <ch> name_len name char_len char </ch> entries
-        let mut pos = 0usize;
-        while pos + 6 < data.len() {
-            if &data[pos..pos + 4] != b"<ch>" {
-                pos += 1;
-                continue;
-            }
-            pos += 4;
-            if pos + 1 >= data.len() { break; }
-            let name_len = self.byteorder.read_u16(&data[pos..pos + 2]) as usize;
-            pos += 2;
-            if pos + name_len + 4 > data.len() { break; }
-            let name = String::from_utf8_lossy(&data[pos..pos + name_len]).into_owned();
-            pos += name_len;
-
-            // Read element name
-            let el_len = self.byteorder.read_u16(&data[pos..pos + 2]) as usize;
-            pos += 2;
-            if pos + el_len + 4 > data.len() { break; }
-            let el = String::from_utf8_lossy(&data[pos..pos + el_len]).into_owned();
-            pos += el_len;
-
-            // Read char value
-            let val_len = self.byteorder.read_u32(&data[pos..pos + 4]) as usize;
-            pos += 4;
-            if pos + val_len > data.len() { break; }
-            let val = String::from_utf8_lossy(&data[pos..pos + val_len]).into_owned();
-            pos += val_len;
-
-            // Skip </ch>
-            if pos + 5 <= data.len() && &data[pos..pos + 5] == b"</ch>" {
-                pos += 5;
-            }
-
-            chars.entry(name).or_insert_with(HashMap::new).insert(el, val);
-        }
-        chars
-    }
-
-    fn read_data_matrix(&self, ds: &mut DataSet, record_size: usize) -> Result<(), DtaError> {
-        let start = Self::find_tag(&self.data, b"<data>")
-            .ok_or_else(|| DtaError::InvalidFormat("Missing <data>".into()))?;
-        let end = Self::find_tag(&self.data, b"</data>")
-            .ok_or_else(|| DtaError::InvalidFormat("Missing </data>".into()))?;
-        let data = &self.data[start + 6..end];
-
-        let expected_size = self.n as usize * record_size;
-        if data.len() != expected_size {
-            // Some formats may have padding; allow reading the minimum
-            if data.len() < expected_size {
-                return Err(DtaError::InvalidFormat(format!(
-                    "Data size mismatch: expected {}, got {}", expected_size, data.len()
-                )));
-            }
-        }
-
-        // Pre-allocate
-        for var in ds.vars.iter_mut() {
-            var.data.reserve(self.n as usize);
-        }
-
-        for obs_idx in 0..self.n as usize {
-            let offset = obs_idx * record_size;
-            if offset + record_size > data.len() {
-                break;
-            }
-            let mut cursor = offset;
-            for var in ds.vars.iter_mut() {
-                let width = var.var_type.storage_width();
-                let chunk = &data[cursor..cursor + width];
-                let value = match var.var_type {
-                    VarType::Byte => {
-                        let raw = chunk[0] as i8;
-                        if missing::is_missing_byte(raw) {
-                            Value::Double(f64::from_bits(0x7FF8000000000000))
-                        } else {
-                            Value::Byte(raw)
-                        }
-                    }
-                    VarType::Int => {
-                        let raw = self.byteorder.read_i16(chunk);
-                        if missing::is_missing_int(raw) {
-                            Value::Double(f64::from_bits(0x7FF8000000000000))
-                        } else {
-                            Value::Int(raw)
-                        }
-                    }
-                    VarType::Long => {
-                        let raw = self.byteorder.read_i32(chunk);
-                        if missing::is_missing_long(raw) {
-                            Value::Double(f64::from_bits(0x7FF8000000000000))
-                        } else {
-                            Value::Long(raw)
-                        }
-                    }
-                    VarType::Float => {
-                        let raw = self.byteorder.read_f32(chunk);
-                        if missing::is_missing_float(raw) {
-                            Value::Double(f64::from_bits(0x7FF8000000000000))
-                        } else {
-                            Value::Float(raw)
-                        }
-                    }
-                    VarType::Double => {
-                        let raw = self.byteorder.read_f64(chunk);
-                        if missing::is_missing_double(raw) {
-                            Value::Double(f64::from_bits(0x7FF8000000000000))
-                        } else {
-                            Value::Double(raw)
-                        }
-                    }
-                    VarType::Str(_n) => {
-                        let s = chunk.split(|&b| b == 0).next().unwrap_or(chunk);
-                        Value::Str(String::from_utf8_lossy(s).into_owned())
-                    }
-                    VarType::StrL => {
-                        let v = self.byteorder.read_u32(&chunk[0..4]);
-                        let o = self.byteorder.read_u32(&chunk[4..8]);
-                        Value::StrL(v, o)
-                    }
-                };
-                var.data.push(value);
-                cursor += width;
-            }
-        }
-
-        ds.n_obs = self.n as usize;
-        Ok(())
-    }
-
-    fn read_strls(&self) -> HashMap<(u32, u32), String> {
-        let Some(start) = Self::find_tag(&self.data, b"<strls>") else {
-            return HashMap::new();
-        };
-        let Some(end) = Self::find_tag(&self.data, b"</strls>") else {
-            return HashMap::new();
-        };
-        let data = &self.data[start + 7..end];
-        let mut result = HashMap::new();
-        let mut pos = 0usize;
-        while pos + 12 < data.len() {
-            // Each strL entry: v(4) o(4) len(4) text(len)
-            if pos + 12 > data.len() { break; }
-            let v = self.byteorder.read_u32(&data[pos..pos + 4]);
-            let o = self.byteorder.read_u32(&data[pos + 4..pos + 8]);
-            let len = self.byteorder.read_u32(&data[pos + 8..pos + 12]) as usize;
-            pos += 12;
-            if pos + len > data.len() { break; }
-            let text = String::from_utf8_lossy(&data[pos..pos + len]).into_owned();
-            pos += len;
-            result.insert((v, o), text);
-        }
-        result
-    }
-
-    fn read_value_labels(&self) -> HashMap<String, ValueLabel> {
-        let Some(start) = Self::find_tag(&self.data, b"<value_labels>") else {
-            return HashMap::new();
-        };
-        let Some(end) = Self::find_tag(&self.data, b"</value_labels>") else {
-            return HashMap::new();
-        };
-        let data = &self.data[start + 14..end];
-        let mut result = HashMap::new();
-        let mut pos = 0usize;
-        while pos + 8 < data.len() {
-            if &data[pos..pos + 5] != b"<lbl>" { pos += 1; continue; }
-            pos += 5;
-            if pos + 8 > data.len() { break; }
-            let len = self.byteorder.read_u32(&data[pos..pos + 4]) as usize;
-            let txtlen = self.byteorder.read_u32(&data[pos + 4..pos + 8]) as usize;
-            pos += 8;
-            if pos + len + txtlen > data.len() { break; }
-            let name = String::from_utf8_lossy(&data[pos..pos + len]).into_owned();
-            pos += len;
-            let txtdata = &data[pos..pos + txtlen];
-            pos += txtlen;
-            if pos + 6 <= data.len() && &data[pos..pos + 6] == b"</lbl>" {
-                pos += 6;
-            }
-
-            let mut vlab = ValueLabel::new(&name);
-            // Parse label table: off(n) + val(n) + txt(txtlen)
-            // The txtdata contains: n(4) txtlen(4) off[] val[] text[]
-            if txtdata.len() < 8 { continue; }
-            let n = self.byteorder.read_u32(&txtdata[0..4]) as usize;
-            let stored_txtlen = self.byteorder.read_u32(&txtdata[4..8]) as usize;
-            let table_offset = 8;
-            let off_size = n * 4;
-            let val_size = n * 8;
-            if txtdata.len() < table_offset + off_size + val_size + stored_txtlen { continue; }
-
-            let mut offsets = Vec::with_capacity(n);
-            for i in 0..n {
-                let off = self.byteorder.read_u32(&txtdata[table_offset + i * 4..table_offset + (i + 1) * 4]) as usize;
-                offsets.push(off);
-            }
-            let val_offset = table_offset + off_size;
-            let mut values = Vec::with_capacity(n);
-            for i in 0..n {
-                let val = self.byteorder.read_f64(&txtdata[val_offset + i * 8..val_offset + (i + 1) * 8]);
-                values.push(val);
-            }
-            let text_offset = val_offset + val_size;
-            for i in 0..n {
-                let start = offsets.get(i).copied().unwrap_or(0);
-                let end = offsets.get(i + 1).copied().unwrap_or(stored_txtlen);
-                let label = String::from_utf8_lossy(&txtdata[text_offset + start..text_offset + end])
-                    .trim_end_matches('\0')
-                    .to_string();
-                if i < values.len() {
-                    vlab.add(values[i], label);
-                }
-            }
-            result.insert(name, vlab);
-        }
-        result
-    }
-
-    fn find_tag(data: &[u8], tag: &[u8]) -> Option<usize> {
-        data.windows(tag.len()).position(|w| w == tag)
     }
 }
 
-/// DTA writer (basic support for format 118).
+fn read_tagged(data: &[u8]) -> Result<DataSet> {
+    let mut c = Cursor::new(data);
+    c.expect(b"<stata_dta><header><release>")?;
+    let rel: u16 = std::str::from_utf8(c.take(3)?)?.parse().map_err(|_| bad("bad release"))?;
+    if !matches!(rel, 117 | 118 | 119) {
+        return Err(DtaError::UnsupportedRelease(rel));
+    }
+    let lay = Layout::for_release(rel)?;
+    c.expect(b"</release><byteorder>")?;
+    c.big = match c.take(3)? {
+        b"MSF" => true,
+        b"LSF" => false,
+        _ => return Err(bad("bad byteorder")),
+    };
+    c.expect(b"</byteorder><K>")?;
+    let k = if rel == 119 { c.u32()? as usize } else { c.u16()? as usize };
+    c.expect(b"</K><N>")?;
+    let n = if rel == 117 { c.u32()? as usize } else { c.u64()? as usize };
+    c.expect(b"</N><label>")?;
+    let ll = if rel == 117 { c.u8()? as usize } else { c.u16()? as usize };
+    let datalabel = decode_str(c.take(ll)?, lay.utf8);
+    c.expect(b"</label><timestamp>")?;
+    let tl = c.u8()? as usize;
+    let timestamp = decode_str(c.take(tl)?, lay.utf8);
+    c.expect(b"</timestamp></header><map>")?;
+    let mut map = [0u64; 14];
+    for m in map.iter_mut() {
+        *m = c.u64()?;
+    }
+    c.expect(b"</map>")?;
+
+    let mut types = Vec::with_capacity(k);
+    let mut sec = |c: &mut Cursor, off: u64, tag: &[u8]| -> Result<()> {
+        c.pos = off as usize;
+        c.expect(tag)
+    };
+
+    sec(&mut c, map[2], b"<variable_types>")?;
+    for _ in 0..k {
+        let code = c.u16()?;
+        types.push(VarType::from_type_code(code).ok_or_else(|| bad(format!("unknown type code {code}")))?);
+    }
+    sec(&mut c, map[3], b"<varnames>")?;
+    let names: Vec<String> = (0..k).map(|_| c.fixed_str(lay.name_w, lay.utf8)).collect::<Result<_>>()?;
+    sec(&mut c, map[4], b"<sortlist>")?;
+    let mut sortlist = Vec::new();
+    for _ in 0..=k {
+        let v = if rel == 119 { c.u32()? as usize } else { c.u16()? as usize };
+        if v == 0 {
+            break;
+        }
+        sortlist.push(v);
+    }
+    sec(&mut c, map[5], b"<formats>")?;
+    let formats: Vec<String> = (0..k).map(|_| c.fixed_str(lay.fmt_w, lay.utf8)).collect::<Result<_>>()?;
+    sec(&mut c, map[6], b"<value_label_names>")?;
+    let lblnames: Vec<String> = (0..k).map(|_| c.fixed_str(lay.lblname_w, lay.utf8)).collect::<Result<_>>()?;
+    sec(&mut c, map[7], b"<variable_labels>")?;
+    let varlabels: Vec<String> = (0..k).map(|_| c.fixed_str(lay.varlbl_w, lay.utf8)).collect::<Result<_>>()?;
+
+    let mut ds = DataSet::new();
+    ds.datalabel = datalabel;
+    ds.time_stamp = timestamp;
+    for i in 0..k {
+        let mut v = Variable::new(names[i].clone(), types[i]);
+        v.format = formats[i].clone();
+        v.value_label_name = lblnames[i].clone();
+        v.label = varlabels[i].clone();
+        v.data.reserve(n);
+        ds.add_variable(v).map_err(bad)?;
+    }
+    ds.sort_by = sortlist.iter().filter_map(|&i| names.get(i - 1).cloned()).collect();
+
+    // characteristics
+    sec(&mut c, map[8], b"<characteristics>")?;
+    loop {
+        if c.buf[c.pos..].starts_with(b"</characteristics>") {
+            break;
+        }
+        c.expect(b"<ch>")?;
+        let len = c.u32()? as usize;
+        let body = c.take(len)?;
+        c.expect(b"</ch>")?;
+        if body.len() >= 2 * lay.name_w {
+            let var = decode_str(&body[..lay.name_w], lay.utf8);
+            let name = decode_str(&body[lay.name_w..2 * lay.name_w], lay.utf8);
+            let val = decode_str(&body[2 * lay.name_w..], lay.utf8);
+            ds.characteristics.entry(var).or_default().insert(name, val);
+        }
+    }
+
+    // data
+    sec(&mut c, map[9], b"<data>")?;
+    let mut strl_refs: Vec<(usize, usize, u64, u64)> = Vec::new(); // (var, obs, v, o)
+    for obs in 0..n {
+        for (vi, ty) in types.iter().enumerate() {
+            let val = match ty {
+                VarType::StrL => {
+                    let raw = c.u64()?;
+                    let (v, o) = match rel {
+                        117 => {
+                            // v and o are two 4-byte fields
+                            let lo = raw & 0xFFFF_FFFF;
+                            let hi = raw >> 32;
+                            if c.big { (hi, lo) } else { (lo, hi) }
+                        }
+                        118 => split_vo(raw, 2, c.big),
+                        _ => split_vo(raw, 3, c.big),
+                    };
+                    if v != 0 || o != 0 {
+                        strl_refs.push((vi, obs, v, o));
+                    }
+                    Value::Str(String::new())
+                }
+                _ => read_cell(&mut c, *ty, lay.utf8)?,
+            };
+            ds.vars[vi].data.push(val);
+        }
+    }
+    ds.n_obs = n;
+
+    // strLs
+    sec(&mut c, map[10], b"<strls>")?;
+    let mut gso: std::collections::HashMap<(u64, u64), String> = Default::default();
+    while c.buf[c.pos..].starts_with(b"GSO") {
+        c.expect(b"GSO")?;
+        let v = c.u32()? as u64;
+        let o = if rel == 117 { c.u32()? as u64 } else { c.u64()? };
+        let t = c.u8()?;
+        let len = c.u32()? as usize;
+        let body = c.take(len)?;
+        let s = if t == 130 { decode_str(body, true) } else { String::from_utf8_lossy(body).into_owned() };
+        gso.insert((v, o), s);
+    }
+    for (vi, obs, v, o) in strl_refs {
+        if let Some(s) = gso.get(&(v, o)) {
+            ds.vars[vi].data[obs] = Value::Str(s.clone());
+        }
+    }
+
+    // value labels
+    sec(&mut c, map[11], b"<value_labels>")?;
+    while c.buf[c.pos..].starts_with(b"<lbl>") {
+        c.expect(b"<lbl>")?;
+        let len = c.u32()? as usize;
+        let name = c.fixed_str(lay.lblname_w, lay.utf8)?;
+        c.take(3)?;
+        let table = c.take(len)?;
+        c.expect(b"</lbl>")?;
+        let mut tc = Cursor { buf: table, pos: 0, big: c.big };
+        ds.value_labels.insert(name.clone(), read_label_table(&mut tc, &name, lay.utf8)?);
+    }
+    Ok(ds)
+}
+
+fn split_vo(raw: u64, vbytes: u32, big: bool) -> (u64, u64) {
+    // In LSF files v occupies the low-order bytes; in MSF files the
+    // high-order ones.
+    let vbits = vbytes * 8;
+    if big {
+        (raw >> (64 - vbits), raw & ((1u64 << (64 - vbits)) - 1))
+    } else {
+        (raw & ((1u64 << vbits) - 1), raw >> vbits)
+    }
+}
+
+fn read_label_table(c: &mut Cursor, name: &str, utf8: bool) -> Result<ValueLabel> {
+    let n = c.u32()? as usize;
+    let txtlen = c.u32()? as usize;
+    let offs: Vec<usize> = (0..n).map(|_| c.u32().map(|v| v as usize)).collect::<Result<_>>()?;
+    let vals: Vec<i32> = (0..n).map(|_| c.i32()).collect::<Result<_>>()?;
+    let txt = c.take(txtlen)?;
+    let mut vl = ValueLabel::new(name);
+    for (o, v) in offs.iter().zip(vals) {
+        if *o < txt.len() {
+            vl.add(int_code_to_f64(v), decode_str(&txt[*o..], utf8));
+        }
+    }
+    Ok(vl)
+}
+
+/// Value-label values are stored as long; map long missing codes.
+fn int_code_to_f64(v: i32) -> f64 {
+    if missing::is_missing_long(v) { missing::missing(missing::code_long(v)) } else { v as f64 }
+}
+
+fn read_cell(c: &mut Cursor, ty: VarType, utf8: bool) -> Result<Value> {
+    Ok(match ty {
+        VarType::Byte => {
+            let v = c.u8()? as i8;
+            if missing::is_missing_byte(v) { Value::Double(missing::missing(missing::code_byte(v))) } else { Value::Byte(v) }
+        }
+        VarType::Int => {
+            let v = c.i16()?;
+            if missing::is_missing_int(v) { Value::Double(missing::missing(missing::code_int(v))) } else { Value::Int(v) }
+        }
+        VarType::Long => {
+            let v = c.i32()?;
+            if missing::is_missing_long(v) { Value::Double(missing::missing(missing::code_long(v))) } else { Value::Long(v) }
+        }
+        VarType::Float => {
+            let v = c.f32()?;
+            if missing::is_missing_float(v) { Value::Double(missing::missing(missing::code_float(v))) } else { Value::Float(v) }
+        }
+        VarType::Double => {
+            let v = c.f64()?;
+            Value::Double(if v.is_nan() { missing::SYSMISS } else { v })
+        }
+        VarType::Str(w) => Value::Str(c.fixed_str(w, utf8)?),
+        VarType::StrL => unreachable!("strL handled by caller"),
+    })
+}
+
+fn old_type(code: u8) -> Result<VarType> {
+    Ok(match code {
+        251 => VarType::Byte,
+        252 => VarType::Int,
+        253 => VarType::Long,
+        254 => VarType::Float,
+        255 => VarType::Double,
+        1..=244 => VarType::Str(code as usize),
+        _ => return Err(bad(format!("unknown type code {code}"))),
+    })
+}
+
+fn read_binary(data: &[u8]) -> Result<DataSet> {
+    let mut c = Cursor::new(data);
+    let rel = c.u8()? as u16;
+    let lay = Layout::for_release(rel)?;
+    c.big = match c.u8()? {
+        1 => true,
+        2 => false,
+        _ => return Err(bad("bad byteorder")),
+    };
+    c.take(2)?; // filetype, unused
+    let k = c.u16()? as usize;
+    let n = c.u32()? as usize;
+    let datalabel = c.fixed_str(lay.datalbl_w, false)?;
+    let timestamp = c.fixed_str(18, false)?;
+    let types: Vec<VarType> = (0..k).map(|_| c.u8().and_then(old_type)).collect::<Result<_>>()?;
+    let names: Vec<String> = (0..k).map(|_| c.fixed_str(lay.name_w, false)).collect::<Result<_>>()?;
+    let mut sortlist = Vec::new();
+    for _ in 0..=k {
+        let v = c.u16()? as usize;
+        if v != 0 && sortlist.len() < k {
+            sortlist.push(v);
+        }
+    }
+    let formats: Vec<String> = (0..k).map(|_| c.fixed_str(lay.fmt_w, false)).collect::<Result<_>>()?;
+    let lblnames: Vec<String> = (0..k).map(|_| c.fixed_str(lay.lblname_w, false)).collect::<Result<_>>()?;
+    let varlabels: Vec<String> = (0..k).map(|_| c.fixed_str(lay.varlbl_w, false)).collect::<Result<_>>()?;
+    // expansion fields
+    loop {
+        let t = c.u8()?;
+        let len = c.u32()? as usize;
+        if t == 0 && len == 0 {
+            break;
+        }
+        let body = c.take(len)?;
+        if body.len() >= 66 {
+            let var = decode_str(&body[..33], false);
+            let name = decode_str(&body[33..66], false);
+            let _ = (var, name);
+        }
+    }
+    let mut ds = DataSet::new();
+    ds.datalabel = datalabel;
+    ds.time_stamp = timestamp;
+    for i in 0..k {
+        let mut v = Variable::new(names[i].clone(), types[i]);
+        v.format = formats[i].clone();
+        v.value_label_name = lblnames[i].clone();
+        v.label = varlabels[i].clone();
+        ds.add_variable(v).map_err(bad)?;
+    }
+    ds.sort_by = sortlist.iter().filter_map(|&i| names.get(i - 1).cloned()).collect();
+    for _ in 0..n {
+        for (vi, ty) in types.iter().enumerate() {
+            let v = read_cell(&mut c, *ty, false)?;
+            ds.vars[vi].data.push(v);
+        }
+    }
+    ds.n_obs = n;
+    while c.pos + 4 <= data.len() {
+        let len = c.u32()? as usize;
+        let name = c.fixed_str(33, false)?;
+        c.take(3)?;
+        let table = c.take(len)?;
+        let mut tc = Cursor { buf: table, pos: 0, big: c.big };
+        ds.value_labels.insert(name.clone(), read_label_table(&mut tc, &name, false)?);
+    }
+    Ok(ds)
+}
+
+// ---------------------------------------------------------------------------
+// Writer (always little-endian)
+// ---------------------------------------------------------------------------
+
 pub struct DtaWriter;
 
+struct Out {
+    buf: Vec<u8>,
+}
+
+impl Out {
+    fn put(&mut self, b: &[u8]) {
+        self.buf.extend_from_slice(b);
+    }
+    fn u8(&mut self, v: u8) {
+        self.buf.push(v);
+    }
+    fn u16(&mut self, v: u16) {
+        self.put(&v.to_le_bytes());
+    }
+    fn u32(&mut self, v: u32) {
+        self.put(&v.to_le_bytes());
+    }
+    fn u64(&mut self, v: u64) {
+        self.put(&v.to_le_bytes());
+    }
+    fn fixed(&mut self, s: &str, w: usize, utf8: bool) {
+        let mut b = encode_str(s, utf8);
+        b.truncate(w.saturating_sub(1));
+        b.resize(w, 0);
+        self.put(&b);
+    }
+}
+
+fn encode_str(s: &str, utf8: bool) -> Vec<u8> {
+    if utf8 {
+        s.as_bytes().to_vec()
+    } else {
+        s.chars().map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }).collect()
+    }
+}
+
+fn timestamp_now() -> String {
+    chrono::Local::now().format("%d %b %Y %H:%M").to_string()
+}
+
 impl DtaWriter {
-    pub fn write<W: Write>(writer: &mut W, ds: &DataSet) -> Result<(), DtaError> {
-        // For simplicity, write CSV-like intermediate or full DTA
-        // Full DTA writing is complex; we'll implement a simplified version.
-        let k = ds.n_vars() as u16;
-        let n = ds.n_obs as u64;
+    /// Write in the current default format (118, or 119 for > 32,767 variables).
+    pub fn write<W: Write>(writer: &mut W, ds: &DataSet) -> Result<()> {
+        let rel = if ds.n_vars() > 32767 { 119 } else { 118 };
+        Self::write_release(writer, ds, rel)
+    }
 
-        // Build sections
-        let _sections: Vec<(String, Vec<u8>)> = Vec::new();
-
-        // Header
-        let mut header = Vec::new();
-        header.extend_from_slice(b"<release>118</release>");
-        header.extend_from_slice(b"<byteorder>LSF</byteorder>");
-        header.extend_from_slice(b"<K>");
-        header.extend_from_slice(&k.to_le_bytes());
-        header.extend_from_slice(b"</K>");
-        header.extend_from_slice(b"<N>");
-        header.extend_from_slice(&n.to_le_bytes());
-        header.extend_from_slice(b"</N>");
-        let label_bytes = ds.datalabel.as_bytes();
-        header.extend_from_slice(b"<label>");
-        header.extend_from_slice(&(label_bytes.len() as u16).to_le_bytes());
-        header.extend_from_slice(label_bytes);
-        header.extend_from_slice(b"</label>");
-        let ts_bytes = ds.time_stamp.as_bytes();
-        header.extend_from_slice(b"<timestamp>");
-        header.push(ts_bytes.len() as u8);
-        header.extend_from_slice(ts_bytes);
-        header.extend_from_slice(b"</timestamp>");
-
-        // Variable types
-        let mut var_types = Vec::new();
-        for var in &ds.vars {
-            var_types.extend_from_slice(&var.var_type.type_code().to_le_bytes());
-        }
-
-        // Varnames: fixed-width 129 bytes, null-terminated
-        let mut varnames = Vec::new();
-        for var in &ds.vars {
-            let mut buf = vec![0u8; 129];
-            let b = var.name.as_bytes();
-            let len = b.len().min(128);
-            buf[..len].copy_from_slice(&b[..len]);
-            varnames.extend_from_slice(&buf);
-        }
-
-        // Sortlist: (k+1) × 2 bytes
-        let mut sortlist = vec![0u8; (k as usize + 1) * 2];
-        for (i, name) in ds.sort_by.iter().enumerate() {
-            if let Some(&idx) = ds.var_index.get(name) {
-                let pos = i * 2;
-                sortlist[pos..pos + 2].copy_from_slice(&((idx + 1) as u16).to_le_bytes());
-            }
-        }
-
-        // Formats: fixed-width 57 bytes, null-terminated
-        let mut formats = Vec::new();
-        for var in &ds.vars {
-            let mut buf = vec![0u8; 57];
-            let b = var.format.as_bytes();
-            let len = b.len().min(56);
-            buf[..len].copy_from_slice(&b[..len]);
-            formats.extend_from_slice(&buf);
-        }
-
-        // Value label names: fixed-width 129 bytes
-        let mut val_label_names = Vec::new();
-        for var in &ds.vars {
-            let mut buf = vec![0u8; 129];
-            let b = var.value_label_name.as_bytes();
-            let len = b.len().min(128);
-            buf[..len].copy_from_slice(&b[..len]);
-            val_label_names.extend_from_slice(&buf);
-        }
-
-        // Variable labels: fixed-width 81 bytes
-        let mut var_labels = Vec::new();
-        for var in &ds.vars {
-            let mut buf = vec![0u8; 81];
-            let b = var.label.as_bytes();
-            let len = b.len().min(80);
-            buf[..len].copy_from_slice(&b[..len]);
-            var_labels.extend_from_slice(&buf);
-        }
-
-        // Characteristics
-        let mut chars = Vec::new();
-        for (name, map) in &ds.characteristics {
-            for (el, val) in map {
-                chars.extend_from_slice(b"<ch>");
-                chars.extend_from_slice(&(name.len() as u16).to_le_bytes());
-                chars.extend_from_slice(name.as_bytes());
-                chars.extend_from_slice(&(el.len() as u16).to_le_bytes());
-                chars.extend_from_slice(el.as_bytes());
-                chars.extend_from_slice(&(val.len() as u32).to_le_bytes());
-                chars.extend_from_slice(val.as_bytes());
-                chars.extend_from_slice(b"</ch>");
-            }
-        }
-
-        // Data matrix
-        let mut data_mat = Vec::new();
-        let _record_size: usize = ds.vars.iter().map(|v| v.var_type.storage_width()).sum();
-        for obs in 0..ds.n_obs {
-            for var in &ds.vars {
-                match (&var.data[obs], var.var_type) {
-                    (Value::Byte(v), _) => data_mat.push(*v as u8),
-                    (Value::Int(v), _) => data_mat.extend_from_slice(&v.to_le_bytes()),
-                    (Value::Long(v), _) => data_mat.extend_from_slice(&v.to_le_bytes()),
-                    (Value::Float(v), _) => data_mat.extend_from_slice(&v.to_le_bytes()),
-                    (Value::Double(v), _) => data_mat.extend_from_slice(&v.to_bits().to_le_bytes()),
-                    (Value::Str(s), VarType::Str(n)) => {
-                        let mut buf = vec![0u8; n];
-                        let b = s.as_bytes();
-                        let len = b.len().min(n);
-                        buf[..len].copy_from_slice(&b[..len]);
-                        data_mat.extend_from_slice(&buf);
-                    }
-                    (Value::StrL(v, o), VarType::StrL) => {
-                        data_mat.extend_from_slice(&v.to_le_bytes());
-                        data_mat.extend_from_slice(&o.to_le_bytes());
-                    }
-                    _ => {
-                        // write zeros for missing/unknown
-                        let w = var.var_type.storage_width();
-                        data_mat.extend_from_slice(&vec![0u8; w]);
-                    }
-                }
-            }
-        }
-
-        // strls
-        let mut strls = Vec::new();
-        for ((v, o), text) in &ds.strls {
-            strls.extend_from_slice(&v.to_le_bytes());
-            strls.extend_from_slice(&o.to_le_bytes());
-            strls.extend_from_slice(&(text.len() as u32).to_le_bytes());
-            strls.extend_from_slice(text.as_bytes());
-        }
-
-        // Value labels
-        let mut vlabels = Vec::new();
-        for (name, vlab) in &ds.value_labels {
-            vlabels.extend_from_slice(b"<lbl>");
-            let name_bytes = name.as_bytes();
-            vlabels.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
-            // Build label table
-            let n = vlab.len() as u32;
-            let mut txt = Vec::new();
-            let mut offsets = Vec::new();
-            let mut values = Vec::new();
-            for (val, label) in &vlab.mapping {
-                offsets.push(txt.len() as u32);
-                values.push(val.0);
-                let mut lb = label.as_bytes().to_vec();
-                lb.push(0); // null terminate
-                txt.extend_from_slice(&lb);
-            }
-            let txtlen = txt.len() as u32;
-            vlabels.extend_from_slice(&(txtlen).to_le_bytes());
-            vlabels.extend_from_slice(name_bytes);
-            vlabels.extend_from_slice(&n.to_le_bytes());
-            vlabels.extend_from_slice(&txtlen.to_le_bytes());
-            for off in offsets {
-                vlabels.extend_from_slice(&off.to_le_bytes());
-            }
-            for val in values {
-                vlabels.extend_from_slice(&val.to_bits().to_le_bytes());
-            }
-            vlabels.extend_from_slice(&txt);
-            vlabels.extend_from_slice(b"</lbl>");
-        }
-
-        // Now assemble the file and compute offsets for the map
-        let mut file = Vec::new();
-        file.extend_from_slice(b"<stata_dta>");
-        file.extend_from_slice(b"<header>");
-        file.extend_from_slice(&header);
-        file.extend_from_slice(b"</header>");
-
-        let map_pos = file.len();
-        file.extend_from_slice(b"<map>");
-        // We'll fill in the offsets after computing them
-        let map_data_start = file.len();
-        let mut map_entries = vec![0u64; 14];
-        map_entries[0] = 0; // start of file (already at 0)
-        map_entries[1] = map_pos as u64;
-
-        // Placeholder for map entries
-        for e in &map_entries {
-            file.extend_from_slice(&e.to_le_bytes());
-        }
-        file.extend_from_slice(b"</map>");
-
-        map_entries[2] = file.len() as u64;
-        file.extend_from_slice(b"<variable_types>");
-        file.extend_from_slice(&var_types);
-        file.extend_from_slice(b"</variable_types>");
-
-        map_entries[3] = file.len() as u64;
-        file.extend_from_slice(b"<varnames>");
-        file.extend_from_slice(&varnames);
-        file.extend_from_slice(b"</varnames>");
-
-        map_entries[4] = file.len() as u64;
-        file.extend_from_slice(b"<sortlist>");
-        file.extend_from_slice(&sortlist);
-        file.extend_from_slice(b"</sortlist>");
-
-        map_entries[5] = file.len() as u64;
-        file.extend_from_slice(b"<formats>");
-        file.extend_from_slice(&formats);
-        file.extend_from_slice(b"</formats>");
-
-        map_entries[6] = file.len() as u64;
-        file.extend_from_slice(b"<value_label_names>");
-        file.extend_from_slice(&val_label_names);
-        file.extend_from_slice(b"</value_label_names>");
-
-        map_entries[7] = file.len() as u64;
-        file.extend_from_slice(b"<variable_labels>");
-        file.extend_from_slice(&var_labels);
-        file.extend_from_slice(b"</variable_labels>");
-
-        map_entries[8] = file.len() as u64;
-        file.extend_from_slice(b"<characteristics>");
-        file.extend_from_slice(&chars);
-        file.extend_from_slice(b"</characteristics>");
-
-        map_entries[9] = file.len() as u64;
-        file.extend_from_slice(b"<data>");
-        file.extend_from_slice(&data_mat);
-        file.extend_from_slice(b"</data>");
-
-        map_entries[10] = file.len() as u64;
-        file.extend_from_slice(b"<strls>");
-        file.extend_from_slice(&strls);
-        file.extend_from_slice(b"</strls>");
-
-        map_entries[11] = file.len() as u64;
-        file.extend_from_slice(b"<value_labels>");
-        file.extend_from_slice(&vlabels);
-        file.extend_from_slice(b"</value_labels>");
-
-        map_entries[12] = file.len() as u64;
-        file.extend_from_slice(b"</stata_dta>");
-        map_entries[13] = file.len() as u64;
-
-        // Fix up map entries
-        for (i, e) in map_entries.iter().enumerate() {
-            let pos = map_data_start + i * 8;
-            file[pos..pos + 8].copy_from_slice(&e.to_le_bytes());
-        }
-
-        writer.write_all(&file)?;
+    /// Write a specific release: 115, 117, 118 or 119.
+    pub fn write_release<W: Write>(writer: &mut W, ds: &DataSet, release: u16) -> Result<()> {
+        let bytes = match release {
+            117..=119 => write_tagged(ds, release)?,
+            113..=115 => write_binary(ds, release)?,
+            r => return Err(DtaError::UnsupportedRelease(r)),
+        };
+        writer.write_all(&bytes)?;
         Ok(())
     }
+}
+
+/// Encode a numeric cell for its storage type (out-of-range values become missing).
+fn put_num(o: &mut Out, ty: VarType, v: f64) {
+    let code = missing::missing_code(v);
+    match ty {
+        VarType::Byte => o.u8(match code {
+            Some(c) => (101 + c as i16) as u8,
+            None if v.fract() == 0.0 && (-127.0..=100.0).contains(&v) => v as i8 as u8,
+            None => 101,
+        }),
+        VarType::Int => o.u16(match code {
+            Some(c) => (32741 + c as i32) as u16,
+            None if v.fract() == 0.0 && (-32767.0..=32740.0).contains(&v) => v as i16 as u16,
+            None => 32741,
+        }),
+        VarType::Long => o.u32(match code {
+            Some(c) => (2147483621i64 + c as i64) as u32,
+            None if v.fract() == 0.0 && (-2147483647.0..=2147483620.0).contains(&v) => v as i32 as u32,
+            None => 2147483621,
+        }),
+        VarType::Float => o.u32(match code {
+            Some(c) => 0x7F00_0000 + c as u32 * 0x800,
+            None => (v as f32).to_bits(),
+        }),
+        VarType::Double => o.u64(missing::normalize(v).to_bits()),
+        _ => unreachable!(),
+    }
+}
+
+fn write_label_table(o: &mut Out, vl: &ValueLabel, utf8: bool) -> Vec<u8> {
+    let _ = o;
+    let mut txt = Vec::new();
+    let mut offs = Vec::new();
+    let mut vals = Vec::new();
+    for (v, l) in vl.iter() {
+        offs.push(txt.len() as u32);
+        vals.push(match missing::missing_code(v) {
+            Some(c) => 2147483621 + c as i32,
+            None => v as i32,
+        });
+        txt.extend_from_slice(&encode_str(l, utf8));
+        txt.push(0);
+    }
+    let mut t = Out { buf: Vec::new() };
+    t.u32(offs.len() as u32);
+    t.u32(txt.len() as u32);
+    for x in offs {
+        t.u32(x);
+    }
+    for v in vals {
+        t.u32(v as u32);
+    }
+    t.put(&txt);
+    t.buf
+}
+
+fn sorted_labels(ds: &DataSet) -> Vec<&ValueLabel> {
+    let mut v: Vec<&ValueLabel> = ds.value_labels.values().collect();
+    v.sort_by(|a, b| a.name.cmp(&b.name));
+    v
+}
+
+fn write_tagged(ds: &DataSet, rel: u16) -> Result<Vec<u8>> {
+    let lay = Layout::for_release(rel)?;
+    let k = ds.n_vars();
+    let n = ds.n_obs;
+    if rel != 119 && k > 32767 {
+        return Err(bad("too many variables for this release"));
+    }
+    let mut o = Out { buf: Vec::new() };
+    o.put(b"<stata_dta><header><release>");
+    o.put(rel.to_string().as_bytes());
+    o.put(b"</release><byteorder>LSF</byteorder><K>");
+    if rel == 119 { o.u32(k as u32) } else { o.u16(k as u16) }
+    o.put(b"</K><N>");
+    if rel == 117 { o.u32(n as u32) } else { o.u64(n as u64) }
+    o.put(b"</N><label>");
+    let mut lbl = encode_str(&ds.datalabel, lay.utf8);
+    lbl.truncate(if rel == 117 { 80 } else { 320 });
+    if rel == 117 { o.u8(lbl.len() as u8) } else { o.u16(lbl.len() as u16) }
+    o.put(&lbl);
+    o.put(b"</label><timestamp>");
+    let ts = if ds.time_stamp.is_empty() { timestamp_now() } else { ds.time_stamp.clone() };
+    let ts = encode_str(&ts, lay.utf8);
+    o.u8(ts.len() as u8);
+    o.put(&ts);
+    o.put(b"</timestamp></header>");
+
+    let mut map = [0u64; 14];
+    map[1] = o.buf.len() as u64;
+    o.put(b"<map>");
+    let map_at = o.buf.len();
+    for _ in 0..14 {
+        o.u64(0);
+    }
+    o.put(b"</map>");
+
+    map[2] = o.buf.len() as u64;
+    o.put(b"<variable_types>");
+    for v in &ds.vars {
+        o.u16(v.var_type.type_code());
+    }
+    o.put(b"</variable_types>");
+
+    map[3] = o.buf.len() as u64;
+    o.put(b"<varnames>");
+    for v in &ds.vars {
+        o.fixed(&v.name, lay.name_w, lay.utf8);
+    }
+    o.put(b"</varnames>");
+
+    map[4] = o.buf.len() as u64;
+    o.put(b"<sortlist>");
+    let mut sl: Vec<usize> = ds.sort_by.iter().filter_map(|nm| ds.var_index.get(nm).map(|i| i + 1)).collect();
+    sl.resize(k + 1, 0);
+    for s in sl {
+        if rel == 119 { o.u32(s as u32) } else { o.u16(s as u16) }
+    }
+    o.put(b"</sortlist>");
+
+    map[5] = o.buf.len() as u64;
+    o.put(b"<formats>");
+    for v in &ds.vars {
+        o.fixed(&v.format, lay.fmt_w, lay.utf8);
+    }
+    o.put(b"</formats>");
+
+    map[6] = o.buf.len() as u64;
+    o.put(b"<value_label_names>");
+    for v in &ds.vars {
+        o.fixed(&v.value_label_name, lay.lblname_w, lay.utf8);
+    }
+    o.put(b"</value_label_names>");
+
+    map[7] = o.buf.len() as u64;
+    o.put(b"<variable_labels>");
+    for v in &ds.vars {
+        o.fixed(&v.label, lay.varlbl_w, lay.utf8);
+    }
+    o.put(b"</variable_labels>");
+
+    map[8] = o.buf.len() as u64;
+    o.put(b"<characteristics>");
+    for (var, chars) in &ds.characteristics {
+        for (name, val) in chars {
+            let mut body = Out { buf: Vec::new() };
+            body.fixed(var, lay.name_w, lay.utf8);
+            body.fixed(name, lay.name_w, lay.utf8);
+            body.put(&encode_str(val, lay.utf8));
+            body.u8(0);
+            o.put(b"<ch>");
+            o.u32(body.buf.len() as u32);
+            o.put(&body.buf);
+            o.put(b"</ch>");
+        }
+    }
+    o.put(b"</characteristics>");
+
+    map[9] = o.buf.len() as u64;
+    o.put(b"<data>");
+    let mut gso: Vec<(u32, u64, String)> = Vec::new();
+    for obs in 0..n {
+        for (vi, v) in ds.vars.iter().enumerate() {
+            let cell = &v.data[obs];
+            match v.var_type {
+                VarType::Str(w) => {
+                    let mut b = encode_str(cell_str(ds, cell), lay.utf8);
+                    b.truncate(w);
+                    b.resize(w, 0);
+                    o.put(&b);
+                }
+                VarType::StrL => {
+                    let s = cell_str(ds, cell);
+                    let (vv, oo) = ((vi + 1) as u64, (obs + 1) as u64);
+                    if s.is_empty() {
+                        o.u64(0);
+                    } else {
+                        let raw = match rel {
+                            117 => vv | (oo << 32),
+                            118 => vv | (oo << 16),
+                            _ => vv | (oo << 24),
+                        };
+                        o.u64(raw);
+                        gso.push((vv as u32, oo, s.to_string()));
+                    }
+                }
+                ty => put_num(&mut o, ty, cell.num()),
+            }
+        }
+    }
+    o.put(b"</data>");
+
+    map[10] = o.buf.len() as u64;
+    o.put(b"<strls>");
+    for (v, oo, s) in gso {
+        o.put(b"GSO");
+        o.u32(v);
+        if rel == 117 { o.u32(oo as u32) } else { o.u64(oo) }
+        o.u8(130);
+        let b = encode_str(&s, lay.utf8);
+        o.u32(b.len() as u32 + 1);
+        o.put(&b);
+        o.u8(0);
+    }
+    o.put(b"</strls>");
+
+    map[11] = o.buf.len() as u64;
+    o.put(b"<value_labels>");
+    for vl in sorted_labels(ds) {
+        let table = write_label_table(&mut Out { buf: Vec::new() }, vl, lay.utf8);
+        o.put(b"<lbl>");
+        o.u32(table.len() as u32);
+        o.fixed(&vl.name, lay.lblname_w, lay.utf8);
+        o.put(&[0, 0, 0]);
+        o.put(&table);
+        o.put(b"</lbl>");
+    }
+    o.put(b"</value_labels>");
+
+    map[12] = o.buf.len() as u64;
+    o.put(b"</stata_dta>");
+    map[13] = o.buf.len() as u64;
+    for (i, m) in map.iter().enumerate() {
+        o.buf[map_at + i * 8..map_at + i * 8 + 8].copy_from_slice(&m.to_le_bytes());
+    }
+    Ok(o.buf)
+}
+
+fn cell_str<'a>(ds: &'a DataSet, v: &'a Value) -> &'a str {
+    match v {
+        Value::Str(s) => s,
+        Value::StrL(a, b) => ds.resolve_strl(*a, *b).unwrap_or(""),
+        _ => "",
+    }
+}
+
+fn write_binary(ds: &DataSet, rel: u16) -> Result<Vec<u8>> {
+    let lay = Layout::for_release(rel)?;
+    let k = ds.n_vars();
+    let mut o = Out { buf: Vec::new() };
+    o.u8(rel as u8);
+    o.u8(2); // LOHI
+    o.u8(1);
+    o.u8(0);
+    o.u16(k as u16);
+    o.u32(ds.n_obs as u32);
+    o.fixed(&ds.datalabel, 81, false);
+    let ts = if ds.time_stamp.is_empty() { timestamp_now() } else { ds.time_stamp.clone() };
+    o.fixed(&ts, 18, false);
+    let mut widths = Vec::new();
+    for v in &ds.vars {
+        let (code, ty) = match v.var_type {
+            VarType::Byte => (251, VarType::Byte),
+            VarType::Int => (252, VarType::Int),
+            VarType::Long => (253, VarType::Long),
+            VarType::Float => (254, VarType::Float),
+            VarType::Double => (255, VarType::Double),
+            VarType::Str(w) => (w.min(244) as u8, VarType::Str(w.min(244))),
+            VarType::StrL => (244, VarType::Str(244)),
+        };
+        o.u8(code);
+        widths.push(ty);
+    }
+    for v in &ds.vars {
+        o.fixed(&v.name, lay.name_w, false);
+    }
+    let mut sl: Vec<usize> = ds.sort_by.iter().filter_map(|nm| ds.var_index.get(nm).map(|i| i + 1)).collect();
+    sl.resize(k + 1, 0);
+    for s in sl {
+        o.u16(s as u16);
+    }
+    for v in &ds.vars {
+        o.fixed(&v.format, lay.fmt_w, false);
+    }
+    for v in &ds.vars {
+        o.fixed(&v.value_label_name, lay.lblname_w, false);
+    }
+    for v in &ds.vars {
+        o.fixed(&v.label, lay.varlbl_w, false);
+    }
+    o.u8(0);
+    o.u32(0);
+    for obs in 0..ds.n_obs {
+        for (vi, v) in ds.vars.iter().enumerate() {
+            match widths[vi] {
+                VarType::Str(w) => {
+                    let mut b = encode_str(cell_str(ds, &v.data[obs]), false);
+                    b.truncate(w);
+                    b.resize(w, 0);
+                    o.put(&b);
+                }
+                ty => put_num(&mut o, ty, v.data[obs].num()),
+            }
+        }
+    }
+    for vl in sorted_labels(ds) {
+        let table = write_label_table(&mut Out { buf: Vec::new() }, vl, false);
+        o.u32(table.len() as u32);
+        o.fixed(&vl.name, 33, false);
+        o.put(&[0, 0, 0]);
+        o.put(&table);
+    }
+    Ok(o.buf)
 }

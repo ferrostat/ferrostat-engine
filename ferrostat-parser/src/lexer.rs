@@ -39,6 +39,7 @@ pub enum Token {
     Backtick,           // `
     Apostrophe,         // ' (single quote after backtick for macros)
     Percent,            // %
+    ExtMissing(char),   // .a .. .z
     DollarIdent(String), // $macname or ${macname}
     BacktickExpr(String),// `macname'
     Eof,
@@ -82,6 +83,7 @@ impl std::fmt::Display for Token {
             Token::Backtick => write!(f, "`"),
             Token::Apostrophe => write!(f, "'"),
             Token::Percent => write!(f, "%"),
+            Token::ExtMissing(c) => write!(f, ".{}", c),
             Token::DollarIdent(s) => write!(f, "${}", s),
             Token::BacktickExpr(s) => write!(f, "`{}'", s),
             Token::Eof => write!(f, "<EOF>"),
@@ -166,26 +168,41 @@ impl Lexer {
             if c == quote {
                 self.advance(); // closing quote
                 return Token::Str(s);
-            } else if c == '\\' {
-                self.advance();
-                if let Some(next) = self.current_char {
-                    match next {
-                        'n' => s.push('\n'),
-                        't' => s.push('\t'),
-                        'r' => s.push('\r'),
-                        '\\' => s.push('\\'),
-                        '"' => s.push('"'),
-                        '\'' => s.push('\''),
-                        _ => s.push(next),
-                    }
-                    self.advance();
-                }
-            } else {
-                s.push(c);
-                self.advance();
             }
+            s.push(c);
+            self.advance();
         }
         Token::Str(s) // unterminated — return what we have
+    }
+
+    /// Compound double quotes: `"..."' (may nest).
+    fn read_compound_string(&mut self) -> Token {
+        self.advance(); // `
+        self.advance(); // "
+        let mut s = String::new();
+        let mut depth = 1;
+        while let Some(c) = self.current_char {
+            if c == '`' && self.peek_char() == Some('"') {
+                depth += 1;
+                s.push_str("`\"");
+                self.advance();
+                self.advance();
+                continue;
+            }
+            if c == '"' && self.peek_char() == Some('\'') {
+                depth -= 1;
+                self.advance();
+                self.advance();
+                if depth == 0 {
+                    return Token::Str(s);
+                }
+                s.push_str("\"'");
+                continue;
+            }
+            s.push(c);
+            self.advance();
+        }
+        Token::Str(s)
     }
 
     fn read_number(&mut self) -> Token {
@@ -266,7 +283,9 @@ impl Lexer {
         match self.current_char {
             None => Token::Eof,
             Some(c) => match c {
-                '"' | '\'' => self.read_string(c),
+                '"' => self.read_string(c),
+                '\'' => { self.advance(); Token::Apostrophe }
+                '`' if self.peek_char() == Some('"') => self.read_compound_string(),
                 '(' => { self.advance(); Token::LParen }
                 ')' => { self.advance(); Token::RParen }
                 '[' => { self.advance(); Token::LBracket }
@@ -363,6 +382,12 @@ impl Lexer {
                         }
                         let n = s.parse::<f64>().unwrap_or(0.0);
                         Token::Num(n)
+                    } else if self.current_char.map_or(false, |c| c.is_ascii_lowercase())
+                        && !self.peek_char().map_or(false, |c| c.is_alphanumeric() || c == '_')
+                    {
+                        let c2 = self.current_char.unwrap();
+                        self.advance();
+                        Token::ExtMissing(c2)
                     } else if self.current_char == Some('_') || self.current_char.map_or(false, |c| c.is_numeric()) {
                         // Missing value: .a or .1
                         // Keep as special dot+ident

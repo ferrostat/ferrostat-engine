@@ -12,3 +12,5 @@ csv = { workspace = true }
 plotters = { workspace = true }
 statrs = { workspace = true }
 lazy_static = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }

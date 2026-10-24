@@ -5,7 +5,7 @@ pub mod value_label;
 pub mod var;
 
 pub use dataset::DataSet;
-pub use missing::{is_missing_byte, is_missing_int, is_missing_long, is_missing_float, is_missing_double, MissingValue};
+pub use missing::{is_missing, is_missing_byte, is_missing_int, is_missing_long, is_missing_float, is_missing_double, MissingValue, SYSMISS};
 pub use value_label::ValueLabel;
 pub use var::{Variable, VarType, Value};
 
@@ -18,27 +18,21 @@ mod tests {
     use crate::Value;
 
     #[test]
-    fn test_read_auto_dta() {
-        let ds = DtaReader::open("/home/ubuntu/installer/auto.dta").expect("read auto.dta");
-        assert_eq!(ds.n_obs, 74);
-        assert_eq!(ds.n_vars(), 12);
-
-        let names: Vec<String> = ds.vars.iter().map(|v| v.name.clone()).collect();
-        assert_eq!(names, vec![
-            "make", "price", "mpg", "rep78", "headroom", "trunk",
-            "weight", "length", "turn", "displacement", "gear_ratio", "foreign"
-        ]);
-
-        let make = ds.get_var("make").unwrap();
-        assert!(make.var_type.is_string());
-        assert_eq!(make.data[0].as_string(), Some("AMC Concord"));
-
-        let price = ds.get_var("price").unwrap();
-        assert!(price.var_type.is_numeric());
-        assert_eq!(price.data[0].as_f64(), Some(4099.0));
-
-        let foreign = ds.get_var("foreign").unwrap();
-        assert_eq!(foreign.value_label_name, "origin");
+    fn test_dta_roundtrip() {
+        let mut ds = DataSet::new();
+        let mut v = Variable::new("make", VarType::Str(8));
+        v.data = vec![Value::Str("Alpha".into()), Value::Str("Beta".into())];
+        ds.add_variable(v).unwrap();
+        let mut p = Variable::new("price", VarType::Int);
+        p.data = vec![Value::Int(4099), Value::Int(4749)];
+        ds.add_variable(p).unwrap();
+        ds.n_obs = 2;
+        let mut buf = Vec::new();
+        crate::dta::DtaWriter::write(&mut buf, &ds).unwrap();
+        let back = DtaReader::from_bytes(buf).unwrap();
+        assert_eq!(back.n_obs, 2);
+        assert_eq!(back.get_var("make").unwrap().data[1].as_string(), Some("Beta"));
+        assert_eq!(back.get_var("price").unwrap().data[0].as_f64(), Some(4099.0));
     }
 
     #[test]

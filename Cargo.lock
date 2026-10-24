@@ -259,11 +259,13 @@ dependencies = [
 name = "ferrostat-cmd"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "csv",
  "ferrostat-core",
  "ferrostat-parser",
  "lazy_static",
  "plotters",
+ "regex",
  "statrs",
 ]
 

@@ -1,384 +1,444 @@
+//! Command dispatch: resolves abbreviations, runs built-in commands and the
+//! `by` prefix, and owns the data in memory and interpreter state.
+
 use std::collections::HashMap;
 
-use ferrostat_core::{DataSet, VarType, Variable, Value};
-use ferrostat_parser::Command;
 use ferrostat_cmd::commands::CommandHandler;
-use ferrostat_cmd::summarize::Summarize;
-use ferrostat_cmd::regress::Regress;
-use ferrostat_cmd::generate::{Generate, Replace};
-use ferrostat_cmd::list::ListCmd;
-use ferrostat_cmd::describe_cmd::DescribeCmd;
-use ferrostat_cmd::count::Count;
-use ferrostat_cmd::contract::Contract;
-use ferrostat_cmd::tabulate::Tabulate;
-use ferrostat_cmd::correlate::Correlate;
-use ferrostat_cmd::ttest::Ttest;
-use ferrostat_cmd::logit::Logit;
-use ferrostat_cmd::probit::Probit;
-use ferrostat_cmd::poisson::Poisson;
-use ferrostat_cmd::collapse::Collapse;
-use ferrostat_cmd::expand_fillin::{Expand, Fillin};
-use ferrostat_cmd::reshape::Reshape;
-use ferrostat_cmd::anova::Anova;
-use ferrostat_cmd::xtreg::Xtreg;
-use ferrostat_cmd::kdensity::Kdensity;
-use ferrostat_cmd::predict::Predict;
-use ferrostat_cmd::import_export::{ImportDelimited, ExportDelimited};
-use ferrostat_cmd::plot::{Scatter, Histogram, LinePlot, BarChart};
-use ferrostat_cmd::egen::Egen;
+use ferrostat_cmd::eval::{rc_err, Groups};
+use ferrostat_cmd::store::Store;
+use ferrostat_cmd::{
+    correlate, data, egen, graph, io, kdensity, labels, listing, matcmd, models, postest, restructure, summarize, tabulate, tests,
+    util, varlist,
+};
+use ferrostat_core::DataSet;
+use ferrostat_parser::Command;
 
-use ferrostat_cmd::display::{DisplayCmd, LocalMacro, ByPrefix};
-use ferrostat_cmd::merge_append::{Merge, Append};
+/// Kept for API compatibility with earlier versions.
+pub use ferrostat_cmd::store::Results as EstimationResults;
 
-/// Stored estimation results for post-estimation.
-#[derive(Debug, Clone, Default)]
-pub struct EstimationResults {
-    pub cmd: String,
-    pub depvar: String,
-    pub indepvars: Vec<String>,
-    pub beta: Vec<f64>,
-    pub n_obs: usize,
-    pub r2: Option<f64>,
-    pub ll: Option<f64>,
-    pub model_type: ModelType,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ModelType {
     Linear,
     Logit,
     Probit,
     Poisson,
     FixedEffects,
+    #[default]
     Other,
 }
 
-impl Default for ModelType {
-    fn default() -> Self { ModelType::Other }
-}
+/// (full name, minimal abbreviation length)
+const ABBREV: &[(&str, usize)] = &[
+    ("generate", 1),
+    ("summarize", 2),
+    ("tabulate", 2),
+    ("regress", 3),
+    ("describe", 1),
+    ("list", 1),
+    ("display", 2),
+    ("correlate", 3),
+    ("count", 3),
+    ("rename", 3),
+    ("label", 3),
+    ("use", 1),
+    ("save", 4),
+    ("sort", 2),
+    ("predict", 4),
+    ("probit", 4),
+    ("logit", 5),
+    ("local", 3),
+    ("global", 2),
+    ("scalar", 3),
+    ("matrix", 3),
+    ("quietly", 3),
+    ("noisily", 3),
+    ("capture", 3),
+    ("forvalues", 4),
+    ("foreach", 7),
+    ("estimates", 3),
+    ("format", 3),
+    ("merge", 5),
+    ("append", 2),
+    ("insheet", 3),
+    ("outsheet", 4),
+    ("histogram", 4),
+    ("scatter", 2),
+    ("twoway", 2),
+    ("graph", 2),
+    ("ttest", 5),
+    ("collapse", 4),
+    ("contract", 4),
+    ("compress", 4),
+    ("duplicates", 3),
+    ("keep", 4),
+    ("drop", 4),
+    ("replace", 7),
+    ("order", 5),
+    ("set", 3),
+    ("program", 3),
+    ("tsset", 5),
+    ("xtset", 5),
+    ("margins", 6),
+    ("lincom", 6),
+    ("testparm", 8),
+    ("test", 4),
+    ("anova", 5),
+    ("recode", 5),
+    ("encode", 6),
+    ("decode", 6),
+    ("destring", 8),
+    ("tostring", 8),
+    ("ereturn", 4),
+    ("return", 3),
+    ("matlist", 7),
+    ("sample", 4),
+    ("tabstat", 7),
+    ("pwcorr", 6),
+    ("spearman", 5),
+    ("kdensity", 5),
+    ("poisson", 7),
+    ("nbreg", 5),
+    ("ologit", 6),
+    ("oprobit", 7),
+    ("mlogit", 6),
+    ("xtreg", 5),
+    ("ivregress", 9),
+    ("logistic", 8),
+    ("assert", 6),
+    ("confirm", 4),
+    ("codebook", 8),
+    ("inspect", 4),
+];
 
-/// Execution engine: holds the active dataset and dispatches commands.
+/// Commands that run once with group-aware evaluation under `by`.
+const GROUPWISE: &[&str] = &["generate", "replace", "egen", "assert", "drop", "keep"];
+
 pub struct Engine {
     pub dataset: DataSet,
-    pub handlers: HashMap<String, Box<dyn CommandHandler>>,
-    pub macro_vars: HashMap<String, String>,
+    pub store: Store,
+    handlers: HashMap<&'static str, Box<dyn CommandHandler>>,
     pub version: f64,
-    pub last_estimates: Option<EstimationResults>,
 }
 
-
-/// Extract a filesystem path from a raw command line after the verb.
-fn extract_path(cmd: &Command) -> String {
-    let raw = cmd.raw.trim();
-    let verb_end = raw.find(|c: char| c.is_whitespace()).unwrap_or(raw.len());
-    let after_verb = raw[verb_end..].trim();
-    // Remove options after comma
-    let without_opts = if let Some(comma_pos) = after_verb.find(',') {
-        &after_verb[..comma_pos]
-    } else {
-        after_verb
-    };
-    // Remove if/in clauses
-    let mut path = without_opts.to_string();
-    for kw in [" if ", " in ", " ["] {
-        if let Some(pos) = path.to_lowercase().find(kw) {
-            path = path[..pos].to_string();
-        }
+impl Default for Engine {
+    fn default() -> Self {
+        Self::new()
     }
-    path.trim().trim_matches('"').to_string()
 }
 
 impl Engine {
     pub fn new() -> Self {
-        let mut handlers: HashMap<String, Box<dyn CommandHandler>> = HashMap::new();
-        let s = Summarize;
-        handlers.insert(s.name().to_string(), Box::new(s));
-        let r = Regress;
-        handlers.insert(r.name().to_string(), Box::new(r));
-        let g = Generate;
-        handlers.insert(g.name().to_string(), Box::new(g));
-        let replace = Replace;
-        handlers.insert(replace.name().to_string(), Box::new(replace));
-        let l = ListCmd;
-        handlers.insert(l.name().to_string(), Box::new(l));
-        let d = DescribeCmd;
-        handlers.insert(d.name().to_string(), Box::new(d));
-        let c = Count;
-        handlers.insert(c.name().to_string(), Box::new(c));
-        let contract = Contract;
-        handlers.insert(contract.name().to_string(), Box::new(contract));
-        let tab = Tabulate;
-        handlers.insert(tab.name().to_string(), Box::new(tab));
-        let corr = Correlate;
-        handlers.insert(corr.name().to_string(), Box::new(corr));
-        let tt = Ttest;
-        handlers.insert(tt.name().to_string(), Box::new(tt));
-        let logit = Logit;
-        handlers.insert(logit.name().to_string(), Box::new(logit));
-        let probit = Probit;
-        handlers.insert(probit.name().to_string(), Box::new(probit));
-        let poisson = Poisson;
-        handlers.insert(poisson.name().to_string(), Box::new(poisson));
-        let collapse = Collapse;
-        handlers.insert(collapse.name().to_string(), Box::new(collapse));
-        let expand = Expand;
-        handlers.insert(expand.name().to_string(), Box::new(expand));
-        let fillin = Fillin;
-        handlers.insert(fillin.name().to_string(), Box::new(fillin));
-        let reshape = Reshape;
-        handlers.insert(reshape.name().to_string(), Box::new(reshape));
-        let anova = Anova;
-        handlers.insert(anova.name().to_string(), Box::new(anova));
-        let xtreg = Xtreg;
-        handlers.insert(xtreg.name().to_string(), Box::new(xtreg));
-        let kdensity = Kdensity;
-        handlers.insert(kdensity.name().to_string(), Box::new(kdensity));
-        let predict = Predict;
-        handlers.insert(predict.name().to_string(), Box::new(predict));
-        let import = ImportDelimited;
-        handlers.insert("import_delimited".to_string(), Box::new(import));
-        let export = ExportDelimited;
-        handlers.insert("export_delimited".to_string(), Box::new(export));
-        let scatter = Scatter;
-        handlers.insert(scatter.name().to_string(), Box::new(scatter));
-        let hist = Histogram;
-        handlers.insert(hist.name().to_string(), Box::new(hist));
-        let line = LinePlot;
-        handlers.insert(line.name().to_string(), Box::new(line));
-        let bar = BarChart;
-        handlers.insert(bar.name().to_string(), Box::new(bar));
-        let egen = Egen;
-        handlers.insert(egen.name().to_string(), Box::new(egen));
-        let by = ByPrefix;
-        handlers.insert(by.name().to_string(), Box::new(by));
-        let local = LocalMacro;
-        handlers.insert(local.name().to_string(), Box::new(local));
-        let display = DisplayCmd;
-        handlers.insert(display.name().to_string(), Box::new(display));
-
-        Self {
-            dataset: DataSet::new(),
-            handlers,
-            macro_vars: HashMap::new(),
-            version: 18.0,
-            last_estimates: None,
+        let list: Vec<(&'static str, Box<dyn CommandHandler>)> = vec![
+            ("generate", Box::new(data::Generate)),
+            ("replace", Box::new(data::Replace)),
+            ("drop", Box::new(data::Drop)),
+            ("keep", Box::new(data::Keep)),
+            ("rename", Box::new(data::Rename)),
+            ("order", Box::new(data::Order)),
+            ("move", Box::new(data::Move)),
+            ("sort", Box::new(data::Sort)),
+            ("gsort", Box::new(data::Gsort)),
+            ("format", Box::new(data::Format)),
+            ("compress", Box::new(data::Compress)),
+            ("assert", Box::new(data::Assert)),
+            ("insobs", Box::new(data::Insobs)),
+            ("recast", Box::new(data::Recast)),
+            ("tsset", Box::new(data::Tsset)),
+            ("xtset", Box::new(data::Tsset)),
+            ("label", Box::new(labels::Label)),
+            ("encode", Box::new(labels::Encode)),
+            ("decode", Box::new(labels::Decode)),
+            ("destring", Box::new(labels::Destring)),
+            ("tostring", Box::new(labels::Tostring)),
+            ("recode", Box::new(labels::Recode)),
+            ("mvencode", Box::new(labels::Mvencode)),
+            ("mvdecode", Box::new(labels::Mvdecode)),
+            ("split", Box::new(labels::Split)),
+            ("describe", Box::new(listing::Describe)),
+            ("count", Box::new(listing::Count)),
+            ("list", Box::new(listing::List)),
+            ("duplicates", Box::new(listing::Duplicates)),
+            ("isid", Box::new(listing::Isid)),
+            ("levelsof", Box::new(listing::Levelsof)),
+            ("codebook", Box::new(listing::Codebook)),
+            ("misstable", Box::new(listing::Misstable)),
+            ("expand", Box::new(restructure::Expand)),
+            ("fillin", Box::new(restructure::Fillin)),
+            ("contract", Box::new(restructure::Contract)),
+            ("collapse", Box::new(restructure::Collapse)),
+            ("reshape", Box::new(restructure::Reshape)),
+            ("merge", Box::new(restructure::Merge)),
+            ("append", Box::new(restructure::Append)),
+            ("joinby", Box::new(restructure::Joinby)),
+            ("cross", Box::new(restructure::Cross)),
+            ("xpose", Box::new(restructure::Xpose)),
+            ("sample", Box::new(restructure::Sample)),
+            ("egen", Box::new(egen::Egen)),
+            ("summarize", Box::new(summarize::Summarize)),
+            ("tabstat", Box::new(summarize::Tabstat)),
+            ("centile", Box::new(summarize::Centile)),
+            ("mean", Box::new(summarize::MeanCmd)),
+            ("ci", Box::new(summarize::Ci)),
+            ("tabulate", Box::new(tabulate::Tabulate)),
+            ("tab1", Box::new(tabulate::Tab1)),
+            ("tab2", Box::new(tabulate::Tab2)),
+            ("correlate", Box::new(correlate::Correlate)),
+            ("pwcorr", Box::new(correlate::Pwcorr)),
+            ("spearman", Box::new(correlate::Spearman)),
+            ("ttest", Box::new(tests::Ttest)),
+            ("prtest", Box::new(tests::Prtest)),
+            ("sdtest", Box::new(tests::Sdtest)),
+            ("ranksum", Box::new(tests::Ranksum)),
+            ("signrank", Box::new(tests::Signrank)),
+            ("signtest", Box::new(tests::Signtest)),
+            ("kwallis", Box::new(tests::Kwallis)),
+            ("oneway", Box::new(tests::Oneway)),
+            ("ksmirnov", Box::new(tests::Ksmirnov)),
+            ("swilk", Box::new(tests::Swilk)),
+            ("kdensity", Box::new(kdensity::Kdensity)),
+            ("regress", Box::new(models::Regress)),
+            ("logit", Box::new(models::BinaryModel { verb: "logit", link: models::Link::Logit })),
+            ("logistic", Box::new(models::BinaryModel { verb: "logistic", link: models::Link::Logit })),
+            ("probit", Box::new(models::BinaryModel { verb: "probit", link: models::Link::Probit })),
+            ("cloglog", Box::new(models::BinaryModel { verb: "cloglog", link: models::Link::Cloglog })),
+            ("poisson", Box::new(models::BinaryModel { verb: "poisson", link: models::Link::Poisson })),
+            ("nbreg", Box::new(models::Nbreg)),
+            ("ologit", Box::new(models::Ordered { verb: "ologit", probit: false })),
+            ("oprobit", Box::new(models::Ordered { verb: "oprobit", probit: true })),
+            ("mlogit", Box::new(models::Mlogit)),
+            ("tobit", Box::new(models::Tobit)),
+            ("anova", Box::new(models::Anova)),
+            ("xtreg", Box::new(models::Xtreg)),
+            ("areg", Box::new(models::Areg)),
+            ("ivregress", Box::new(models::Ivregress)),
+            ("glm", Box::new(models::Glm)),
+            ("qreg", Box::new(models::Qreg)),
+            ("predict", Box::new(postest::Predict)),
+            ("test", Box::new(postest::Test)),
+            ("testparm", Box::new(postest::Testparm)),
+            ("lincom", Box::new(postest::Lincom)),
+            ("estimates", Box::new(postest::Estimates)),
+            ("margins", Box::new(postest::Margins)),
+            ("estat", Box::new(postest::Estat)),
+            ("matrix", Box::new(matcmd::MatrixCmd)),
+            ("mkmat", Box::new(matcmd::Mkmat)),
+            ("svmat", Box::new(matcmd::Svmat)),
+            ("matlist", Box::new(matcmd::Matlist)),
+            ("use", Box::new(io::Use)),
+            ("save", Box::new(io::Save)),
+            ("saveold", Box::new(io::Save)),
+            ("import", Box::new(io::Import)),
+            ("export", Box::new(io::Export)),
+            ("insheet", Box::new(io::Insheet)),
+            ("outsheet", Box::new(io::Outsheet)),
+            ("twoway", Box::new(graph::Twoway)),
+            ("scatter", Box::new(graph::Twoway)),
+            ("line", Box::new(graph::Twoway)),
+            ("connected", Box::new(graph::Twoway)),
+            ("histogram", Box::new(graph::Histogram)),
+            ("graph", Box::new(graph::GraphCmd)),
+        ];
+        let mut handlers = HashMap::new();
+        for (n, h) in list {
+            handlers.insert(n, h);
         }
+        Engine { dataset: DataSet::new(), store: Store::new(), handlers, version: 18.0 }
     }
 
+    /// Resolve an abbreviated or aliased command name.
+    pub fn resolve_verb(&self, verb: &str) -> String {
+        let v = verb.to_lowercase();
+        let alias = match v.as_str() {
+            "gen" | "g" => Some("generate"),
+            "su" | "sum" => Some("summarize"),
+            "tab" | "ta" => Some("tabulate"),
+            "reg" => Some("regress"),
+            "d" | "des" | "desc" => Some("describe"),
+            "l" | "li" => Some("list"),
+            "di" | "dis" => Some("display"),
+            "cor" | "corr" => Some("correlate"),
+            "tw" => Some("twoway"),
+            "sc" => Some("scatter"),
+            "hist" => Some("histogram"),
+            "mat" => Some("matrix"),
+            "est" => Some("estimates"),
+            "qui" => Some("quietly"),
+            "noi" => Some("noisily"),
+            "cap" => Some("capture"),
+            "forv" => Some("forvalues"),
+            "ren" => Some("rename"),
+            "lab" => Some("label"),
+            "u" => Some("use"),
+            "cou" => Some("count"),
+            "xi" => Some("xi"),
+            "tab1" => Some("tab1"),
+            "tab2" => Some("tab2"),
+            "bys" => Some("bysort"),
+            "ivreg" => Some("ivregress"),
+            "erase" | "rm" => Some("erase"),
+            "ls" => Some("dir"),
+            "cat" => Some("type"),
+            "logistic" => Some("logistic"),
+            "fre" => Some("tabulate"),
+            "outreg" => Some("outreg2"),
+            _ => None,
+        };
+        if let Some(a) = alias {
+            return a.to_string();
+        }
+        if self.handlers.contains_key(v.as_str()) {
+            return v;
+        }
+        for (full, min) in ABBREV {
+            if v.len() >= *min && full.starts_with(&v) {
+                return full.to_string();
+            }
+        }
+        v
+    }
+
+    pub fn is_command(&self, verb: &str) -> bool {
+        self.handlers.contains_key(self.resolve_verb(verb).as_str())
+    }
+
+    /// Execute one parsed command (no prefixes).
     pub fn execute(&mut self, cmd: &Command) -> Result<String, String> {
-        let verb = cmd.verb.to_lowercase();
+        let verb = self.resolve_verb(&cmd.verb);
+        let mut cmd = cmd.clone();
+        cmd.verb = verb.clone();
         match verb.as_str() {
             "clear" => {
-                self.dataset = DataSet::new();
-                self.last_estimates = None;
-                Ok("cleared".into())
-            }
-            "use" => {
-                let path = cmd.using.clone()
-                    .unwrap_or_else(|| extract_path(cmd));
-                if path.is_empty() {
-                    return Err("use requires a filename".into());
-                }
-                match ferrostat_core::dta::DtaReader::open(&path) {
-                    Ok(ds) => {
-                        self.dataset = ds;
-                        Ok(format!("loaded dataset from {}", path))
-                    }
-                    Err(e) => Err(format!("could not load {}: {}", path, e)),
-                }
-            }
-            "sysuse" => {
-                let name = cmd.args.first()
-                    .cloned()
-                    .unwrap_or_default()
-                    .trim_matches('"')
-                    .to_string();
-                if name.is_empty() {
-                    return Err("sysuse requires a dataset name".into());
-                }
-                // Try standard locations
-                let paths = vec![
-                    format!("/home/ubuntu/installer/{}.dta", name),
-                    format!("/usr/local/share/ferrostat/{}.dta", name),
-                    format!("{}.dta", name),
-                ];
-                for path in &paths {
-                    if let Ok(ds) = ferrostat_core::dta::DtaReader::open(path) {
-                        self.dataset = ds;
-                        return Ok(format!("loaded system dataset {}", name));
-                    }
-                }
-                Err(format!("could not find system dataset {}", name))
-            }
-            "save" => {
-                let path = cmd.using.clone()
-                    .unwrap_or_else(|| extract_path(cmd));
-                if path.is_empty() {
-                    return Err("save requires a filename".into());
-                }
-                let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-                match ferrostat_core::dta::DtaWriter::write(&mut file, &self.dataset) {
-                    Ok(_) => Ok(format!("saved dataset to {}", path)),
-                    Err(e) => Err(format!("could not save {}: {}", path, e)),
-                }
-            }
-            "import" => {
-                // import delimited, import excel, etc.
-                let subcmd = cmd.args.first().map(|s| s.to_lowercase()).unwrap_or_default();
-                match subcmd.as_str() {
-                    "delimited" => {
-                        let path = cmd.args.get(1)
-                            .cloned()
-                            .unwrap_or_default()
-                            .trim_matches('"')
-                            .to_string();
-                        if path.is_empty() {
-                            return Err("import delimited requires a filename".into());
-                        }
-                        match ImportDelimited::import(&path, &mut self.dataset) {
-                            Ok(_) => Ok(format!("imported {}", path)),
-                            Err(e) => Err(format!("import failed: {}", e)),
+                let what = cmd.main.trim();
+                match what {
+                    "" | "all" | "*" => {
+                        self.dataset = DataSet::new();
+                        self.store.data_changed = false;
+                        self.store.tsset = None;
+                        if what == "all" || what == "*" {
+                            self.store.matrices.clear();
+                            self.store.scalars.clear();
+                            self.store.e = Default::default();
+                            self.store.r = Default::default();
+                            self.store.estimates.clear();
+                            self.store.programs.clear();
+                            self.store.graphs.clear();
+                            self.store.graph = None;
                         }
                     }
-                    _ => Err(format!("unknown import type: {}", subcmd)),
-                }
-            }
-            "export" => {
-                let subcmd = cmd.args.first().map(|s| s.to_lowercase()).unwrap_or_default();
-                match subcmd.as_str() {
-                    "delimited" => {
-                        let path = cmd.args.get(1)
-                            .cloned()
-                            .unwrap_or_default()
-                            .trim_matches('"')
-                            .to_string();
-                        if path.is_empty() {
-                            return Err("export delimited requires a filename".into());
-                        }
-                        match ExportDelimited::export(&path, &self.dataset) {
-                            Ok(_) => Ok(format!("exported {}", path)),
-                            Err(e) => Err(format!("export failed: {}", e)),
-                        }
+                    "results" => {
+                        self.store.r = Default::default();
+                        self.store.e = Default::default();
                     }
-                    _ => Err(format!("unknown export type: {}", subcmd)),
+                    "matrix" => self.store.matrices.clear(),
+                    "programs" => self.store.programs.clear(),
+                    "mata" | "ado" => {}
+                    other => return Err(rc_err(198, format!("clear {other} invalid"))),
                 }
+                Ok(String::new())
             }
-            "drop" => self.handle_drop(cmd),
-            "keep" => self.handle_keep(cmd),
-            "sort" => self.handle_sort(cmd),
-            "merge" => {
-                let m = Merge;
-                m.execute(&mut self.dataset, cmd)
+            "preserve" => {
+                self.store.preserved.push(self.dataset.clone());
+                Ok(String::new())
             }
-            "append" => {
-                let a = Append;
-                a.execute(&mut self.dataset, cmd)
-            }
-            "exit" | "quit" => Ok("__EXIT__".into()),
-            _ => {
-                // Check for regression commands that need to store estimates
-                let is_estimation = matches!(verb.as_str(), "regress" | "logit" | "probit" | "poisson" | "xtreg" | "anova");
-                
-                if let Some(handler) = self.handlers.get_mut(&verb) {
-                    let result = handler.execute(&mut self.dataset, cmd);
-                    
-                    if is_estimation && result.is_ok() {
-                        self.store_estimates(&verb, cmd);
-                    }
-                    
-                    result
+            "restore" => {
+                if cmd.has_opt("not", 3) {
+                    self.store.preserved.pop().ok_or_else(|| rc_err(622, "nothing to restore"))?;
+                    return Ok(String::new());
+                }
+                let ds = if cmd.has_opt("preserve", 3) {
+                    self.store.preserved.last().cloned()
                 } else {
-                    Err(format!("unknown command: {}", verb))
+                    self.store.preserved.pop()
+                };
+                self.dataset = ds.ok_or_else(|| rc_err(622, "nothing to restore"))?;
+                Ok(String::new())
+            }
+            "set" => self.set(&cmd),
+            "sysuse" | "webuse" => {
+                let name = cmd.main.trim().trim_end_matches(".dta");
+                if name == "dir" {
+                    return Ok(String::new());
                 }
+                for dir in ["/usr/local/share/ferrostat", "."] {
+                    let p = format!("{dir}/{name}.dta");
+                    if let Ok(ds) = ferrostat_core::dta::DtaReader::open(&p) {
+                        self.dataset = ds;
+                        self.store.data_changed = false;
+                        return Ok(String::new());
+                    }
+                }
+                Err(rc_err(601, format!("file \"{name}.dta\" not found")))
+            }
+            "describe" if cmd.main.trim().is_empty() && self.dataset.n_vars() == 0 && cmd.using.is_none() => {
+                Ok("Contains data\n Observations:             0\n    Variables:             0".into())
+            }
+            _ => {
+                let h = self.handlers.get(verb.as_str()).ok_or_else(|| rc_err(199, format!("command {} is unrecognized", cmd.verb)))?;
+                h.execute(&mut self.dataset, &mut self.store, &cmd)
             }
         }
     }
 
-    fn store_estimates(&mut self, verb: &str, cmd: &Command) {
-        if cmd.args.len() < 2 {
-            return;
+    fn set(&mut self, cmd: &Command) -> Result<String, String> {
+        let mut w = cmd.main.split_whitespace();
+        let what = w.next().unwrap_or("").to_lowercase();
+        let val: Vec<&str> = w.collect();
+        let v = val.join(" ");
+        match what.as_str() {
+            "obs" => {
+                let n: f64 = v.trim().parse().map_err(|_| rc_err(198, "invalid number of observations"))?;
+                data::set_obs(&mut self.dataset, n as usize).map(|_| String::new())
+            }
+            "seed" => {
+                let s: u64 = v.trim().parse().map_err(|_| rc_err(198, "invalid seed"))?;
+                self.store.rng.borrow_mut().reseed(s);
+                Ok(String::new())
+            }
+            "type" => {
+                self.store.default_type = match v.trim() {
+                    "double" => ferrostat_core::VarType::Double,
+                    "float" => ferrostat_core::VarType::Float,
+                    o => return Err(rc_err(198, format!("{o} invalid type"))),
+                };
+                Ok(String::new())
+            }
+            "level" => {
+                self.store.level = v.trim().parse().map_err(|_| rc_err(198, "invalid level"))?;
+                self.store.globals.insert("S_level".into(), v.trim().to_string());
+                Ok(String::new())
+            }
+            "varabbrev" => {
+                self.store.varabbrev = v.trim() == "on";
+                Ok(String::new())
+            }
+            // accepted for compatibility; no effect
+            "more" | "maxvar" | "matsize" | "linesize" | "pagesize" | "graphics" | "scheme" | "trace" | "tracedepth" | "logtype" | "rmsg"
+            | "output" | "processors" | "niceness" | "dp" | "emptycells" | "fvlabel" | "showbaselevels" | "cformat" | "pformat"
+            | "sformat" | "maxiter" | "checksum" | "autotabgraphs" | "segmentsize" | "max_memory" | "min_memory" | "copycolor" | "locale_functions"
+            | "locale_ui" | "charset" | "httpproxy" | "update_query" | "timeout1" | "timeout2" | "printcolor" | "haverdir" | "odbcmgr" | "notifyuser"
+            | "include_bitmap" | "doublebuffer" | "reventries" | "varkeyboard" | "showomitted" | "showemptycells" | "lstretch" | "coeftabresults"
+            | "fvwrap" | "fvwrapon" | "collect_label" | "collect_style" | "table_style" | "dots" | "iterlog" | "python_exec" | "rng" | "rngstream"
+            | "sortseed" | "sortmethod" | "matacache" | "matafavor" | "matastrict" | "matalnum" | "mataoptimize" | "matalibs" | "matamofirst" => Ok(String::new()),
+            "" => Ok(String::new()),
+            other => Err(rc_err(198, format!("set {other} not allowed"))),
         }
-        let depvar = cmd.args[0].clone();
-        let indepvars = cmd.args[1..].to_vec();
-        
-        let model_type = match verb {
-            "regress" => ModelType::Linear,
-            "logit" => ModelType::Logit,
-            "probit" => ModelType::Probit,
-            "poisson" => ModelType::Poisson,
-            "xtreg" => ModelType::FixedEffects,
-            _ => ModelType::Other,
-        };
-
-        self.last_estimates = Some(EstimationResults {
-            cmd: verb.to_string(),
-            depvar,
-            indepvars,
-            beta: Vec::new(), // Will be populated by the command itself
-            n_obs: self.dataset.n_obs,
-            r2: None,
-            ll: None,
-            model_type,
-        });
     }
 
-    fn handle_drop(&mut self, cmd: &Command) -> Result<String, String> {
-        if let Some(ref expr) = cmd.if_expr {
-            let rows = ferrostat_cmd::summarize::apply_if(&self.dataset, expr)?;
-            let n_drop = rows.len();
-            let mut mask = vec![true; self.dataset.n_obs];
-            for &i in &rows {
-                mask[i] = false;
-            }
-            self.dataset.keep_if(&mask)?;
-            return Ok(format!("dropped {} observations", n_drop));
+    /// Run a command under `by varlist:`; `run` executes the inner command.
+    pub fn by_groups(&mut self, byvars: &[String], sortvars: &[String], sort: bool) -> Result<Groups, String> {
+        let mut all = byvars.to_vec();
+        all.extend(sortvars.iter().cloned());
+        let vars = varlist::expand(&self.dataset, &all.join(" "))?;
+        if sort {
+            self.dataset.sort(&vars, true)?;
+        } else if !util::is_sorted_by(&self.dataset, &vars) {
+            return Err(rc_err(5, "not sorted"));
         }
-        if cmd.args.is_empty() {
-            return Err("drop requires variable names or if".into());
-        }
-        for name in &cmd.args {
-            if name.eq_ignore_ascii_case("_all") {
-                self.dataset = DataSet::new();
-                return Ok("all variables dropped".into());
-            }
-        }
-        for name in &cmd.args {
-            self.dataset.drop_variable(name)?;
-        }
-        Ok(format!("dropped: {}", cmd.args.join(" ")))
+        let bv = varlist::expand(&self.dataset, &byvars.join(" "))?;
+        Ok(util::groups_by(&self.dataset, &bv))
     }
 
-    fn handle_keep(&mut self, cmd: &Command) -> Result<String, String> {
-        if let Some(ref expr) = cmd.if_expr {
-            let rows = ferrostat_cmd::summarize::apply_if(&self.dataset, expr)?;
-            let mut mask = vec![false; self.dataset.n_obs];
-            for &i in &rows {
-                mask[i] = true;
-            }
-            self.dataset.keep_if(&mask)?;
-            return Ok(format!("kept {} observations", self.dataset.n_obs));
-        }
-        if let Some(ref range) = cmd.in_range {
-            let rows = ferrostat_cmd::summarize::apply_in(&self.dataset, range)?;
-            let mut mask = vec![false; self.dataset.n_obs];
-            for i in rows {
-                mask[i] = true;
-            }
-            self.dataset.keep_if(&mask)?;
-            return Ok(format!("kept {} observations", self.dataset.n_obs));
-        }
-        if cmd.args.is_empty() {
-            return Err("keep requires variable names or if/in".into());
-        }
-        self.dataset.keep_variables(&cmd.args);
-        Ok(format!("kept: {}", cmd.args.join(" ")))
-    }
-
-    fn handle_sort(&mut self, cmd: &Command) -> Result<String, String> {
-        if cmd.args.is_empty() {
-            return Err("sort requires variable names".into());
-        }
-        self.dataset.sort(&cmd.args, false)?;
-        Ok(format!("sorted by: {}", cmd.args.join(" ")))
+    pub fn is_groupwise(&self, verb: &str) -> bool {
+        GROUPWISE.contains(&self.resolve_verb(verb).as_str())
     }
 }

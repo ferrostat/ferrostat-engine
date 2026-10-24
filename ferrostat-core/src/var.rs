@@ -124,9 +124,27 @@ pub enum Value {
 
 impl Value {
     pub fn is_missing(&self) -> bool {
-        matches!(self, Value::Missing)
-            || matches!(self, Value::Float(v) if v.is_nan())
-            || matches!(self, Value::Double(v) if v.is_nan())
+        match self {
+            Value::Missing => true,
+            Value::Float(v) => crate::missing::is_missing(*v as f64),
+            Value::Double(v) => crate::missing::is_missing(*v),
+            _ => false,
+        }
+    }
+
+    /// Numeric value with missing normalised to the in-memory missing codes.
+    /// Strings give system missing.
+    pub fn num(&self) -> f64 {
+        match self {
+            Value::Byte(v) => *v as f64,
+            Value::Int(v) => *v as f64,
+            Value::Long(v) => *v as f64,
+            Value::Float(v) => {
+                if v.is_nan() || *v as f64 >= 1.7014118346046923e38 { crate::missing::SYSMISS } else { *v as f64 }
+            }
+            Value::Double(v) => crate::missing::normalize(*v),
+            _ => crate::missing::SYSMISS,
+        }
     }
 
     pub fn is_string(&self) -> bool {
@@ -144,6 +162,7 @@ impl Value {
             Value::Long(v) => Some(*v as f64),
             Value::Float(v) => Some(*v as f64),
             Value::Double(v) => Some(*v),
+            Value::Missing => Some(crate::missing::SYSMISS),
             _ => None,
         }
     }
@@ -158,28 +177,10 @@ impl Value {
 
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        use Value::*;
         match (self, other) {
-            (Missing, Missing) => Some(Ordering::Equal),
-            (Missing, _) => Some(Ordering::Greater),
-            (_, Missing) => Some(Ordering::Less),
-            (Byte(a), Byte(b)) => a.partial_cmp(b),
-            (Int(a), Int(b)) => a.partial_cmp(b),
-            (Long(a), Long(b)) => a.partial_cmp(b),
-            (Float(a), Float(b)) => {
-                if a.is_nan() && b.is_nan() { Some(Ordering::Equal) }
-                else if a.is_nan() { Some(Ordering::Greater) }
-                else if b.is_nan() { Some(Ordering::Less) }
-                else { a.partial_cmp(b) }
-            }
-            (Double(a), Double(b)) => {
-                if a.is_nan() && b.is_nan() { Some(Ordering::Equal) }
-                else if a.is_nan() { Some(Ordering::Greater) }
-                else if b.is_nan() { Some(Ordering::Less) }
-                else { a.partial_cmp(b) }
-            }
-            (Str(a), Str(b)) => a.partial_cmp(b),
-            (StrL(..), _) | (_, StrL(..)) => None,
+            (Value::Str(a), Value::Str(b)) => a.partial_cmp(b),
+            (Value::StrL(..), _) | (_, Value::StrL(..)) => None,
+            (a, b) if !a.is_string() && !b.is_string() => a.num().partial_cmp(&b.num()),
             _ => None,
         }
     }
@@ -222,7 +223,7 @@ impl Variable {
 
     pub fn push_missing(&mut self) {
         if self.var_type.is_numeric() {
-            self.data.push(Value::Double(f64::from_bits(0x7FF8000000000000)));
+            self.data.push(Value::Double(crate::missing::SYSMISS));
         } else {
             self.data.push(Value::Str(String::new()));
         }
@@ -246,8 +247,24 @@ impl Variable {
         }
     }
 
-    /// Numeric values as f64 slice (missing values become NaN).
+    /// Numeric values as f64 (missing values keep their missing codes).
     pub fn as_f64_vec(&self) -> Option<Vec<f64>> {
-        self.data.iter().map(|v| v.as_f64()).collect()
+        if self.var_type.is_string() {
+            return None;
+        }
+        Some(self.data.iter().map(|v| v.num()).collect())
+    }
+
+    /// Numeric value of one observation.
+    pub fn num(&self, i: usize) -> f64 {
+        self.data.get(i).map_or(crate::missing::SYSMISS, |v| v.num())
+    }
+
+    /// String value of one observation ("" for numeric/out of range).
+    pub fn str_at(&self, i: usize) -> &str {
+        match self.data.get(i) {
+            Some(Value::Str(s)) => s,
+            _ => "",
+        }
     }
 }
