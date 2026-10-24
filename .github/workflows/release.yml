@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  exe: ferrostat }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,    exe: ferrostat.exe }
+          - { os: macos-latest,   target: aarch64-apple-darwin,      exe: ferrostat }
+          - { os: macos-latest,   target: x86_64-apple-darwin,       exe: ferrostat }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install font libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+      - name: Build
+        run: cargo build --release -p ferrostat-repl --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          name=ferrostat-${{ github.ref_name }}-${{ matrix.target }}
+          mkdir "$name"
+          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "$name/"
+          cp README.md LICENSE* "$name/" 2>/dev/null || true
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "$name.zip" "$name"
+            echo "ASSET=$name.zip" >> "$GITHUB_ENV"
+          else
+            tar czf "$name.tar.gz" "$name"
+            echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"
+          fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}

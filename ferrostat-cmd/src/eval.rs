@@ -604,7 +604,7 @@ fn c_value(env: &Env, key: &str) -> Val {
         "current_date" => Val::Str(now.format("%e %b %Y").to_string().trim().to_string()),
         "current_time" => Val::Str(now.format("%H:%M:%S").to_string()),
         "os" => Val::Str(if cfg!(windows) { "Windows" } else if cfg!(target_os = "macos") { "MacOSX" } else { "Unix" }.into()),
-        "dirsep" => Val::Str("/".into()),
+        "dirsep" => Val::Str(std::path::MAIN_SEPARATOR.to_string()),
         "pwd" => Val::Str(std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default()),
         "filename" => Val::Str(env.st.map(|s| s.filename.clone()).unwrap_or_default()),
         "changed" => Val::Num(bool_f(env.st.map_or(false, |s| s.data_changed))),

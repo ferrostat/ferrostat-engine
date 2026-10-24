@@ -277,3 +277,18 @@ fn estat_ic() {
     s.run("estat ic");
     assert_close(s.scalar("el(r(S), 1, 5)"), -2.0 * r::LOGIT_LL + 4.0, 1e-8);
 }
+
+#[test]
+fn estat_firststage_after_ivregress() {
+    // used by test-andrea/Spatial.do: matrix F = r(singleresults); F[1,4]
+    let mut s = Session::with_fixture();
+    s.run("ivregress 2sls y z (x = cnt)");
+    s.run("estat firststage");
+    // first stage: x on cnt and z; F of the excluded instrument equals t^2
+    s.run("matrix F = r(singleresults)");
+    let f = s.scalar("F[1,4]");
+    s.run("regress x cnt z");
+    let t = s.scalar("_b[cnt] / _se[cnt]");
+    assert_close(f, t * t, 1e-8);
+    assert!(s.scalar("F[1,1]") > 0.0 && s.scalar("F[1,1]") <= 1.0);
+}

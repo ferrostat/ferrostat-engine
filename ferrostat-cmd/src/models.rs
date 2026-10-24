@@ -100,7 +100,7 @@ impl CommandHandler for Regress {
             out.push(format!("{:<52}{:<15} = {:>10}", "", format!("F({}, {})", df_m_f, df_r_f), f2(f)));
             out.push(format!("{:<52}{:<15} = {:>10}", "", "Prob > F", f4(pf)));
             out.push(format!("{:<52}{:<15} = {:>10}", "", "R-squared", f4(r2)));
-            out.push(format!("{:<52}{:<15} = {:>10}", "", "Root MSE", g10(rmse)));
+            out.push(format!("{:<52}{:<15} = {:>10}", "", "Root MSE", rmse4(rmse)));
             if let Some(g) = fit.n_clust {
                 out.push(String::new());
                 out.push(format!("{:>78}", format!("(Std. err. adjusted for {} clusters in {})", g, match &vce { Vce::Cluster(c) => c.as_str(), _ => "" })));
@@ -1357,6 +1357,11 @@ impl CommandHandler for Xtreg {
                 let kx = dw.active().len() as f64 - 1.0;
                 let df_r = n - ng as f64 - kx;
                 let scale = fit.df_r / df_r;
+                // with clustered errors the reference distribution has G-1 df
+                let df_t = match fit.n_clust {
+                    Some(gc) if cl.is_some() => gc as f64 - 1.0,
+                    _ => df_r,
+                };
                 let vv = if cl.is_some() {
                     // Stata's xtreg fe cluster uses (N-1)/(N-K) with K excluding the absorbed effects
                     fit.v.clone()
@@ -1410,7 +1415,7 @@ impl CommandHandler for Xtreg {
                     ("r2_b".into(), r2_b),
                     ("r2_o".into(), r2_o),
                     ("F".into(), f),
-                    ("df_r".into(), df_r),
+                    ("df_r".into(), df_t),
                     ("df_m".into(), q),
                     ("F_f".into(), fu),
                     ("corr".into(), corr_u_xb),
@@ -1428,12 +1433,16 @@ impl CommandHandler for Xtreg {
                 out.push(format!("     Between = {:<37.4}{:>15} = {:>10.1}", r2_b, "avg", n / ng as f64));
                 out.push(format!("     Overall = {:<37.4}{:>15} = {:>10}", r2_o, "max", g10(tcount.iter().cloned().fold(0.0, f64::max))));
                 out.push(String::new());
-                out.push(format!("{:<52}{:<15} = {:>10}", "", format!("F({}, {})", q, df_r), f2(f)));
-                out.push(format!("{:<52}{:<15} = {:>10}", format!("corr(u_i, Xb) = {:.4}", corr_u_xb), "Prob > F", f4(dist::ftail(q, df_r, f))));
+                out.push(format!("{:<52}{:<15} = {:>10}", "", format!("F({}, {})", q, df_t), f2(f)));
+                out.push(format!("{:<52}{:<15} = {:>10}", format!("corr(u_i, Xb) = {:.4}", corr_u_xb), "Prob > F", f4(dist::ftail(q, df_t, f))));
+                if let Some(gc) = fit.n_clust.filter(|_| cl.is_some()) {
+                    out.push(String::new());
+                    out.push(format!("{:>78}", format!("(Std. err. adjusted for {} clusters in {})", gc, match &vce { Vce::Cluster(c) => c.as_str(), _ => panel.as_str() })));
+                }
                 out.push(String::new());
                 b = fit.b.clone();
                 v = vv;
-                out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &dw.names, b: &b, v: &v, omitted: &dw.omitted, is_base: &dw.is_base, df: Some(if cl.is_some() { ng as f64 - 1.0 } else { df_r }), level, eform: None, coef_title: "Coefficient" }));
+                out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &dw.names, b: &b, v: &v, omitted: &dw.omitted, is_base: &dw.is_base, df: Some(df_t), level, eform: None, coef_title: "Coefficient" }));
                 out.pop();
                 out.push(format!("{}+{}", "-".repeat(tbl_lw(&out) + 1), "-".repeat(64)));
                 out.push(format!("{:>lw$} | {:>10}", "sigma_u", g10(su), lw = tbl_lw(&out)));
@@ -1668,6 +1677,49 @@ impl CommandHandler for Ivregress {
             }
         }
         let fit2 = est::ols(&xhat, &Vce::Ols, None)?;
+        // first-stage statistics for estat firststage:
+        // rows = endogenous regressors; cols = rsq adjrsq partrsq F df1 df2 p
+        let excluded: Vec<usize> = az.iter().copied().filter(|&j| !dx.names.contains(&dz.names[j])).collect();
+        let endog_cols: Vec<usize> = ax.iter().copied().filter(|&j| !dz.names.contains(&dx.names[j])).collect();
+        let mut fs = Matrix::zeros(endog_cols.len(), 7);
+        let mut fs_names = Vec::new();
+        let cl_fs = est::cluster_values(ds, &dz, &vce)?;
+        for (r, &j) in endog_cols.iter().enumerate() {
+            let mut d1 = dz.clone();
+            d1.y = dx.cols[j].clone();
+            let full = est::ols(&d1, &vce, cl_fs.as_deref())?;
+            let mut d0 = d1.clone();
+            for &e in &excluded {
+                d0.omitted[e] = true;
+            }
+            let restr = est::ols(&d0, &Vce::Ols, None)?;
+            let rsq = 1.0 - full.rss / full.tss;
+            let nn = d1.n_eff();
+            let kz = d1.active().len() as f64;
+            let adj = 1.0 - (1.0 - rsq) * (nn - 1.0) / (nn - kz);
+            let partial = 1.0 - full.rss / restr.rss;
+            let q = excluded.len() as f64;
+            let (f, df2) = if vce == Vce::Ols || vce == Vce::Oim {
+                (((restr.rss - full.rss) / q) / (full.rss / (nn - kz)), nn - kz)
+            } else {
+                let mut vsub = Matrix::zeros(excluded.len(), excluded.len());
+                for (a, &ea) in excluded.iter().enumerate() {
+                    for (c, &ec) in excluded.iter().enumerate() {
+                        vsub[(a, c)] = full.v[(ea, ec)];
+                    }
+                }
+                let (vi, _) = vsub.sym_inverse(1e-14);
+                let bsub: Vec<f64> = excluded.iter().map(|&e| full.b[e]).collect();
+                let w: f64 = (0..bsub.len()).map(|a| (0..bsub.len()).map(|c| bsub[a] * vi[(a, c)] * bsub[c]).sum::<f64>()).sum();
+                (w / q, full.n_clust.map_or(nn - kz, |g| g as f64 - 1.0))
+            };
+            let row = [rsq, adj, partial, f, q, df2, dist::ftail(q, df2, f)];
+            for (c, v) in row.iter().enumerate() {
+                fs[(r, c)] = *v;
+            }
+            fs_names.push(dx.names[j].clone());
+        }
+        let fs = fs.with_names(fs_names, ["rsq", "adjrsq", "partrsq", "F", "df1", "df2", "pval"].iter().map(|s| s.to_string()).collect());
         let b = fit2.b.clone();
         let resid: Vec<f64> = (0..dx.n()).map(|t| dx.y[t] - dx.xb(&b, t)).collect();
         let rss: f64 = (0..dx.n()).map(|t| dx.w[t] * resid[t] * resid[t]).sum();
@@ -1683,7 +1735,8 @@ impl CommandHandler for Ivregress {
                 let cl = est::cluster_values(ds, &dx, &vce)?;
                 let (v, g) = est::sandwich(&bread, &scores, cl.as_deref(), 1.0);
                 match cl {
-                    Some(_) => v.scale(g as f64 / (g as f64 - 1.0) * if small { (n - 1.0) / (n - kk) } else { 1.0 }),
+                    // without `small`, no finite-sample adjustment is applied
+                    Some(_) => if small { v.scale(g as f64 / (g as f64 - 1.0) * (n - 1.0) / (n - kk)) } else { v },
                     None => v.scale(if small { n / (n - kk) } else { 1.0 }),
                 }
             }
@@ -1698,8 +1751,8 @@ impl CommandHandler for Ivregress {
             format!("{:<52}{:<15} = {:>10}", "Instrumental variables 2SLS regression", "Number of obs", g10(n)),
             format!("{:<52}{:<15} = {:>10}", "", if small { format!("F({}, {})", q, n - kk) } else { format!("Wald chi2({})", q) }, f2(if small { wald / q } else { wald })),
             format!("{:<52}{:<15} = {:>10}", "", if small { "Prob > F" } else { "Prob > chi2" }, f4(if small { dist::ftail(q, n - kk, wald / q) } else { dist::chi2tail(q, wald) })),
-            format!("{:<52}{:<15} = {:>10}", "", "R-squared", f4(r2)),
-            format!("{:<52}{:<15} = {:>10}", "", "Root MSE", g10(s2.sqrt())),
+            format!("{:<52}{:<15} = {:>10}", "", "R-squared", if r2 < 0.0 { ".".to_string() } else { f4(r2) }),
+            format!("{:<52}{:<15} = {:>10}", "", "Root MSE", rmse4(s2.sqrt())),
             String::new(),
         ];
         out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &dx.names, b: &b, v: &v, omitted: &dx.omitted, is_base: &dx.is_base, df: if small { Some(n - kk) } else { None }, level, eform: None, coef_title: "Coefficient" }));
@@ -1719,6 +1772,12 @@ impl CommandHandler for Ivregress {
             e.set_str("instd", endog.trim());
             e.set_str("insts", zlist.trim());
             e.set_str("estimator", "2sls");
+            let (vt, vl) = est::vce_label(&vce);
+            e.set_str("vce", if vt == "ols" { "unadjusted" } else { vt });
+            if !vl.is_empty() {
+                e.set_str("vcetype", vl);
+            }
+            e.set_mat("_firststage", fs.clone());
             e.set_str("_output", text.clone());
         });
         Ok(text)
@@ -2076,4 +2135,174 @@ impl CommandHandler for Qreg {
 /// Width of the label column of the last coefficient table in `out`.
 fn tbl_lw(out: &[String]) -> usize {
     out.iter().rev().find(|l| l.contains("+---")).and_then(|l| l.find('+')).map_or(12, |p| p.saturating_sub(1))
+}
+
+/// Root MSE as shown in estimation headers (`%10.5g`).
+fn rmse4(v: f64) -> String {
+    crate::format::fmt(v, "%10.5g").trim().to_string()
+}
+
+// ---------------------------------------------------------------------------
+// xtivreg, fe
+// ---------------------------------------------------------------------------
+
+pub struct Xtivreg;
+
+impl CommandHandler for Xtivreg {
+    fn name(&self) -> &'static str {
+        "xtivreg"
+    }
+
+    fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
+        if !cmd.has_opt("fe", 2) {
+            return Err(rc_err(198, "xtivreg: only the fe estimator is supported"));
+        }
+        let rest = cmd.main.trim();
+        let open = rest.find('(').ok_or_else(|| rc_err(198, "(varlist2 = instlist) required"))?;
+        let close = rest.rfind(')').ok_or_else(|| rc_err(198, "unmatched parenthesis"))?;
+        let inside = &rest[open + 1..close];
+        let outside = format!("{} {}", &rest[..open], &rest[close + 1..]);
+        let (endog, inst) = inside.split_once('=').ok_or_else(|| rc_err(198, "= required inside parentheses"))?;
+        let (dep, exog) = split_dep(&outside)?;
+        let dep = resolve_dep(ds, &dep)?;
+        let panel = match cmd.opt("i", 1) {
+            Some(p) => crate::varlist::resolve_name(ds, p.trim())?,
+            None => st.tsset.as_ref().and_then(|(p, _)| p.clone()).ok_or_else(|| rc_err(459, "panel variable not set; use xtset varname"))?,
+        };
+        let xlist = format!("{} {}", endog.trim(), exog);
+        let zlist = format!("{} {}", inst.trim(), exog);
+        let all = format!("{} {}", xlist, inst);
+        let dall = est::build(ds, st, cmd, DesignSpec { depvar: Some(&dep), indep: &all, noconstant: false, weights: "", extra: vec![panel.clone()] })?;
+        let mut sub = cmd.clone();
+        sub.if_expr = None;
+        sub.in_range = None;
+        let mut st2 = st.clone();
+        st2.by_mask = Some(dall.mask.clone());
+        let mut dx = est::build(ds, &st2, &sub, DesignSpec { depvar: Some(&dep), indep: &xlist, noconstant: false, weights: "", extra: vec![] })?;
+        let mut dz = est::build(ds, &st2, &sub, DesignSpec { depvar: Some(&dep), indep: &zlist, noconstant: false, weights: "", extra: vec![] })?;
+        let (g, ng) = group_index(ds, &dx, &panel)?;
+        let n = dx.n() as f64;
+        // within transformation (grand means added back, as Stata does)
+        let demean = |d: &mut Design| {
+            let (ym, xm) = within(d, &g, ng);
+            let ybar = util::mean(&d.y);
+            let k = d.k();
+            let xbar: Vec<f64> = d.cols.iter().map(|c| util::mean(c)).collect();
+            for t in 0..d.n() {
+                d.y[t] = d.y[t] - ym[g[t]] + ybar;
+                for j in 0..k {
+                    if d.names[j] != "_cons" {
+                        d.cols[j][t] = d.cols[j][t] - xm[j][g[t]] + xbar[j];
+                    }
+                }
+            }
+            (ym, xm)
+        };
+        let raw_y = dx.y.clone();
+        let raw_x = dx.cols.clone();
+        let (ym, xm) = demean(&mut dx);
+        demean(&mut dz);
+        est::drop_collinear(&mut dx);
+        est::drop_collinear(&mut dz);
+        let ax = dx.active();
+        let az = dz.active();
+        let zz = est::cross(&dz, &az);
+        let (zzi, _) = zz.sym_inverse(1e-14);
+        let mut xhat = dx.clone();
+        for &j in &ax {
+            let mut zx = vec![0.0; az.len()];
+            for t in 0..dx.n() {
+                for (a, &zj) in az.iter().enumerate() {
+                    zx[a] += dz.cols[zj][t] * dx.cols[j][t];
+                }
+            }
+            let coef: Vec<f64> = (0..az.len()).map(|a| (0..az.len()).map(|c| zzi[(a, c)] * zx[c]).sum()).collect();
+            for t in 0..dx.n() {
+                xhat.cols[j][t] = az.iter().zip(&coef).map(|(&zj, c)| dz.cols[zj][t] * c).sum();
+            }
+        }
+        let b = est::ols(&xhat, &Vce::Ols, None)?.b;
+        let resid: Vec<f64> = (0..dx.n()).map(|t| dx.y[t] - dx.xb(&b, t)).collect();
+        let rss: f64 = resid.iter().map(|r| r * r).sum();
+        let kx = ax.iter().filter(|&&j| dx.names[j] != "_cons").count() as f64;
+        let df_r = n - ng as f64 - kx;
+        let s2 = rss / df_r;
+        let (bread, _) = est::cross(&xhat, &ax).sym_inverse(1e-14);
+        let v = est::expand_v(&bread.scale(s2), &ax, dx.k());
+        let cons = dx.names.iter().position(|nm| nm == "_cons").unwrap();
+        // fixed effects, sigma_u, R-squared measures
+        let slope = |x: &dyn Fn(usize) -> f64| -> f64 { (0..dx.k()).filter(|&j| j != cons).map(|j| b[j] * x(j)).sum() };
+        let ui: Vec<f64> = (0..ng).map(|gi| ym[gi] - b[cons] - slope(&|j| xm[j][gi])).collect();
+        let mu = util::mean(&ui);
+        let su = (ui.iter().map(|u| (u - mu).powi(2)).sum::<f64>() / (ng as f64 - 1.0)).sqrt();
+        let se = s2.sqrt();
+        let rho = su * su / (su * su + se * se);
+        let corr2 = |a: &[f64], c: &[f64]| {
+            let (ma, mc) = (util::mean(a), util::mean(c));
+            let sac: f64 = a.iter().zip(c).map(|(x, y)| (x - ma) * (y - mc)).sum();
+            let saa: f64 = a.iter().map(|x| (x - ma).powi(2)).sum();
+            let scc: f64 = c.iter().map(|y| (y - mc).powi(2)).sum();
+            (sac / (saa * scc).sqrt(), sac * sac / (saa * scc))
+        };
+        let xb_raw: Vec<f64> = (0..dx.n()).map(|t| slope(&|j| raw_x[j][t])).collect();
+        let wy: Vec<f64> = (0..dx.n()).map(|t| raw_y[t] - ym[g[t]]).collect();
+        let wf: Vec<f64> = (0..dx.n()).map(|t| xb_raw[t] - slope(&|j| xm[j][g[t]])).collect();
+        let r2_w = {
+            let r = 1.0 - wy.iter().zip(&wf).map(|(a, c)| (a - c).powi(2)).sum::<f64>() / wy.iter().map(|a| a * a).sum::<f64>();
+            if r < 0.0 { SYSMISS } else { corr2(&wy, &wf).1 }
+        };
+        let gf: Vec<f64> = (0..ng).map(|gi| slope(&|j| xm[j][gi])).collect();
+        let r2_b = corr2(&ym, &gf).1;
+        let r2_o = corr2(&raw_y, &xb_raw).1;
+        let ui_obs: Vec<f64> = (0..dx.n()).map(|t| ui[g[t]]).collect();
+        let corr_u = corr2(&ui_obs, &xb_raw).0;
+        let (wald, q) = est::wald_all(&dx, &b, &v);
+        // F test that all u_i = 0: compare with pooled IV on the same regressors
+        let tcount: Vec<f64> = (0..ng).map(|gi| g.iter().filter(|&&x| x == gi).count() as f64).collect();
+        let level = util::level(cmd, st)?;
+        let mut out = dx.notes.clone();
+        if !out.is_empty() {
+            out.push(String::new());
+        }
+        out.push(format!("{:<52}{:<15} = {:>10}", "Fixed-effects (within) IV regression", "Number of obs", g10(n)));
+        out.push(format!("{:<52}{:<15} = {:>10}", format!("Group variable: {panel}"), "Number of groups", ng));
+        out.push(String::new());
+        out.push(format!("{:<52}{}", "R-squared:", "Obs per group:"));
+        let r2s = |v: f64| if v >= SYSMISS { ".".to_string() } else { format!("{:.4}", v) };
+        out.push(format!("     Within  = {:<37}{:>15} = {:>10}", r2s(r2_w), "min", g10(tcount.iter().cloned().fold(f64::INFINITY, f64::min))));
+        out.push(format!("     Between = {:<37}{:>15} = {:>10.1}", r2s(r2_b), "avg", n / ng as f64));
+        out.push(format!("     Overall = {:<37}{:>15} = {:>10}", r2s(r2_o), "max", g10(tcount.iter().cloned().fold(0.0, f64::max))));
+        out.push(String::new());
+        out.push(format!("{:<52}{:<15} = {:>10}", "", format!("Wald chi2({})", q), f2(wald)));
+        out.push(format!("{:<52}{:<15} = {:>10}", format!("corr(u_i, Xb) = {:.4}", corr_u), "Prob > chi2", f4(dist::chi2tail(q, wald))));
+        out.push(String::new());
+        out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &dx.names, b: &b, v: &v, omitted: &dx.omitted, is_base: &dx.is_base, df: None, level, eform: None, coef_title: "Coefficient" }));
+        out.pop();
+        out.push(format!("{}+{}", "-".repeat(tbl_lw(&out) + 1), "-".repeat(64)));
+        out.push(format!("{:>lw$} | {:>10}", "sigma_u", g10(su), lw = tbl_lw(&out)));
+        out.push(format!("{:>lw$} | {:>10}", "sigma_e", g10(se), lw = tbl_lw(&out)));
+        out.push(format!("{:>lw$} | {:>10}   (fraction of variance due to u_i)", "rho", g10(rho), lw = tbl_lw(&out)));
+        out.push("-".repeat(tbl_lw(&out) + 66));
+        out.push(format!("Endogenous: {}", endog.trim()));
+        out.push(format!("Exogenous:  {}", zlist.split_whitespace().collect::<Vec<_>>().join(" ")));
+        let text = out.join("\n");
+        est::post(st, "xtivreg", &dx, &b, &v, &|e: &mut Results| {
+            e.set("sigma_u", su);
+            e.set("sigma_e", se);
+            e.set("rho", rho);
+            e.set("chi2", wald);
+            e.set("df_m", q);
+            e.set("N_g", ng as f64);
+            e.set("r2_w", r2_w);
+            e.set("r2_b", r2_b);
+            e.set("r2_o", r2_o);
+            e.set("corr", corr_u);
+            e.set_str("model", "fe");
+            e.set_str("ivar", panel.clone());
+            e.set_str("instd", endog.trim());
+            e.set_str("insts", zlist.trim());
+            e.set_str("_output", text.clone());
+        });
+        Ok(text)
+    }
 }

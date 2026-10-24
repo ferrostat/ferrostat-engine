@@ -211,6 +211,7 @@ impl Engine {
             ("xtreg", Box::new(models::Xtreg)),
             ("areg", Box::new(models::Areg)),
             ("ivregress", Box::new(models::Ivregress)),
+            ("xtivreg", Box::new(models::Xtivreg)),
             ("glm", Box::new(models::Glm)),
             ("qreg", Box::new(models::Qreg)),
             ("predict", Box::new(postest::Predict)),

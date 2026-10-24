@@ -10,3 +10,4 @@ ferrostat-core = { path = "../ferrostat-core" }
 ferrostat-parser = { path = "../ferrostat-parser" }
 ferrostat-engine = { path = "../ferrostat-engine" }
 ferrostat-cmd = { path = "../ferrostat-cmd" }
+chrono = { workspace = true }

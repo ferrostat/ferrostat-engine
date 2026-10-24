@@ -1208,6 +1208,33 @@ impl CommandHandler for Estat {
                 out.push(format!("    Mean VIF | {:>9.2}", mean));
                 Ok(out.join("\n"))
             }
+            "firststage" | "first" => {
+                let fs = st.e.matrices.get("_firststage").cloned().ok_or_else(|| rc_err(321, "estat firststage is only valid after ivregress"))?;
+                let robust = st.e.macros.get("vce").map_or(false, |v| v != "unadjusted" && v != "ols");
+                let mut out = vec![
+                    "  First-stage regression summary statistics".to_string(),
+                    "  ----------------------------------------------------------------------".to_string(),
+                    format!("               |            Adjusted      Partial     {}", if robust { "Robust" } else { "" }),
+                    format!("      Variable |   R-sq.       R-sq.        R-sq.     F({:.0},{:.0})   Prob > F", fs.get(0, 4), fs.get(0, 5)),
+                    "  -------------+--------------------------------------------------------".to_string(),
+                ];
+                for i in 0..fs.rows {
+                    out.push(format!(
+                        "  {:>12} | {:>7.4} {:>11.4} {:>12.4} {:>11.6} {:>9.4}",
+                        crate::summarize::abbrev(&fs.rownames[i], 12),
+                        fs.get(i, 0),
+                        fs.get(i, 1),
+                        fs.get(i, 2),
+                        fs.get(i, 3),
+                        fs.get(i, 6)
+                    ));
+                }
+                out.push("  ----------------------------------------------------------------------".to_string());
+                let mut r = Results::new();
+                r.set_mat("singleresults", fs);
+                st.r = r;
+                Ok(out.join("\n"))
+            }
             "summarize" | "sum" => {
                 let sample = st.e.sample.clone().unwrap_or_default();
                 let dep = st.e.macros.get("depvar").cloned().unwrap_or_default();

@@ -170,7 +170,12 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             String::new()
         }
         "shell" | "!" | "winexec" | "xshell" => {
-            let out = std::process::Command::new("sh").arg("-c").arg(r).output().map_err(|e| rc_err(693, e))?;
+            let out = if cfg!(windows) {
+                std::process::Command::new("cmd").arg("/C").arg(r).output()
+            } else {
+                std::process::Command::new("sh").arg("-c").arg(r).output()
+            }
+            .map_err(|e| rc_err(693, e))?;
             String::from_utf8_lossy(&out.stdout).trim_end().to_string()
         }
         "which" => {
@@ -1149,9 +1154,7 @@ fn log_cmd(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
 }
 
 fn chrono_now() -> String {
-    // dd Mon yyyy, hh:mm:ss
-    let out = std::process::Command::new("date").arg("+%d %b %Y, %H:%M:%S").output();
-    out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+    chrono::Local::now().format("%d %b %Y, %H:%M:%S").to_string()
 }
 
 /// `input` block: `input [type] var1 [type] var2 ...` followed by data lines.
