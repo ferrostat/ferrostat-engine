@@ -1,0 +1,14 @@
+[package]
+name = "ferrostat-cmd"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrostat-core = { path = "../ferrostat-core" }
+ferrostat-parser = { path = "../ferrostat-parser" }
+csv = { workspace = true }
+plotters = { workspace = true }
+statrs = { workspace = true }
+lazy_static = { workspace = true }

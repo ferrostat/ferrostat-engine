@@ -1,0 +1,19 @@
+# Build output
+/target/
+
+# Proprietary reference material — never commit
+/clean/
+*.dta
+*.ado
+*.sthlp
+
+# Generated output
+*.png
+*.log
+*.smcl
+
+# Editor / OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp

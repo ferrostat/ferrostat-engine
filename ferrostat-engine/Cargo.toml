@@ -1,0 +1,12 @@
+[package]
+name = "ferrostat-engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrostat-core = { path = "../ferrostat-core" }
+ferrostat-parser = { path = "../ferrostat-parser" }
+ferrostat-cmd = { path = "../ferrostat-cmd" }
+thiserror = { workspace = true }

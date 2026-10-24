@@ -1,0 +1,11 @@
+[package]
+name = "ferrostat-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrostat-core = { path = "../ferrostat-core" }
+thiserror = { workspace = true }
+regex = { workspace = true }
