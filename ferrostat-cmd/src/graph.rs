@@ -23,6 +23,46 @@ pub enum LayerKind {
     Bar,
     /// box plot: (q1, median, q3, lower whisker, upper whisker)
     Box,
+    /// range plots (rbar, rarea, rspike, ...): `ranges` holds (x, y1, y2)
+    Range(RangeStyle),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RangeStyle {
+    Bar,
+    Area,
+    Spike,
+    Cap,
+    Line,
+    Connected,
+    Scatter,
+}
+
+impl RangeStyle {
+    fn from_verb(v: &str) -> Option<RangeStyle> {
+        Some(match v {
+            "rbar" => RangeStyle::Bar,
+            "rarea" => RangeStyle::Area,
+            "rspike" => RangeStyle::Spike,
+            "rcap" | "rcapsym" => RangeStyle::Cap,
+            "rline" => RangeStyle::Line,
+            "rconnected" => RangeStyle::Connected,
+            "rscatter" => RangeStyle::Scatter,
+            _ => return None,
+        })
+    }
+    fn from_name(s: &str) -> Option<RangeStyle> {
+        Some(match s {
+            "Bar" => RangeStyle::Bar,
+            "Area" => RangeStyle::Area,
+            "Spike" => RangeStyle::Spike,
+            "Cap" => RangeStyle::Cap,
+            "Line" => RangeStyle::Line,
+            "Connected" => RangeStyle::Connected,
+            "Scatter" => RangeStyle::Scatter,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +73,9 @@ pub struct Layer {
     /// for bars: bar width; for box: five-number summaries
     pub width: f64,
     pub boxes: Vec<[f64; 5]>,
+    /// range plots: (x, y1, y2), and whether x runs along the vertical axis
+    pub ranges: Vec<(f64, f64, f64)>,
+    pub horizontal: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -107,7 +150,7 @@ fn xy_points(ds: &DataSet, mask: &[bool], y: &str, x: &str) -> Result<Vec<(f64, 
 }
 
 fn layer(kind: LayerKind, points: Vec<(f64, f64)>, label: &str) -> Layer {
-    Layer { kind, points, label: label.to_string(), width: 0.0, boxes: Vec::new() }
+    Layer { kind, points, label: label.to_string(), width: 0.0, boxes: Vec::new(), ranges: Vec::new(), horizontal: false }
 }
 
 /// Build the layers for one plot specification such as `scatter y x`.
@@ -119,6 +162,20 @@ fn plot_layers(ds: &DataSet, st: &Store, spec: &Command) -> Result<Vec<Layer>, S
     }
     let x = vars.last().unwrap().clone();
     let ys = &vars[..vars.len() - 1];
+    let lab = |v: &str| ds.get_var(v).map(|var| if var.label.is_empty() { v.to_string() } else { var.label.clone() }).unwrap_or_default();
+    if let Some(style) = RangeStyle::from_verb(spec.verb.as_str()) {
+        if vars.len() != 3 {
+            return Err(rc_err(if vars.len() < 3 { 102 } else { 103 }, format!("{}: y1var y2var xvar required", spec.verb)));
+        }
+        let (c1, c2, cx) = (util::col(ds, &vars[0])?, util::col(ds, &vars[1])?, util::col(ds, &x)?);
+        let mut ranges: Vec<(f64, f64, f64)> = (0..ds.n_obs).filter(|&i| mask[i] && !is_missing(c1[i]) && !is_missing(c2[i]) && !is_missing(cx[i])).map(|i| (cx[i], c1[i], c2[i])).collect();
+        ranges.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut l = layer(LayerKind::Range(style), Vec::new(), &format!("{}/{}", lab(&vars[0]), lab(&vars[1])));
+        l.width = util::opt_num(spec, "barwidth", 4)?.unwrap_or(1.0);
+        l.horizontal = spec.has_opt("horizontal", 3);
+        l.ranges = ranges;
+        return Ok(vec![l]);
+    }
     let mut out = Vec::new();
     for y in ys {
         let mut pts = xy_points(ds, &mask, y, &x)?;
@@ -215,6 +272,10 @@ impl CommandHandler for Twoway {
         graph.legend = graph.layers.len() > 1;
         if graph.layers.len() == 1 {
             graph.ytitle = graph.layers[0].label.clone();
+        }
+        if graph.layers.iter().all(|l| l.horizontal) {
+            std::mem::swap(&mut graph.xtitle, &mut graph.ytitle);
+            std::mem::swap(&mut graph.xformat, &mut graph.yformat);
         }
         finish(&mut graph, cmd, st)
     }
@@ -619,12 +680,15 @@ pub fn save_gph(g: &Graph, path: &str) -> Result<(), String> {
         s.push_str(&format!("xlabel\t{x}\t{l}\n"));
     }
     for l in &g.layers {
-        s.push_str(&format!("layer\t{:?}\t{}\t{}\n", l.kind, l.width, l.label));
+        s.push_str(&format!("layer\t{:?}\t{}\t{}\t{}\n", l.kind, l.width, l.label, l.horizontal));
         for (x, y) in &l.points {
             s.push_str(&format!("p\t{x}\t{y}\n"));
         }
         for b in &l.boxes {
             s.push_str(&format!("b\t{}\n", join(b)));
+        }
+        for (x, y1, y2) in &l.ranges {
+            s.push_str(&format!("r\t{x}\t{y1}\t{y2}\n"));
         }
     }
     ferrostat_core::vfs::write(path, s.as_bytes()).map_err(|e| rc_err(603, e))
@@ -660,13 +724,30 @@ pub fn load_gph(path: &str) -> Result<Graph, String> {
                     "Connected" => LayerKind::Connected,
                     "Area" => LayerKind::Area,
                     "Bar" => LayerKind::Bar,
+                    s if s.starts_with("Range(") => LayerKind::Range(RangeStyle::from_name(s.trim_start_matches("Range(").trim_end_matches(')')).unwrap_or(RangeStyle::Bar)),
                     _ => LayerKind::Box,
                 };
-                g.layers.push(Layer { kind, points: Vec::new(), label: f.get(3).unwrap_or(&"").to_string(), width: f[2].parse().unwrap_or(0.0), boxes: Vec::new() });
+                g.layers.push(Layer {
+                    kind,
+                    points: Vec::new(),
+                    label: f.get(3).unwrap_or(&"").to_string(),
+                    width: f[2].parse().unwrap_or(0.0),
+                    boxes: Vec::new(),
+                    ranges: Vec::new(),
+                    horizontal: f.get(4) == Some(&"true"),
+                });
             }
             "p" => {
                 if let Some(l) = g.layers.last_mut() {
                     l.points.push((f[1].parse().unwrap_or(0.0), f[2].parse().unwrap_or(0.0)));
+                }
+            }
+            "r" => {
+                if let Some(l) = g.layers.last_mut() {
+                    let v: Vec<f64> = f[1..].iter().filter_map(|x| x.parse().ok()).collect();
+                    if v.len() == 3 {
+                        l.ranges.push((v[0], v[1], v[2]));
+                    }
                 }
             }
             "b" => {
@@ -681,6 +762,24 @@ pub fn load_gph(path: &str) -> Result<Graph, String> {
         }
     }
     Ok(g)
+}
+
+/// Plot coordinates of a range-plot point (x along the vertical axis when horizontal).
+fn range_pt(l: &Layer, x: f64, y: f64) -> (f64, f64) {
+    if l.horizontal { (y, x) } else { (x, y) }
+}
+
+/// Half-width, in x units, of range bars and of the caps of `rcap`.
+fn range_half_width(l: &Layer, style: RangeStyle) -> f64 {
+    match style {
+        RangeStyle::Bar => l.width / 2.0,
+        RangeStyle::Cap => {
+            // a quarter of the smallest gap between x values
+            let gap = l.ranges.windows(2).map(|w| w[1].0 - w[0].0).filter(|d| *d > 0.0).fold(f64::INFINITY, f64::min);
+            if gap.is_finite() { gap / 4.0 } else { 0.25 }
+        }
+        _ => 0.0,
+    }
 }
 
 /// Date and time display formats (`%td`, `%d`, `%tc`, `%tm`, `%tq`, ...).
@@ -750,6 +849,15 @@ where
             ys.push(0.0);
             xs.extend(l.points.iter().flat_map(|p| [p.0 - l.width / 2.0, p.0 + l.width / 2.0]));
         }
+        if let LayerKind::Range(style) = l.kind {
+            let hw = range_half_width(l, style);
+            for &(x, y1, y2) in &l.ranges {
+                for (px, py) in [range_pt(l, x - hw, y1), range_pt(l, x + hw, y2)] {
+                    xs.push(px);
+                    ys.push(py);
+                }
+            }
+        }
     }
     ys.extend(g.ylines.iter().copied());
     xs.extend(g.xlines.iter().copied());
@@ -813,6 +921,42 @@ where
             LayerKind::Bar => {
                 let hw = l.width / 2.0 * 0.95;
                 chart.draw_series(l.points.iter().map(|p| Rectangle::new([(p.0 - hw, 0.0), (p.0 + hw, p.1)], col.mix(0.8).filled()))).map_err(e)?.label(label).legend(move |(x, y)| Rectangle::new([(x, y - 5), (x + 20, y + 5)], col.filled()));
+            }
+            LayerKind::Range(style) => {
+                let hw = range_half_width(l, style);
+                let p = |x: f64, y: f64| range_pt(l, x, y);
+                let rect_legend = move |(x, y): (i32, i32)| Rectangle::new([(x, y - 5), (x + 20, y + 5)], col.filled());
+                match style {
+                    RangeStyle::Bar => {
+                        chart.draw_series(l.ranges.iter().map(|&(x, y1, y2)| Rectangle::new([p(x - hw, y1), p(x + hw, y2)], col.filled()))).map_err(e)?.label(label).legend(rect_legend);
+                        // thin outline keeps adjacent bars apart
+                        chart.draw_series(l.ranges.iter().map(|&(x, y1, y2)| Rectangle::new([p(x - hw, y1), p(x + hw, y2)], WHITE.stroke_width(1)))).map_err(e)?;
+                    }
+                    RangeStyle::Area => {
+                        let mut poly: Vec<(f64, f64)> = l.ranges.iter().map(|&(x, _, y2)| p(x, y2)).collect();
+                        poly.extend(l.ranges.iter().rev().map(|&(x, y1, _)| p(x, y1)));
+                        chart.draw_series(std::iter::once(Polygon::new(poly, col.filled()))).map_err(e)?.label(label).legend(rect_legend);
+                    }
+                    RangeStyle::Spike | RangeStyle::Cap => {
+                        chart.draw_series(l.ranges.iter().map(|&(x, y1, y2)| PathElement::new(vec![p(x, y1), p(x, y2)], col.stroke_width(2)))).map_err(e)?.label(label).legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], col.stroke_width(2)));
+                        if style == RangeStyle::Cap {
+                            chart.draw_series(l.ranges.iter().flat_map(|&(x, y1, y2)| [y1, y2].map(|yy| PathElement::new(vec![p(x - hw, yy), p(x + hw, yy)], col.stroke_width(2))))).map_err(e)?;
+                        }
+                    }
+                    RangeStyle::Line | RangeStyle::Connected | RangeStyle::Scatter => {
+                        let lo: Vec<(f64, f64)> = l.ranges.iter().map(|&(x, y1, _)| p(x, y1)).collect();
+                        let hi: Vec<(f64, f64)> = l.ranges.iter().map(|&(x, _, y2)| p(x, y2)).collect();
+                        if style != RangeStyle::Scatter {
+                            chart.draw_series(LineSeries::new(lo.clone(), col.stroke_width(2))).map_err(e)?;
+                            chart.draw_series(LineSeries::new(hi.clone(), col.stroke_width(2))).map_err(e)?;
+                        }
+                        if style == RangeStyle::Line {
+                            chart.draw_series(std::iter::empty::<PathElement<(f64, f64)>>()).map_err(e)?.label(label).legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], col.stroke_width(2)));
+                        } else {
+                            chart.draw_series(lo.iter().chain(hi.iter()).map(|q| Circle::new(*q, 3, col.filled()))).map_err(e)?.label(label).legend(move |(x, y)| Circle::new((x + 10, y), 3, col.filled()));
+                        }
+                    }
+                }
             }
             LayerKind::Box => {
                 for (i, b) in l.boxes.iter().enumerate() {

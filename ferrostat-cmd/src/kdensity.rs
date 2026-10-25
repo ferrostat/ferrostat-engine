@@ -105,7 +105,7 @@ impl CommandHandler for Kdensity {
         r.set_str("kernel", kname.clone());
         if !cmd.has_opt("nograph", 3) {
             let mut g = Graph { title: "Kernel density estimate".into(), xtitle: v.clone(), ytitle: "Density".into(), ..Default::default() };
-            g.layers.push(Layer { kind: LayerKind::Line, points: grid.iter().cloned().zip(dens.iter().cloned()).collect(), label: "kdensity".into(), width: 0.0, boxes: Vec::new() });
+            g.layers.push(Layer { kind: LayerKind::Line, points: grid.iter().cloned().zip(dens.iter().cloned()).collect(), label: "kdensity".into(), width: 0.0, boxes: Vec::new(), ranges: Vec::new(), horizontal: false });
             st.graph = Some(g.clone());
             st.graphs.insert("Graph".into(), g);
         }
