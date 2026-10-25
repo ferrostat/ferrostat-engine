@@ -6,6 +6,7 @@
 use eframe::egui::{self, Color32, FontId, Key, RichText, TextStyle};
 use egui_extras::{Column, TableBuilder};
 use ferrostat_ado::session::{EntryKind, Session};
+use ferrostat_ado::syntax::{self, Kind};
 
 const GRAPH_W: u32 = 800;
 const GRAPH_H: u32 = 600;
@@ -20,6 +21,9 @@ struct App {
     show_editor: bool,
     show_graph: bool,
     editor_text: String,
+    /// command names for highlighting, and the last highlighted layout
+    command_words: std::collections::HashSet<String>,
+    hl_cache: Option<(u64, bool, egui::text::LayoutJob)>,
     editor_path: Option<std::path::PathBuf>,
     graph_tex: Option<(u64, egui::TextureHandle)>,
     scroll_to_end: bool,
@@ -32,6 +36,7 @@ impl App {
             kind: EntryKind::Output,
             text: format!("Ferrostat {} — statistics engine\nType commands below, or use the File menu.", env!("CARGO_PKG_VERSION")),
         });
+        let command_words = session.command_words().into_iter().collect();
         App {
             session,
             command: String::new(),
@@ -41,6 +46,8 @@ impl App {
             show_editor: false,
             show_graph: false,
             editor_text: String::new(),
+            command_words,
+            hl_cache: None,
             editor_path: None,
             graph_tex: None,
             scroll_to_end: true,
@@ -332,8 +339,37 @@ impl App {
                 }
             });
             ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::TextEdit::multiline(&mut self.editor_text).id(egui::Id::unique("dofile")).code_editor().desired_rows(24).desired_width(f32::INFINITY).lock_focus(true).show(ui);
+            let font = FontId::monospace(13.0);
+            let dark = ui.visuals().dark_mode;
+            let words = &self.command_words;
+            let cache = &mut self.hl_cache;
+            let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                let text = buf.as_str();
+                let key = hash_text(text);
+                let fresh = !matches!(cache, Some((k, d, _)) if *k == key && *d == dark);
+                if fresh {
+                    *cache = Some((key, dark, highlight_job(text, words, &font, dark)));
+                }
+                let mut job = cache.as_ref().unwrap().2.clone();
+                job.wrap.max_width = wrap_width;
+                ui.fonts_mut(|f| f.layout_job(job))
+            };
+            let lines = self.editor_text.split('\n').count().max(1);
+            let gutter: String = (1..=lines).map(|i| i.to_string()).collect::<Vec<_>>().join("\n");
+            egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.add(egui::Label::new(RichText::new(gutter).font(FontId::monospace(13.0)).color(ui.visuals().weak_text_color())).selectable(false));
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.editor_text)
+                            .id(egui::Id::unique("dofile"))
+                            .code_editor()
+                            .font(FontId::monospace(13.0))
+                            .desired_rows(24)
+                            .desired_width(f32::INFINITY)
+                            .lock_focus(true)
+                            .layouter(&mut layouter),
+                    );
+                });
             });
         });
         self.show_editor = open;
@@ -374,6 +410,46 @@ impl App {
             self.run(&format!("graph export {}, replace", Self::quoted(&p)));
         }
     }
+}
+
+fn hash_text(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// Token colours, matching the browser editor.
+fn token_color(kind: Kind, dark: bool) -> Option<Color32> {
+    let rgb = |r, g, b| Some(Color32::from_rgb(r, g, b));
+    match (kind, dark) {
+        (Kind::Plain, _) => None,
+        (Kind::Comment, false) => rgb(0x6a, 0x73, 0x7d),
+        (Kind::Comment, true) => rgb(0x8b, 0x94, 0x9e),
+        (Kind::String, false) => rgb(0xa3, 0x40, 0x2b),
+        (Kind::String, true) => rgb(0xf0, 0xa0, 0x7a),
+        (Kind::Macro, false) => rgb(0x7a, 0x3e, 0x9d),
+        (Kind::Macro, true) => rgb(0xd2, 0xa8, 0xff),
+        (Kind::Command, false) => rgb(0x1a, 0x5f, 0xb4),
+        (Kind::Command, true) => rgb(0x79, 0xc0, 0xff),
+        (Kind::Keyword, false) => rgb(0x9c, 0x2a, 0x73),
+        (Kind::Keyword, true) => rgb(0xff, 0x7b, 0xb7),
+        (Kind::Function, false) => rgb(0x0f, 0x74, 0x70),
+        (Kind::Function, true) => rgb(0x56, 0xd4, 0xc4),
+        (Kind::Number, false) => rgb(0xb3, 0x5c, 0x00),
+        (Kind::Number, true) => rgb(0xff, 0xb8, 0x6b),
+    }
+}
+
+fn highlight_job(text: &str, words: &std::collections::HashSet<String>, font: &FontId, dark: bool) -> egui::text::LayoutJob {
+    let plain = if dark { Color32::from_gray(220) } else { Color32::from_gray(30) };
+    let mut job = egui::text::LayoutJob::default();
+    for (range, kind) in syntax::tokenize(text, words) {
+        let mut fmt = egui::text::TextFormat::simple(font.clone(), token_color(kind, dark).unwrap_or(plain));
+        fmt.italics = kind == Kind::Comment;
+        job.append(&text[range], 0.0, fmt);
+    }
+    job
 }
 
 /// The text currently selected in the do-file editor, if any.
@@ -420,4 +496,29 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native("Ferrostat", options, Box::new(|_cc| Ok(Box::new(App::new()))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn highlight_job_preserves_text_and_colours_tokens() {
+        let words: std::collections::HashSet<String> = ["regress"].iter().map(|s| s.to_string()).collect();
+        let text = "* note\nregress y x // fit\ndi \"`v'\" 3\n";
+        let font = FontId::monospace(13.0);
+        for dark in [false, true] {
+            let job = highlight_job(text, &words, &font, dark);
+            assert_eq!(job.text, text);
+            let colour_of = |needle: &str| {
+                let at = text.find(needle).unwrap();
+                job.sections.iter().find(|s| s.byte_range.start.0 <= at && at < s.byte_range.end.0).map(|s| (s.format.color, s.format.italics)).unwrap()
+            };
+            assert_eq!(colour_of("regress").0, token_color(Kind::Command, dark).unwrap());
+            assert_eq!(colour_of("* note"), (token_color(Kind::Comment, dark).unwrap(), true));
+            assert_eq!(colour_of("`v'").0, token_color(Kind::Macro, dark).unwrap());
+            assert_eq!(colour_of("3").0, token_color(Kind::Number, dark).unwrap());
+            assert!(!colour_of("y x").1);
+        }
+    }
 }

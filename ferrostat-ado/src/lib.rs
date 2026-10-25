@@ -7,3 +7,4 @@ pub mod script;
 
 pub use interpreter::AdoInterpreter;
 pub mod session;
+pub mod syntax;
