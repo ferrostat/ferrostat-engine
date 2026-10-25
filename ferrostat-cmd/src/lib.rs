@@ -21,6 +21,7 @@ pub mod postest;
 pub mod restructure;
 pub mod spatial;
 pub mod rng;
+pub mod stockyogo;
 pub mod store;
 pub mod summarize;
 pub mod tabulate;

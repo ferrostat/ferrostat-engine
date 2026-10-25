@@ -392,6 +392,9 @@ fn xtivreg2_identification_statistics() {
     assert!(out.contains("Kleibergen-Paap rk LM statistic"));
     assert!(out.contains("Kleibergen-Paap rk Wald F statistic"));
     assert!(out.contains("Hansen J statistic"));
+    // one endogenous regressor, two excluded instruments: TSLS size table, K2 = 2
+    assert!(out.contains("10% maximal IV size") && out.contains("19.93"));
+    assert!(!out.contains("maximal IV relative bias")); // bias needs K2 >= n + 2
     // x shares the structural error: the endogeneity (C) test must reject
     s.run("xtivreg2 y (x = z1 z2), fe endog(x)");
     assert!(s.scalar("e(estatp)") < 0.01, "C = {}", s.scalar("e(estat)"));

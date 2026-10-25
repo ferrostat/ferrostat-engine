@@ -2444,9 +2444,32 @@ impl CommandHandler for Xtivreg {
                 if robust {
                     out.push(format!("{:<66}{:>12.3}", "                         (Kleibergen-Paap rk Wald F statistic):", id.kp_f));
                 }
-                out.push("Critical values for weak identification: see Stock and Yogo (2005);".to_string());
-                if robust {
-                    out.push("they are tabulated for the Cragg-Donald statistic under i.i.d. errors.".to_string());
+                let (n_endog, k2) = (y1.len(), z1.len());
+                let bias = crate::stockyogo::tsls_bias(n_endog, k2);
+                let size = crate::stockyogo::tsls_size(n_endog, k2);
+                if bias.is_none() && size.is_none() {
+                    out.push(format!("Stock-Yogo critical values: not tabulated for {n_endog} endogenous regressor(s) and {k2} excluded instrument(s)."));
+                } else {
+                    let mut first = true;
+                    let mut row = |label: String, v: f64| {
+                        let head = if first { "Stock-Yogo weak ID test critical values:" } else { "" };
+                        first = false;
+                        out.push(format!("{:<41}{:<29}{:>8.2}", head, label, v));
+                    };
+                    if let Some(b) = bias {
+                        for (lvl, v) in crate::stockyogo::BIAS_LEVELS.iter().zip(b) {
+                            row(format!("{:.0}% maximal IV relative bias", lvl * 100.0), v);
+                        }
+                    }
+                    if let Some(s) = size {
+                        for (lvl, v) in crate::stockyogo::SIZE_LEVELS.iter().zip(s) {
+                            row(format!("{:.0}% maximal IV size", lvl * 100.0), v);
+                        }
+                    }
+                    out.push("Source: Stock and Yogo (2005), Tables 1-2, 5% significance level.".to_string());
+                    if robust {
+                        out.push("NB: the critical values are for the Cragg-Donald F statistic with i.i.d. errors.".to_string());
+                    }
                 }
                 diag.push(("idstat".into(), id.lm));
                 diag.push(("iddf".into(), id.df));

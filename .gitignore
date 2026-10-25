@@ -20,3 +20,5 @@
 .vscode/
 *.swp
 /ferrostat-wasm/web/pkg/
+!/assets/*.png
+!/ferrostat-wasm/web/favicon.png
