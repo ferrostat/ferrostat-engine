@@ -41,6 +41,9 @@ button {
   border: 1px solid var(--border); border-radius: 4px; padding: 3px 10px; cursor: pointer;
 }
 button:hover { border-color: var(--accent); }
+button.danger { color: var(--err); border-color: var(--err); }
+button.link { border: 0; background: none; padding: 0 4px; color: var(--accent); text-transform: none; font-size: 12px; letter-spacing: 0; }
+body.busy #command { opacity: .7; }
 h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 6px; }
 .hint { color: var(--muted); font-size: 12px; text-transform: none; letter-spacing: 0; }
 

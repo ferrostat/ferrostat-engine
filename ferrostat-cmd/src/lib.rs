@@ -10,6 +10,7 @@ pub mod format;
 pub mod graph;
 pub mod io;
 pub mod ivdiag;
+pub mod ivest;
 pub mod kdensity;
 pub mod labels;
 pub mod listing;

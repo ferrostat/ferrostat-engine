@@ -63,8 +63,8 @@ Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with
 |------|----------|
 | Descriptive | `summarize` (incl. `detail`, weights), `tabulate` (one/two-way, `chi2`, `lrchi2`, `exact`, `V`, `gamma`, `taub`, `generate()`), `tab1`, `tab2`, `tabstat`, `correlate`, `pwcorr`, `spearman`, `centile`, `mean`, `ci`, `codebook`, `misstable` |
 | Tests | `ttest` (one-sample, paired, by-group, unequal/Welch), `prtest`, `sdtest`, `ranksum`, `signrank`, `signtest`, `kwallis`, `oneway`, `ksmirnov`, `swilk`, `hausman` |
-| Linear models | `regress` (robust, cluster, `fw`/`aw`/`pw`/`iw`), `anova`, `areg`, `qreg`, `ivregress 2sls` |
-| Panel | `xtreg` (`fe`, `re`, `be`, cluster), `xtivreg`/`xtivreg2` (`fe`, cluster; Kleibergen–Paap and Cragg–Donald identification tests, Hansen J, C endogeneity test), `xtpmg` (PMG, MG; Pesaran CD test) |
+| Linear models | `regress` (robust, cluster, `fw`/`aw`/`pw`/`iw`), `anova`, `areg`, `qreg`, `ivregress 2sls`/`liml`/`gmm` (`wmatrix()`, `igmm`; `estat firststage`, `estat overid`) |
+| Panel | `xtreg` (`fe`, `re`, `be`, cluster), `xtivreg` (`fe`, `be`, `fd`, `re` with G2SLS or `ec2sls`), `xtivreg2` (`fe`, cluster; Kleibergen–Paap and Cragg–Donald identification tests with Stock–Yogo critical values, Hansen J, C endogeneity test), `xtpmg` (PMG, MG; Pesaran CD test) |
 | Nonlinear | `logit`, `logistic`, `probit`, `cloglog`, `poisson`, `nbreg`, `ologit`, `oprobit`, `mlogit`, `tobit`, `glm` (6 families, 7 links) |
 | Post-estimation | `predict` (xb, residuals, stdp/stdf/stdr, leverage, rstandard/rstudent, cooksd, pr, n, ir, mu, u/e/xbu, scores), `test`, `testparm`, `lincom`, `margins` (predictive margins, `dydx()`, `at()`, `atmeans`; delta-method SEs), `estimates store/restore/table/stats`, `estat ic/vce/hettest/ovtest/vif/summarize/firststage` |
 | Spatial | `shp2dta` (ESRI shapefile + dBase import), `spmat contiguity` (queen/rook, row/minmax/spectral normalisation), `spmat lag`, `spmap` (choropleths) |
@@ -148,9 +148,10 @@ python3 -m http.server -d ferrostat-wasm/web 8080   # open http://localhost:8080
 
 The page is static (HTML, CSS, JS and the `.wasm` module), so any static host works — including GitHub Pages via `.github/workflows/pages.yml`. Files live in an in-memory file system: upload or drop `.dta`, `.csv`, `.xlsx` and `.do` files into the session, and download anything the session writes (datasets, logs, tables, exported graphs). Differences from the native builds:
 
+- The engine runs in a Web Worker, so the page stays responsive; **Stop** cancels a long computation (the engine restarts with an empty dataset, files are kept).
+- Session files are saved in the browser's IndexedDB and restored on the next visit; *clear* in the Files panel deletes them.
 - `shell`/`!` are unavailable; `sleep` returns immediately.
 - PNG and PDF graph exports are rasterised by the browser from the SVG rendering.
-- Commands run on the page's main thread, so very long computations keep the page busy until they finish.
 
 ---
 
@@ -268,6 +269,7 @@ cargo test --workspace
 
 - Mata and Python blocks are not supported.
 - Community packages are not downloaded; only the natively implemented ones above are available.
+- `xtivreg` `be`/`fd`/`re` and `ivregress liml`/`gmm` are validated against independent textbook implementations, not yet against original output; the random-effects variance components use the Swamy–Arora-type within/between 2SLS estimates (Baltagi, ch. 7).
 - `xtivreg2` reports the Kleibergen–Paap rk LM/Wald F (Anderson LM and Cragg–Donald F under i.i.d. errors), Hansen J/Sargan and the C endogeneity test. Stock–Yogo critical values (TSLS bias and size, from the published tables) are shown alongside. Its header follows `xtivreg`, and the small-sample conventions under fixed effects with clustering have not yet been checked against original output.
 - Random-number streams are reproducible within Ferrostat but differ from other software for the same seed.
 - `graph combine` lays out graphs in a grid; graph schemes and most styling options are accepted but ignored.

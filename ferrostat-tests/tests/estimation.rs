@@ -414,3 +414,87 @@ fn xtivreg_wald_covers_constant() {
     assert_close(s.scalar("e(chi2)"), s.scalar("w[1,1]"), 1e-8);
     assert_eq!(s.scalar("e(df_m)"), 1.0);
 }
+
+#[test]
+fn ivregress_2sls_liml_gmm_match_reference() {
+    let mut s = Session::with_fixture();
+    let check = |s: &mut Session, b: &[f64; 2], se: &[f64; 2]| {
+        assert_close(s.scalar("_b[x]"), b[0], 1e-8);
+        assert_close(s.scalar("_b[_cons]"), b[1], 1e-8);
+        assert_close(s.scalar("_se[x]"), se[0], 1e-7);
+        assert_close(s.scalar("_se[_cons]"), se[1], 1e-7);
+    };
+    let out = s.run("ivregress 2sls y (x = z cnt)");
+    assert!(out.contains("Instrumental variables 2SLS regression"));
+    check(&mut s, &r::IV2_B, &r::IV2_SE);
+    let ov = s.run("estat overid");
+    assert!(ov.contains("Sargan (score) chi2"));
+    assert_close(s.scalar("r(sargan)"), r::IV2_SARGAN, 1e-8);
+
+    let out = s.run("ivregress liml y (x = z cnt)");
+    assert!(out.contains("Instrumental variables LIML regression"));
+    check(&mut s, &r::LIML_B, &r::LIML_SE);
+    assert_close(s.scalar("e(kappa)"), r::LIML_KAPPA, 1e-9);
+    s.run("estat overid");
+    assert_close(s.scalar("r(ar)"), 12.0 * r::LIML_KAPPA.ln(), 1e-8);
+
+    let out = s.run("ivregress gmm y (x = z cnt)");
+    assert!(out.contains("Instrumental variables GMM regression"));
+    assert!(out.contains("GMM weight matrix: Robust"));
+    check(&mut s, &r::GMM_B, &r::GMM_SE);
+    s.run("estat overid");
+    assert_close(s.scalar("r(HansenJ)"), r::GMM_J, 1e-8);
+
+    // homoskedastic weight matrix: GMM reproduces 2SLS
+    s.run("ivregress gmm y (x = z cnt), wmatrix(unadjusted)");
+    assert_close(s.scalar("_b[x]"), r::IV2_B[0], 1e-8);
+    // exactly identified: no overidentification test
+    s.run("ivregress 2sls y (x = z)");
+    s.fails("estat overid");
+}
+
+fn iv_panel_ref(s: &mut Session) {
+    s.run("clear");
+    s.run("set obs 24");
+    s.run("generate id = ceil(_n / 4)");
+    s.run("generate t = mod(_n - 1, 4) + 1");
+    s.run("xtset id t");
+    s.run("generate double z1 = sin(_n * 0.7)");
+    s.run("generate double z2 = cos(_n * 1.3)");
+    s.run("generate double e = sin(_n * 2.1) * 0.5");
+    s.run("generate double x = z1 + 0.5 * z2 + 0.6 * e + 0.3 * (id / 5)");
+    s.run("generate double y = 1 + 2 * x + e + id / 5");
+}
+
+#[test]
+fn xtivreg_be_fd_re_match_reference() {
+    let mut s = Session::new();
+    iv_panel_ref(&mut s);
+    let check = |s: &mut Session, b: &[f64; 2], se: &[f64; 2]| {
+        assert_close(s.scalar("_b[x]"), b[0], 1e-8);
+        assert_close(s.scalar("_b[_cons]"), b[1], 1e-8);
+        assert_close(s.scalar("_se[x]"), se[0], 1e-7);
+        assert_close(s.scalar("_se[_cons]"), se[1], 1e-7);
+    };
+    let out = s.run("xtivreg y (x = z1 z2), be");
+    assert!(out.contains("Between-effects IV regression"));
+    check(&mut s, &r::XTIV_BE_B, &r::XTIV_BE_SE);
+    assert_eq!(s.scalar("e(N_g)"), 6.0);
+
+    let out = s.run("xtivreg y (x = z1 z2), fd");
+    assert!(out.contains("First-differenced IV regression"));
+    check(&mut s, &r::XTIV_FD_B, &r::XTIV_FD_SE);
+    assert_eq!(s.scalar("e(N)"), 18.0);
+
+    // random effects is the default
+    let out = s.run("xtivreg y (x = z1 z2)");
+    assert!(out.contains("G2SLS random-effects IV regression"));
+    check(&mut s, &r::XTIV_G2SLS_B, &r::XTIV_G2SLS_SE);
+    assert_close(s.scalar("e(sigma_e)"), r::XTIV_RE_SIGMA_E, 1e-9);
+    assert_close(s.scalar("e(sigma_u)"), r::XTIV_RE_SIGMA_U, 1e-9);
+    s.run("xtivreg y (x = z1 z2), re ec2sls");
+    check(&mut s, &r::XTIV_EC2SLS_B, &r::XTIV_EC2SLS_SE);
+
+    // xtivreg2 remains fixed-effects only
+    s.fails("xtivreg2 y (x = z1 z2), re");
+}

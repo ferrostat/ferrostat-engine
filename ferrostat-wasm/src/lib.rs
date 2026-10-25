@@ -143,6 +143,13 @@ impl Ferrostat {
         Value::Array(v).to_string()
     }
 
+    /// Files written or removed since the last call (for persistence):
+    /// `[{"path", "removed"}]`.
+    pub fn take_changes(&self) -> String {
+        let v: Vec<Value> = changes().into_iter().map(|(p, r)| json!({"path": p, "removed": r})).collect();
+        Value::Array(v).to_string()
+    }
+
     pub fn cwd(&self) -> String {
         vfs::current_dir()
     }
@@ -168,6 +175,16 @@ fn all_files() -> Vec<(String, usize)> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn all_files() -> Vec<(String, usize)> {
+    Vec::new()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn changes() -> Vec<(String, bool)> {
+    vfs::take_changes()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn changes() -> Vec<(String, bool)> {
     Vec::new()
 }
 

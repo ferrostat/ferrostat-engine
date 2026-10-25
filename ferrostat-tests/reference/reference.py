@@ -215,3 +215,107 @@ sx = sorted(X); iqr = pctile(X, 75) - pctile(X, 25)
 h = 0.9 * min(sd(X), iqr / 1.349) * n ** (-0.2)
 emit("KD_H", h)
 emit("KD_AT_6_5", sum(math.exp(-((6.5 - x) / h) ** 2 / 2) / math.sqrt(2 * math.pi) for x in X) / (n * h))
+
+# ---- linear IV: y on x (endogenous) with instruments z and cnt (overidentified) ----
+def mmul(a, b): return [[sum(a[i][k] * b[k][j] for k in range(len(b))) for j in range(len(b[0]))] for i in range(len(a))]
+def tr(a): return [list(r) for r in zip(*a)]
+def rows(cols): return [list(r) for r in zip(*cols)]
+def proj(cols_a, cols_z):
+    """columns of a projected on the columns of z"""
+    Zr = rows(cols_z); Zi = inv(xtx(cols_z))
+    out = []
+    for a in cols_a:
+        c = mmul(Zi, [[sum(z[t] * a[t] for t in range(n))] for z in cols_z])
+        out.append([sum(Zr[t][k] * c[k][0] for k in range(len(cols_z))) for t in range(n)])
+    return out
+
+ONE = [1.0] * n
+IVX = [X, ONE]; IVZ = [Z, CNT, ONE]
+def kclass(kappa):
+    xh = proj(IVX, IVZ)
+    xt = [[x[t] - kappa * (x[t] - h[t]) for t in range(n)] for x, h in zip(IVX, xh)]
+    A = [[sum(a[t] * b[t] for t in range(n)) for b in IVX] for a in xt]
+    b = solve(A, [sum(a[t] * Y[t] for t in range(n)) for a in xt])
+    u = [Y[t] - sum(b[j] * IVX[j][t] for j in range(2)) for t in range(n)]
+    Ai = inv(A); s2 = sum(e * e for e in u) / n
+    return b, [math.sqrt(s2 * Ai[j][j]) for j in range(2)], u
+b2, se2, u2 = kclass(1.0)
+emit("IV2_B", b2); emit("IV2_SE", se2)
+# Sargan: N * uncentred R2 of the 2SLS residuals on the instruments
+fu = proj([u2], IVZ)[0]
+emit("IV2_SARGAN", n * sum(f * f for f in fu) / sum(e * e for e in u2))
+# LIML kappa: smallest root of det(W1 - k W0) = 0, W1 = Y'M_1 Y, W0 = Y'M_Z Y, Y = [y, x]
+Yc = [Y, X]
+m1 = [[v - mean(c) for v in c] for c in Yc]
+mz = [[c[t] - p[t] for t in range(n)] for c, p in zip(Yc, proj(Yc, IVZ))]
+W1 = xtx(m1); W0 = xtx(mz)
+qa = W0[0][0] * W0[1][1] - W0[0][1] ** 2
+qb = -(W1[0][0] * W0[1][1] + W1[1][1] * W0[0][0] - 2 * W1[0][1] * W0[0][1])
+qc = W1[0][0] * W1[1][1] - W1[0][1] ** 2
+kap = (-qb - math.sqrt(qb * qb - 4 * qa * qc)) / (2 * qa)
+bl, sel, ul = kclass(kap)
+emit("LIML_KAPPA", kap); emit("LIML_B", bl); emit("LIML_SE", sel)
+# two-step GMM, heteroskedasticity-robust weight matrix from the 2SLS residuals
+def S_of(u): return [[sum(u[t] ** 2 * a[t] * b[t] for t in range(n)) for b in IVZ] for a in IVZ]
+S1i = inv(S_of(u2))
+ZX = [[sum(z[t] * x[t] for t in range(n)) for x in IVX] for z in IVZ]
+Zy = [[sum(z[t] * Y[t] for t in range(n))] for z in IVZ]
+B = inv(mmul(mmul(tr(ZX), S1i), ZX))
+bg = [r[0] for r in mmul(B, mmul(mmul(tr(ZX), S1i), Zy))]
+ug = [Y[t] - sum(bg[j] * IVX[j][t] for j in range(2)) for t in range(n)]
+S2 = S_of(ug)
+mid = mmul(mmul(mmul(mmul(tr(ZX), S1i), S2), S1i), ZX)
+Vg = mmul(mmul(B, mid), B)
+g = [[sum(z[t] * ug[t] for t in range(n))] for z in IVZ]
+emit("GMM_B", bg); emit("GMM_SE", [math.sqrt(Vg[j][j]) for j in range(2)])
+emit("GMM_J", mmul(mmul(tr(g), inv(S2)), g)[0][0])
+
+# ---- panel IV: 6 groups x 4 periods, x endogenous, instruments z1 z2 ----
+PN = 24
+pid = [math.ceil(i / 4) for i in range(1, PN + 1)]
+pz1 = [math.sin(i * 0.7) for i in range(1, PN + 1)]
+pz2 = [math.cos(i * 1.3) for i in range(1, PN + 1)]
+pe = [math.sin(i * 2.1) * 0.5 for i in range(1, PN + 1)]
+px = [pz1[t] + 0.5 * pz2[t] + 0.6 * pe[t] + 0.3 * (pid[t] / 5) for t in range(PN)]
+py = [1 + 2 * px[t] + pe[t] + pid[t] / 5 for t in range(PN)]
+G = sorted(set(pid))
+def gmean(v): return {g: mean([v[t] for t in range(PN) if pid[t] == g]) for g in G}
+
+def tsls_cols(y, xs, zs):
+    """2SLS: returns b, bread (X^'X^)^-1, residuals"""
+    m = len(y)
+    Zi = inv(xtx(zs))
+    xh = []
+    for x in xs:
+        c = [sum(Zi[a][b_] * sum(zs[b_][t] * x[t] for t in range(m)) for b_ in range(len(zs))) for a in range(len(zs))]
+        xh.append([sum(c[a] * zs[a][t] for a in range(len(zs))) for t in range(m)])
+    A = xtx(xh)
+    b = solve(A, [sum(h[t] * y[t] for t in range(m)) for h in xh])
+    u = [y[t] - sum(b[j] * xs[j][t] for j in range(len(xs))) for t in range(m)]
+    return b, inv(A), u
+
+def se_of(Ai, u, dof): s2 = sum(e * e for e in u) / dof; return [math.sqrt(s2 * Ai[j][j]) for j in range(len(Ai))]
+
+# between
+mx, my, m1, m2 = gmean(px), gmean(py), gmean(pz1), gmean(pz2)
+bb, Ab, ub = tsls_cols([my[g] for g in G], [[mx[g] for g in G], [1.0] * 6], [[m1[g] for g in G], [m2[g] for g in G], [1.0] * 6])
+emit("XTIV_BE_B", bb); emit("XTIV_BE_SE", se_of(Ab, ub, 6 - 2))
+# first differences (consecutive periods within a group)
+idx = [t for t in range(PN) if t > 0 and pid[t] == pid[t - 1]]
+d = lambda v: [v[t] - v[t - 1] for t in idx]
+bf, Af, uf = tsls_cols(d(py), [d(px), [1.0] * len(idx)], [d(pz1), d(pz2), [1.0] * len(idx)])
+emit("XTIV_FD_B", bf); emit("XTIV_FD_SE", se_of(Af, uf, len(idx) - 2))
+# random effects: variance components from within and between 2SLS
+w = lambda v, m: [v[t] - m[pid[t]] for t in range(PN)]
+_, _, uw = tsls_cols(w(py, my), [w(px, mx)], [w(pz1, m1), w(pz2, m2)])
+s2e = sum(e * e for e in uw) / (PN - 6 - 1)
+s2u = max(0.0, sum(e * e for e in ub) / (6 - 2) - s2e / 4)
+th = 1 - math.sqrt(s2e / (4 * s2u + s2e))
+q = lambda v, m: [v[t] - th * m[pid[t]] for t in range(PN)]
+one = [1 - th] * PN
+bg, Ag, ug = tsls_cols(q(py, my), [q(px, mx), one], [q(pz1, m1), q(pz2, m2), one])
+emit("XTIV_RE_SIGMA_E", math.sqrt(s2e)); emit("XTIV_RE_SIGMA_U", math.sqrt(s2u))
+emit("XTIV_G2SLS_B", bg); emit("XTIV_G2SLS_SE", se_of(Ag, ug, PN - 2))
+ec_z = [w(pz1, m1), w(pz2, m2), [m1[pid[t]] for t in range(PN)], [m2[pid[t]] for t in range(PN)], [1.0] * PN]
+be2, Ae, ue = tsls_cols(q(py, my), [q(px, mx), one], ec_z)
+emit("XTIV_EC2SLS_B", be2); emit("XTIV_EC2SLS_SE", se_of(Ae, ue, PN - 2))

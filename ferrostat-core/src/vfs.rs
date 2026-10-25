@@ -61,6 +61,17 @@ mod imp {
         static FILES: RefCell<BTreeMap<String, Vec<u8>>> = RefCell::new(BTreeMap::new());
         static DIRS: RefCell<std::collections::BTreeSet<String>> = RefCell::new(["/".to_string(), "/tmp".to_string()].into_iter().collect());
         static CWD: RefCell<String> = RefCell::new("/".to_string());
+        /// paths written or removed since the last `take_changes` (true = removed)
+        static CHANGES: RefCell<BTreeMap<String, bool>> = RefCell::new(BTreeMap::new());
+    }
+
+    fn mark(p: &str, removed: bool) {
+        CHANGES.with(|c| c.borrow_mut().insert(p.to_string(), removed));
+    }
+
+    /// Files changed since the last call: (path, removed).
+    pub fn take_changes() -> Vec<(String, bool)> {
+        CHANGES.with(|c| std::mem::take(&mut *c.borrow_mut()).into_iter().collect())
     }
 
     /// Absolute, normalised path ("/a/b").
@@ -97,12 +108,14 @@ mod imp {
     }
     pub fn write(path: &str, data: &[u8]) -> io::Result<()> {
         let p = norm(path);
-        DIRS.with(|d| d.borrow_mut().insert(parent(&p)));
+        create_dir_all(&parent(&p))?;
+        mark(&p, false);
         FILES.with(|f| f.borrow_mut().insert(p, data.to_vec()));
         Ok(())
     }
     pub fn append(path: &str, data: &[u8]) -> io::Result<()> {
         let p = norm(path);
+        mark(&p, false);
         FILES.with(|f| f.borrow_mut().entry(p).or_default().extend_from_slice(data));
         Ok(())
     }
@@ -112,7 +125,11 @@ mod imp {
     }
     pub fn remove(path: &str) -> io::Result<()> {
         let p = norm(path);
-        FILES.with(|f| f.borrow_mut().remove(&p)).map(|_| ()).ok_or_else(|| not_found(&p))
+        let r = FILES.with(|f| f.borrow_mut().remove(&p)).map(|_| ()).ok_or_else(|| not_found(&p));
+        if r.is_ok() {
+            mark(&p, true);
+        }
+        r
     }
     pub fn remove_dir(path: &str) -> io::Result<()> {
         let p = norm(path);

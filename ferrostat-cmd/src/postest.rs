@@ -1235,6 +1235,20 @@ impl CommandHandler for Estat {
                 st.r = r;
                 Ok(out.join("\n"))
             }
+            "overid" => {
+                let est_name = st.e.macros.get("cmd").cloned().unwrap_or_default();
+                if est_name != "ivregress" {
+                    return Err(rc_err(321, "estat overid is only valid after ivregress"));
+                }
+                let text = st.e.macros.get("_overid").cloned().ok_or_else(|| rc_err(498, "no overidentifying restrictions"))?;
+                let m = st.e.matrices.get("_overid").cloned().unwrap();
+                let mut r = Results::new();
+                for (j, name) in m.colnames.iter().enumerate() {
+                    r.set(name, m.get(0, j));
+                }
+                st.r = r;
+                Ok(text)
+            }
             "summarize" | "sum" => {
                 let sample = st.e.sample.clone().unwrap_or_default();
                 let dep = st.e.macros.get("depvar").cloned().unwrap_or_default();

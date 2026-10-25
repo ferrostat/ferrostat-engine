@@ -10,6 +10,7 @@ use crate::dist;
 use crate::est::{self, Design, DesignSpec, Likelihood, Vce};
 use crate::eval::rc_err;
 use crate::format::fmt_g;
+use crate::ivest::{self, Moments};
 use crate::matrix::Matrix;
 use crate::store::{Results, Store};
 use crate::util::{self, WeightKind};
@@ -1660,23 +1661,20 @@ impl CommandHandler for Ivregress {
         let ax = dx.active();
         let az = dz.active();
         let n = dx.n_eff();
-        // first stage: project X on Z
-        let zz = est::cross(&dz, &az);
-        let (zzi, _) = zz.sym_inverse(1e-14);
-        let mut xhat = dx.clone();
-        for &j in &ax {
-            let mut zx = vec![0.0; az.len()];
-            for t in 0..dx.n() {
-                for (a, &zj) in az.iter().enumerate() {
-                    zx[a] += dz.w[t] * dz.cols[zj][t] * dx.cols[j][t];
+        // design matrices over the active columns
+        let to_m = |d: &Design, cols: &[usize]| {
+            let mut m = Matrix::zeros(d.n(), cols.len());
+            for (c, &j) in cols.iter().enumerate() {
+                for t in 0..d.n() {
+                    m[(t, c)] = d.cols[j][t];
                 }
             }
-            let coef: Vec<f64> = (0..az.len()).map(|a| (0..az.len()).map(|c| zzi[(a, c)] * zx[c]).sum()).collect();
-            for t in 0..dx.n() {
-                xhat.cols[j][t] = az.iter().zip(&coef).map(|(&zj, c)| dz.cols[zj][t] * c).sum();
-            }
-        }
-        let fit2 = est::ols(&xhat, &Vce::Ols, None)?;
+            m
+        };
+        let xm = to_m(&dx, &ax);
+        let zm = to_m(&dz, &az);
+        let wv = dx.w.clone();
+        let exog_x: Vec<usize> = ax.iter().enumerate().filter(|(_, j)| dz.names.contains(&dx.names[**j])).map(|(i, _)| i).collect();
         // first-stage statistics for estat firststage:
         // rows = endogenous regressors; cols = rsq adjrsq partrsq F df1 df2 p
         let excluded: Vec<usize> = az.iter().copied().filter(|&j| !dx.names.contains(&dz.names[j])).collect();
@@ -1720,27 +1718,117 @@ impl CommandHandler for Ivregress {
             fs_names.push(dx.names[j].clone());
         }
         let fs = fs.with_names(fs_names, ["rsq", "adjrsq", "partrsq", "F", "df1", "df2", "pval"].iter().map(|s| s.to_string()).collect());
-        let b = fit2.b.clone();
-        let resid: Vec<f64> = (0..dx.n()).map(|t| dx.y[t] - dx.xb(&b, t)).collect();
-        let rss: f64 = (0..dx.n()).map(|t| dx.w[t] * resid[t] * resid[t]).sum();
         let small = cmd.has_opt("small", 2);
         let kk = ax.len() as f64;
-        let s2 = if small { rss / (n - kk) } else { rss / n };
-        let xtx = est::cross(&xhat, &ax);
-        let (bread, _) = xtx.sym_inverse(1e-14);
-        let vact = match &vce {
-            Vce::Ols | Vce::Oim => bread.scale(s2),
-            _ => {
-                let scores: Vec<Vec<f64>> = (0..dx.n()).map(|t| ax.iter().map(|&j| xhat.cols[j][t] * resid[t] * dx.w[t]).collect()).collect();
-                let cl = est::cluster_values(ds, &dx, &vce)?;
-                let (v, g) = est::sandwich(&bread, &scores, cl.as_deref(), 1.0);
-                match cl {
-                    // without `small`, no finite-sample adjustment is applied
-                    Some(_) => if small { v.scale(g as f64 / (g as f64 - 1.0) * (n - 1.0) / (n - kk)) } else { v },
-                    None => v.scale(if small { n / (n - kk) } else { 1.0 }),
-                }
+        let cl = est::cluster_values(ds, &dx, &vce)?;
+        let vce_m = match (&vce, &cl) {
+            (Vce::Ols | Vce::Oim, _) => Moments::Unadjusted,
+            (_, Some(c)) => Moments::Cluster(c.clone()),
+            _ => Moments::Robust,
+        };
+        let n_groups = |m: &Moments| match m {
+            Moments::Cluster(c) => Some(c.iter().map(|x| x.to_bits()).collect::<std::collections::BTreeSet<_>>().len()),
+            _ => None,
+        };
+        // finite-sample factor of `small` for robust/cluster covariances
+        let small_scale = |m: &Moments| -> f64 {
+            if !small {
+                return 1.0;
+            }
+            match n_groups(m) {
+                Some(g) => g as f64 / (g as f64 - 1.0) * (n - 1.0) / (n - kk),
+                None => n / (n - kk),
             }
         };
+        let mut wlabel = String::new();
+        let (fit, vact) = match estimator {
+            "gmm" => {
+                let wm = match cmd.opt("wmatrix", 2).map(|s| s.trim().to_lowercase()) {
+                    None => if vce == Vce::Ols { Moments::Robust } else { vce_m.clone() },
+                    Some(s) if s.starts_with("un") => Moments::Unadjusted,
+                    Some(s) if s.starts_with("r") => Moments::Robust,
+                    Some(s) if s.starts_with("cl") => {
+                        let var = s.split_whitespace().nth(1).ok_or_else(|| rc_err(198, "wmatrix(cluster clustvar) requires a variable"))?;
+                        let c = util::col(ds, &crate::varlist::resolve_name(ds, var)?)?;
+                        Moments::Cluster(dx.rows.iter().map(|&i| c[i]).collect())
+                    }
+                    Some(s) => return Err(rc_err(198, format!("wmatrix({s}) not allowed"))),
+                };
+                // without vce(), the covariance follows the weight matrix
+                let vm = if vce == Vce::Ols { wm.clone() } else { vce_m.clone() };
+                wlabel = match &wm {
+                    Moments::Unadjusted => "Unadjusted".into(),
+                    Moments::Robust => "Robust".into(),
+                    Moments::Cluster(_) => "Cluster".into(),
+                };
+                let f = ivest::gmm(&xm, &zm, &dx.y, &wv, &wm, &vm, cmd.has_opt("igmm", 4));
+                let v = f.v_gmm.clone().unwrap();
+                let v = if vm == Moments::Unadjusted { v } else { v.scale(small_scale(&vm)) };
+                (f, v)
+            }
+            _ => {
+                let f = if estimator == "liml" { ivest::liml(&xm, &zm, &dx.y, &wv, &exog_x) } else { ivest::tsls(&xm, &zm, &dx.y, &wv) };
+                let v = match &vce_m {
+                    Moments::Unadjusted => ivest::kclass_vce(&f, &wv, &vce_m, if small { n - kk } else { n }),
+                    m => ivest::kclass_vce(&f, &wv, m, 0.0).scale(small_scale(m)),
+                };
+                (f, v)
+            }
+        };
+        let mut b = vec![0.0; dx.k()];
+        for (i, &j) in ax.iter().enumerate() {
+            b[j] = fit.b[i];
+        }
+        let resid = fit.resid.clone();
+        let rss: f64 = (0..dx.n()).map(|t| dx.w[t] * resid[t] * resid[t]).sum();
+        let s2 = if small { rss / (n - kk) } else { rss / n };
+        // overidentification tests (estat overid)
+        let l_inst = az.len() as f64;
+        let q_over = l_inst - kk;
+        let mut overid: Vec<(String, f64)> = Vec::new();
+        let mut overid_text: Vec<String> = Vec::new();
+        if q_over > 0.0 {
+            let fmt_line = |name: &str, df: String, v: f64, p: f64| format!("  {:<28}{:<10} = {:>9.4}  (p = {:.4})", name, df, v, p);
+            match estimator {
+                "gmm" => {
+                    let j = fit.j.unwrap_or(0.0);
+                    let p = dist::chi2tail(q_over, j);
+                    overid_text.push("  Test of overidentifying restriction:".into());
+                    overid_text.push(String::new());
+                    overid_text.push(fmt_line("Hansen's J chi2", format!("({})", q_over), j, p));
+                    overid = vec![("HansenJ".into(), j), ("p_HansenJ".into(), p), ("df".into(), q_over)];
+                }
+                "liml" => {
+                    let ar = n * fit.kappa.ln();
+                    let bf = (fit.kappa - 1.0) * (n - l_inst) / q_over;
+                    let (p1, p2) = (dist::chi2tail(q_over, ar), dist::ftail(q_over, n - l_inst, bf));
+                    overid_text.push("  Tests of overidentifying restrictions:".into());
+                    overid_text.push(String::new());
+                    overid_text.push(fmt_line("Anderson-Rubin chi2", format!("({})", q_over), ar, p1));
+                    overid_text.push(fmt_line("Basmann F", format!("({},{})", q_over, n - l_inst), bf, p2));
+                    overid = vec![("ar".into(), ar), ("p_ar".into(), p1), ("basmann".into(), bf), ("p_basmann".into(), p2), ("ar_df".into(), q_over), ("basmann_df1".into(), q_over), ("basmann_df2".into(), n - l_inst)];
+                }
+                _ if vce_m != Moments::Unadjusted => {
+                    let excl: Vec<usize> = az.iter().enumerate().filter(|(_, j)| !dx.names.contains(&dz.names[**j])).map(|(i, _)| i).collect();
+                    let sc = ivest::robust_score(&fit.xt, &zm, &excl[..q_over as usize], &resid, &wv, &vce_m);
+                    let p = dist::chi2tail(q_over, sc);
+                    overid_text.push("  Test of overidentifying restrictions:".into());
+                    overid_text.push(String::new());
+                    overid_text.push(fmt_line("Score chi2", format!("({})", q_over), sc, p));
+                    overid = vec![("score".into(), sc), ("p_score".into(), p), ("df".into(), q_over)];
+                }
+                _ => {
+                    let (sg, bf) = ivest::sargan_basmann(&zm, &resid, &wv, n, q_over, l_inst);
+                    let bc = bf * q_over;
+                    let (p1, p2) = (dist::chi2tail(q_over, sg), dist::chi2tail(q_over, bc));
+                    overid_text.push("  Tests of overidentifying restrictions:".into());
+                    overid_text.push(String::new());
+                    overid_text.push(fmt_line("Sargan (score) chi2", format!("({})", q_over), sg, p1));
+                    overid_text.push(fmt_line("Basmann chi2", format!("({})", q_over), bc, p2));
+                    overid = vec![("sargan".into(), sg), ("p_sargan".into(), p1), ("basmann".into(), bc), ("p_basmann".into(), p2), ("df".into(), q_over)];
+                }
+            }
+        }
         let v = est::expand_v(&vact, &ax, dx.k());
         let ybar = util::mean(&dx.y);
         let tss: f64 = dx.y.iter().map(|y| (y - ybar).powi(2)).sum();
@@ -1748,13 +1836,16 @@ impl CommandHandler for Ivregress {
         let (wald, q) = est::wald_all(&dx, &b, &v);
         let level = util::level(cmd, st)?;
         let mut out = vec![
-            format!("{:<52}{:<15} = {:>10}", "Instrumental variables 2SLS regression", "Number of obs", g10(n)),
+            format!("{:<52}{:<15} = {:>10}", format!("Instrumental variables {} regression", estimator.to_uppercase()), "Number of obs", g10(n)),
             format!("{:<52}{:<15} = {:>10}", "", if small { format!("F({}, {})", q, n - kk) } else { format!("Wald chi2({})", q) }, f2(if small { wald / q } else { wald })),
             format!("{:<52}{:<15} = {:>10}", "", if small { "Prob > F" } else { "Prob > chi2" }, f4(if small { dist::ftail(q, n - kk, wald / q) } else { dist::chi2tail(q, wald) })),
             format!("{:<52}{:<15} = {:>10}", "", "R-squared", if r2 < 0.0 { ".".to_string() } else { f4(r2) }),
             format!("{:<52}{:<15} = {:>10}", "", "Root MSE", rmse4(s2.sqrt())),
             String::new(),
         ];
+        if !wlabel.is_empty() {
+            out.insert(out.len() - 1, format!("GMM weight matrix: {wlabel}"));
+        }
         out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &dx.names, b: &b, v: &v, omitted: &dx.omitted, is_base: &dx.is_base, df: if small { Some(n - kk) } else { None }, level, eform: None, coef_title: "Coefficient" }));
         out.push(format!("Endogenous: {}", endog.trim()));
         out.push(format!("Exogenous:  {}", zlist.split_whitespace().collect::<Vec<_>>().join(" ")));
@@ -1771,7 +1862,22 @@ impl CommandHandler for Ivregress {
             }
             e.set_str("instd", endog.trim());
             e.set_str("insts", zlist.trim());
-            e.set_str("estimator", "2sls");
+            e.set_str("estimator", estimator);
+            if estimator == "liml" {
+                e.set("kappa", fit.kappa);
+            }
+            if let Some(j) = fit.j {
+                e.set("J", j);
+            }
+            if !wlabel.is_empty() {
+                e.set_str("wmatrix", wlabel.to_lowercase());
+            }
+            if !overid.is_empty() {
+                e.set_str("_overid", overid_text.join("\n"));
+                let names: Vec<String> = overid.iter().map(|(k, _)| k.clone()).collect();
+                let vals: Vec<f64> = overid.iter().map(|(_, v)| *v).collect();
+                e.set_mat("_overid", Matrix::row_vector(&vals).with_names(vec!["r1".into()], names));
+            }
             let (vt, vl) = est::vce_label(&vce);
             e.set_str("vce", if vt == "ols" { "unadjusted" } else { vt });
             if !vl.is_empty() {
@@ -2227,14 +2333,267 @@ fn hansen_j(x: &[Vec<f64>], z: &[Vec<f64>], y: &[f64], cl: Option<&[f64]>, s_fix
     (j, (kz - kx) as f64, s)
 }
 
+/// `xtivreg` between (`be`), first-difference (`fd`) and random-effects
+/// (`re`: G2SLS, Balestra & Varadharajan-Krishnakumar 1987; `ec2sls`:
+/// Baltagi 1981) estimators. Variance components follow Baltagi,
+/// *Econometric Analysis of Panel Data*, ch. 7: σ²_e from the within 2SLS
+/// residuals (N - n - K_w dof), σ²_u from the between 2SLS residuals
+/// (n - K_b dof) net of σ²_e · mean(1/T_i).
+#[allow(clippy::too_many_arguments)]
+fn xtivreg_other(ds: &DataSet, st: &mut Store, cmd: &Command, dep: &str, panel: &str, endog: &str, zlist: &str, dx: Design, dz: Design, g: &[usize], ng: usize) -> Result<String, String> {
+    let model = if cmd.has_opt("be", 2) {
+        "be"
+    } else if cmd.has_opt("fd", 2) {
+        "fd"
+    } else {
+        "re"
+    };
+    let ec2sls = cmd.has_opt("ec2sls", 3);
+    let n_raw = dx.n();
+    let mut tcount = vec![0.0; ng];
+    for &gi in g {
+        tcount[gi] += 1.0;
+    }
+    let is_cons = |d: &Design, j: usize| d.names[j] == "_cons";
+    // group means of every column
+    let gmeans = |d: &Design| -> (Vec<f64>, Vec<Vec<f64>>) {
+        let mut dd = d.clone();
+        dd.w = vec![1.0; d.n()];
+        within(&mut dd, g, ng)
+    };
+    let (ym_x, xm) = gmeans(&dx);
+    let (_, zm) = gmeans(&dz);
+    // matrices over active columns
+    let to_m = |d: &Design, cols: &[usize]| {
+        let mut m = Matrix::zeros(d.n(), cols.len());
+        for (c, &j) in cols.iter().enumerate() {
+            for t in 0..d.n() {
+                m[(t, c)] = d.cols[j][t];
+            }
+        }
+        m
+    };
+    // 2SLS on (possibly transformed) designs; returns (b over dx columns, fit, active x columns)
+    let fit_iv = |mut x: Design, mut z: Design| -> Result<(Vec<f64>, ivest::IvFit, Vec<usize>, Design), String> {
+        est::drop_collinear(&mut x);
+        est::drop_collinear(&mut z);
+        let (ax, az) = (x.active(), z.active());
+        if az.len() < ax.len() {
+            return Err(rc_err(481, "equation not identified; must have at least as many instruments as regressors"));
+        }
+        let w = vec![1.0; x.n()];
+        let f = ivest::tsls(&to_m(&x, &ax), &to_m(&z, &az), &x.y, &w);
+        let mut b = vec![0.0; x.k()];
+        for (i, &j) in ax.iter().enumerate() {
+            b[j] = f.b[i];
+        }
+        Ok((b, f, ax, x))
+    };
+    let mut sigma_u = f64::NAN;
+    let mut sigma_e = f64::NAN;
+    let mut theta: Vec<f64> = Vec::new();
+    let (b, fit, ax, xd, nobs, title) = match model {
+        "be" => {
+            // one observation per group: group means
+            let collapse = |d: &Design, means: &[Vec<f64>], y: &[f64]| {
+                let mut c = d.clone();
+                let first: Vec<usize> = (0..ng).map(|gi| g.iter().position(|&x| x == gi).unwrap()).collect();
+                c.rows = first.iter().map(|&t| d.rows[t]).collect();
+                c.y = y.to_vec();
+                c.cols = means.to_vec();
+                c.w = vec![1.0; ng];
+                c
+            };
+            let x = collapse(&dx, &xm, &ym_x);
+            let z = collapse(&dz, &zm, &ym_x);
+            let (b, f, ax, xd) = fit_iv(x, z)?;
+            (b, f, ax, xd, ng as f64, "Between-effects IV regression")
+        }
+        "fd" => {
+            let (_, tvar) = st.tsset.clone().ok_or_else(|| rc_err(459, "time variable not set; use xtset panelvar timevar"))?;
+            let tv = util::col(ds, &tvar)?;
+            let key = |t: usize| (g[t], tv[dx.rows[t]].to_bits());
+            let index: std::collections::HashMap<(usize, u64), usize> = (0..n_raw).map(|t| (key(t), t)).collect();
+            let pairs: Vec<(usize, usize)> = (0..n_raw).filter_map(|t| index.get(&(g[t], (tv[dx.rows[t]] - 1.0).to_bits())).map(|&p| (t, p))).collect();
+            if pairs.is_empty() {
+                return Err(rc_err(2000, "no observations"));
+            }
+            let diff = |d: &Design| {
+                let mut c = d.clone();
+                c.rows = pairs.iter().map(|&(t, _)| d.rows[t]).collect();
+                c.y = pairs.iter().map(|&(t, p)| d.y[t] - d.y[p]).collect();
+                c.cols = (0..d.k()).map(|j| pairs.iter().map(|&(t, p)| if is_cons(d, j) { 1.0 } else { d.cols[j][t] - d.cols[j][p] }).collect()).collect();
+                c.w = vec![1.0; pairs.len()];
+                c
+            };
+            let (b, f, ax, xd) = fit_iv(diff(&dx), diff(&dz))?;
+            (b, f, ax, xd, pairs.len() as f64, "First-differenced IV regression")
+        }
+        _ => {
+            // within 2SLS for sigma_e
+            let demean = |d: &Design, means: &[Vec<f64>], ym: &[f64]| {
+                let mut c = d.clone();
+                c.y = (0..n_raw).map(|t| d.y[t] - ym[g[t]]).collect();
+                for j in 0..d.k() {
+                    if is_cons(d, j) {
+                        c.omitted[j] = true;
+                    } else {
+                        c.cols[j] = (0..n_raw).map(|t| d.cols[j][t] - means[j][g[t]]).collect();
+                    }
+                }
+                c
+            };
+            let (_, fw, axw, _) = fit_iv(demean(&dx, &xm, &ym_x), demean(&dz, &zm, &ym_x))?;
+            let rss_w: f64 = fw.resid.iter().map(|u| u * u).sum();
+            let s2e = rss_w / (n_raw as f64 - ng as f64 - axw.len() as f64);
+            // between 2SLS for sigma_u
+            let collapse = |d: &Design, means: &[Vec<f64>]| {
+                let mut c = d.clone();
+                c.rows = (0..ng).map(|gi| d.rows[g.iter().position(|&x| x == gi).unwrap()]).collect();
+                c.y = ym_x.clone();
+                c.cols = means.to_vec();
+                c.w = vec![1.0; ng];
+                c
+            };
+            let (_, fb, axb, _) = fit_iv(collapse(&dx, &xm), collapse(&dz, &zm))?;
+            let rss_b: f64 = fb.resid.iter().map(|u| u * u).sum();
+            let inv_t: f64 = tcount.iter().map(|t| 1.0 / t).sum::<f64>() / ng as f64;
+            let s2u = (rss_b / (ng as f64 - axb.len() as f64) - s2e * inv_t).max(0.0);
+            sigma_u = s2u.sqrt();
+            sigma_e = s2e.sqrt();
+            theta = tcount.iter().map(|&ti| 1.0 - (s2e / (ti * s2u + s2e)).sqrt()).collect();
+            // quasi-demeaned regressors and dependent variable
+            let quasi = |d: &Design, means: &[Vec<f64>]| {
+                let mut c = d.clone();
+                c.y = (0..n_raw).map(|t| d.y[t] - theta[g[t]] * ym_x[g[t]]).collect();
+                c.cols = (0..d.k()).map(|j| (0..n_raw).map(|t| d.cols[j][t] - theta[g[t]] * means[j][g[t]]).collect()).collect();
+                c
+            };
+            let xq = quasi(&dx, &xm);
+            let zq = if ec2sls {
+                // instruments: within-transformed Z and group means of Z
+                let mut c = dz.clone();
+                let mut names = Vec::new();
+                let mut cols = Vec::new();
+                for j in 0..dz.k() {
+                    if !is_cons(&dz, j) {
+                        names.push(format!("w.{}", dz.names[j]));
+                        cols.push((0..n_raw).map(|t| dz.cols[j][t] - zm[j][g[t]]).collect::<Vec<f64>>());
+                    }
+                    names.push(format!("b.{}", dz.names[j]));
+                    cols.push((0..n_raw).map(|t| zm[j][g[t]]).collect());
+                }
+                c.omitted = vec![false; cols.len()];
+                c.is_base = vec![false; cols.len()];
+                c.names = names;
+                c.cols = cols;
+                c
+            } else {
+                quasi(&dz, &zm)
+            };
+            let (b, f, ax, xd) = fit_iv(xq, zq)?;
+            (b, f, ax, xd, n_raw as f64, if ec2sls { "EC2SLS random-effects IV regression" } else { "G2SLS random-effects IV regression" })
+        }
+    };
+    let kk = ax.len() as f64;
+    let vce = est::parse_vce(cmd, Vce::Ols)?;
+    let w1 = vec![1.0; fit.resid.len()];
+    let vact = match &vce {
+        Vce::Ols | Vce::Oim => ivest::kclass_vce(&fit, &w1, &Moments::Unadjusted, nobs - kk),
+        _ => {
+            // robust and cluster: clustered on the panel variable unless another is given
+            let clv = match &vce {
+                Vce::Cluster(c) => util::col(ds, &crate::varlist::resolve_name(ds, c)?)?,
+                _ => util::col(ds, panel)?,
+            };
+            let cl: Vec<f64> = xd.rows.iter().map(|&i| clv[i]).collect();
+            ivest::kclass_vce(&fit, &w1, &Moments::Cluster(cl), 0.0)
+        }
+    };
+    let v = est::expand_v(&vact, &ax, xd.k());
+    let (wald, q) = est::wald_all(&xd, &b, &v);
+    // R-squared measures from the slope coefficients applied to the raw data
+    let cons = dx.names.iter().position(|nm| nm == "_cons");
+    let slope = |vals: &dyn Fn(usize) -> f64| -> f64 { (0..dx.k()).filter(|&j| Some(j) != cons).map(|j| b[j] * vals(j)).sum() };
+    let corr2 = |a: &[f64], c: &[f64]| {
+        let (ma, mc) = (util::mean(a), util::mean(c));
+        let sac: f64 = a.iter().zip(c).map(|(x, y)| (x - ma) * (y - mc)).sum();
+        let saa: f64 = a.iter().map(|x| (x - ma).powi(2)).sum();
+        let scc: f64 = c.iter().map(|y| (y - mc).powi(2)).sum();
+        sac * sac / (saa * scc)
+    };
+    let xb: Vec<f64> = (0..n_raw).map(|t| slope(&|j| dx.cols[j][t])).collect();
+    let wy: Vec<f64> = (0..n_raw).map(|t| dx.y[t] - ym_x[g[t]]).collect();
+    let wf: Vec<f64> = (0..n_raw).map(|t| xb[t] - slope(&|j| xm[j][g[t]])).collect();
+    let gf: Vec<f64> = (0..ng).map(|gi| slope(&|j| xm[j][gi])).collect();
+    let (r2_w, r2_b, r2_o) = (corr2(&wy, &wf), corr2(&ym_x, &gf), corr2(&dx.y, &xb));
+    let rss: f64 = fit.resid.iter().map(|u| u * u).sum();
+    let level = util::level(cmd, st)?;
+    let mut out = Vec::new();
+    out.push(format!("{:<52}{:<15} = {:>10}", title, "Number of obs", g10(nobs)));
+    out.push(format!("{:<52}{:<15} = {:>10}", format!("Group variable: {panel}"), "Number of groups", ng));
+    out.push(String::new());
+    out.push(format!("{:<52}{}", "R-squared:", "Obs per group:"));
+    out.push(format!("     Within  = {:<37.4}{:>15} = {:>10}", r2_w, "min", g10(tcount.iter().cloned().fold(f64::INFINITY, f64::min))));
+    out.push(format!("     Between = {:<37.4}{:>15} = {:>10.1}", r2_b, "avg", n_raw as f64 / ng as f64));
+    out.push(format!("     Overall = {:<37.4}{:>15} = {:>10}", r2_o, "max", g10(tcount.iter().cloned().fold(0.0, f64::max))));
+    out.push(String::new());
+    out.push(format!("{:<52}{:<15} = {:>10}", "", format!("Wald chi2({})", q), f2(wald)));
+    let corr_line = if model == "re" { "corr(u_i, X) = 0 (assumed)".to_string() } else { String::new() };
+    out.push(format!("{:<52}{:<15} = {:>10}", corr_line, "Prob > chi2", f4(dist::chi2tail(q, wald))));
+    out.push(String::new());
+    out.extend(est::coef_table(&est::TableSpec { depvar: dep, names: &xd.names, b: &b, v: &v, omitted: &xd.omitted, is_base: &xd.is_base, df: None, level, eform: None, coef_title: "Coefficient" }));
+    let sd_e = (rss / (nobs - kk)).sqrt();
+    if model == "re" {
+        out.pop();
+        out.push(format!("{}+{}", "-".repeat(tbl_lw(&out) + 1), "-".repeat(64)));
+        let rho = sigma_u * sigma_u / (sigma_u * sigma_u + sigma_e * sigma_e);
+        out.push(format!("{:>lw$} | {:>10}", "sigma_u", g10(sigma_u), lw = tbl_lw(&out)));
+        out.push(format!("{:>lw$} | {:>10}", "sigma_e", g10(sigma_e), lw = tbl_lw(&out)));
+        out.push(format!("{:>lw$} | {:>10}   (fraction of variance due to u_i)", "rho", g10(rho), lw = tbl_lw(&out)));
+        out.push("-".repeat(tbl_lw(&out) + 66));
+    } else {
+        out.push(format!("{} = {}", if model == "be" { "sd(u_i + avg(e_i.))" } else { "sd(e)" }, g10(sd_e)));
+    }
+    out.push(format!("Instrumented: {endog}"));
+    out.push(format!("Instruments:  {}", zlist.split_whitespace().filter(|v| !endog.split_whitespace().any(|e| e == *v)).collect::<Vec<_>>().join(" ")));
+    let text = out.join("\n");
+    let theta_mean = if theta.is_empty() { f64::NAN } else { (0..n_raw).map(|t| theta[g[t]]).sum::<f64>() / n_raw as f64 };
+    est::post(st, "xtivreg", &xd, &b, &v, &|e: &mut Results| {
+        e.set("N", nobs);
+        e.set("N_g", ng as f64);
+        e.set("chi2", wald);
+        e.set("df_m", q);
+        e.set("r2_w", r2_w);
+        e.set("r2_b", r2_b);
+        e.set("r2_o", r2_o);
+        e.set("rss", rss);
+        if model == "re" {
+            e.set("sigma_u", sigma_u);
+            e.set("sigma_e", sigma_e);
+            e.set("rho", sigma_u * sigma_u / (sigma_u * sigma_u + sigma_e * sigma_e));
+            e.set("theta", theta_mean);
+        } else {
+            e.set("sigma", sd_e);
+        }
+        e.set_str("model", if model == "re" && ec2sls { "ec2sls" } else if model == "re" { "g2sls" } else { model });
+        e.set_str("ivar", panel);
+        e.set_str("instd", endog);
+        e.set_str("insts", zlist.trim());
+        e.set_str("_output", text.clone());
+    });
+    Ok(text)
+}
+
 impl CommandHandler for Xtivreg {
     fn name(&self) -> &'static str {
         if self.ivreg2 { "xtivreg2" } else { "xtivreg" }
     }
 
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
-        if !cmd.has_opt("fe", 2) {
-            return Err(rc_err(198, format!("{}: only the fe estimator is supported", self.name())));
+        let fe = cmd.has_opt("fe", 2);
+        if self.ivreg2 && !fe {
+            return Err(rc_err(198, "xtivreg2: only the fe estimator is supported"));
         }
         let rest = cmd.main.trim();
         let open = rest.find('(').ok_or_else(|| rc_err(198, "(varlist2 = instlist) required"))?;
@@ -2260,6 +2619,9 @@ impl CommandHandler for Xtivreg {
         let mut dx = est::build(ds, &st2, &sub, DesignSpec { depvar: Some(&dep), indep: &xlist, noconstant: false, weights: "", extra: vec![] })?;
         let mut dz = est::build(ds, &st2, &sub, DesignSpec { depvar: Some(&dep), indep: &zlist, noconstant: false, weights: "", extra: vec![] })?;
         let (g, ng) = group_index(ds, &dx, &panel)?;
+        if !fe {
+            return xtivreg_other(ds, st, cmd, &dep, &panel, endog.trim(), &zlist, dx, dz, &g, ng);
+        }
         let n = dx.n() as f64;
         // within transformation (grand means added back, as Stata does)
         let demean = |d: &mut Design| {

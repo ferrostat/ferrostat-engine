@@ -12,6 +12,7 @@
   <span class="brand">Ferrostat</span>
   <button id="btn-upload" title="Add files to the session">Upload…</button>
   <input type="file" id="file-input" multiple hidden>
+  <button id="btn-stop" class="danger" hidden title="Stop the running command (restarts the engine)">■ Stop</button>
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="results" class="active">Results</button>
     <button role="tab" data-tab="data">Data</button>
@@ -78,7 +79,8 @@ scatter y x"></textarea>
       <dl id="props"></dl>
     </section>
     <section class="grow">
-      <h2>Files <span class="hint">(drop files here)</span></h2>
+      <h2>Files <span class="hint">(drop files here; kept in this browser)</span>
+        <button id="btn-reset" class="link" title="Delete the files saved in this browser">clear</button></h2>
       <ul id="files" class="list mono"></ul>
     </section>
   </aside>
