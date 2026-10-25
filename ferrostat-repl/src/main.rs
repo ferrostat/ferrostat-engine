@@ -61,7 +61,7 @@ fn main() {
         return;
     }
 
-    println!("Ferrostat {} — statistics engine (Stata-compatible command language)", env!("CARGO_PKG_VERSION"));
+    println!("Ferrostat {} — statistics engine", env!("CARGO_PKG_VERSION"));
     println!("Type a command, or 'exit' to quit.");
     let stdin = io::stdin();
     loop {

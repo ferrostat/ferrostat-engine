@@ -155,7 +155,7 @@ fn column(e: &Results, stats: &[String], addstat: &[(String, f64)]) -> Vec<(Stri
     cells
 }
 
-/// Stata-like display label: `L.x` -> `L.x`, `2.g` -> `2.g`.
+/// Display label: `L.x` -> `L.x`, `2.g` -> `2.g`.
 fn display_label(n: &str) -> String {
     n.to_string()
 }

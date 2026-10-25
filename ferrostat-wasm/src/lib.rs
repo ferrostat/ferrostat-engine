@@ -80,6 +80,11 @@ impl Ferrostat {
         Value::Array(new).to_string()
     }
 
+    /// Command names for syntax highlighting (JSON array).
+    pub fn command_words(&self) -> String {
+        json!(self.session.command_words()).to_string()
+    }
+
     pub fn history(&self) -> String {
         json!(self.session.history).to_string()
     }

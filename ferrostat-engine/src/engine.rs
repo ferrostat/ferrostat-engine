@@ -27,6 +27,51 @@ pub enum ModelType {
     Other,
 }
 
+/// Aliases accepted for command names.
+const ALIASES: &[(&str, &str)] = &[
+    ("gen", "generate"),
+    ("g", "generate"),
+    ("su", "summarize"),
+    ("sum", "summarize"),
+    ("tab", "tabulate"),
+    ("ta", "tabulate"),
+    ("reg", "regress"),
+    ("d", "describe"),
+    ("des", "describe"),
+    ("desc", "describe"),
+    ("l", "list"),
+    ("li", "list"),
+    ("di", "display"),
+    ("dis", "display"),
+    ("cor", "correlate"),
+    ("corr", "correlate"),
+    ("tw", "twoway"),
+    ("sc", "scatter"),
+    ("hist", "histogram"),
+    ("mat", "matrix"),
+    ("est", "estimates"),
+    ("qui", "quietly"),
+    ("noi", "noisily"),
+    ("cap", "capture"),
+    ("forv", "forvalues"),
+    ("ren", "rename"),
+    ("lab", "label"),
+    ("u", "use"),
+    ("cou", "count"),
+    ("xi", "xi"),
+    ("tab1", "tab1"),
+    ("tab2", "tab2"),
+    ("bys", "bysort"),
+    ("ivreg", "ivregress"),
+    ("erase", "erase"),
+    ("rm", "erase"),
+    ("ls", "dir"),
+    ("cat", "type"),
+    ("logistic", "logistic"),
+    ("fre", "tabulate"),
+    ("outreg", "outreg2"),
+];
+
 /// (full name, minimal abbreviation length)
 const ABBREV: &[(&str, usize)] = &[
     ("generate", 1),
@@ -255,41 +300,7 @@ impl Engine {
     /// Resolve an abbreviated or aliased command name.
     pub fn resolve_verb(&self, verb: &str) -> String {
         let v = verb.to_lowercase();
-        let alias = match v.as_str() {
-            "gen" | "g" => Some("generate"),
-            "su" | "sum" => Some("summarize"),
-            "tab" | "ta" => Some("tabulate"),
-            "reg" => Some("regress"),
-            "d" | "des" | "desc" => Some("describe"),
-            "l" | "li" => Some("list"),
-            "di" | "dis" => Some("display"),
-            "cor" | "corr" => Some("correlate"),
-            "tw" => Some("twoway"),
-            "sc" => Some("scatter"),
-            "hist" => Some("histogram"),
-            "mat" => Some("matrix"),
-            "est" => Some("estimates"),
-            "qui" => Some("quietly"),
-            "noi" => Some("noisily"),
-            "cap" => Some("capture"),
-            "forv" => Some("forvalues"),
-            "ren" => Some("rename"),
-            "lab" => Some("label"),
-            "u" => Some("use"),
-            "cou" => Some("count"),
-            "xi" => Some("xi"),
-            "tab1" => Some("tab1"),
-            "tab2" => Some("tab2"),
-            "bys" => Some("bysort"),
-            "ivreg" => Some("ivregress"),
-            "erase" | "rm" => Some("erase"),
-            "ls" => Some("dir"),
-            "cat" => Some("type"),
-            "logistic" => Some("logistic"),
-            "fre" => Some("tabulate"),
-            "outreg" => Some("outreg2"),
-            _ => None,
-        };
+        let alias = ALIASES.iter().find(|(a, _)| *a == v).map(|(_, full)| *full);
         if let Some(a) = alias {
             return a.to_string();
         }
@@ -302,6 +313,21 @@ impl Engine {
             }
         }
         v
+    }
+
+    /// Every word accepted as a command name: registered commands, aliases
+    /// and all valid abbreviations (used for syntax highlighting).
+    pub fn command_words(&self) -> Vec<String> {
+        let mut words: Vec<String> = self.handlers.keys().map(|k| k.to_string()).collect();
+        words.extend(ALIASES.iter().map(|(a, _)| a.to_string()));
+        for (full, min) in ABBREV {
+            for len in *min..=full.len() {
+                words.push(full[..len].to_string());
+            }
+        }
+        words.sort();
+        words.dedup();
+        words
     }
 
     pub fn is_command(&self, verb: &str) -> bool {

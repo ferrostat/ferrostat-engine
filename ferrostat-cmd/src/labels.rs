@@ -48,7 +48,7 @@ impl CommandHandler for Label {
                 let v = varlist::resolve_name(ds, rest.first().ok_or_else(|| rc_err(198, "varname required"))?)?;
                 let text = rest.get(1).map(|s| unquote(s)).unwrap_or_default();
                 if text.len() > 80 {
-                    // Stata truncates at 80 characters
+                    // labels are truncated at 80 characters
                 }
                 ds.get_var_mut(&v).unwrap().label = text.chars().take(80).collect();
                 Ok(String::new())

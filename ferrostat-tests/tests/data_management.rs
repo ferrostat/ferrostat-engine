@@ -508,7 +508,7 @@ fn expand_constant() {
 fn expand_by_variable() {
     let mut s = Session::with_fixture();
     s.run("expand cnt");
-    // obs with cnt == 0 are kept once (Stata keeps n<1 as 1 observation)
+    // obs with cnt == 0 are kept once (n < 1 counts as 1 observation)
     let expected: f64 = CNT.iter().map(|&c| c.max(1.0)).sum();
     assert_eq!(s.n() as f64, expected);
 }
@@ -657,7 +657,7 @@ fn rename_case_options() {
 
 #[test]
 fn replace_is_sequential_for_recursive_formulas() {
-    // Stata evaluates replace observation by observation, so
+    // replace is evaluated observation by observation, so
     // y[_n-1] sees the value just replaced
     let mut s = Session::new();
     s.run("set obs 5");

@@ -50,7 +50,7 @@ fn summarize_single_observation_has_no_sd() {
     let out = s.run("summarize x in 1");
     let v = row(&out, "x").unwrap();
     assert_eq!(v[0], 1.0);
-    // Stata shows a missing sd ('.') for N == 1; the number must not be 0
+    // a missing sd ('.') is shown for N == 1; the number must not be 0
     assert!(v.len() < 5 || v[2] != 0.0, "{out}");
 }
 

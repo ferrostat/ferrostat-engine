@@ -407,7 +407,7 @@ pub fn rule(widths: &[usize]) -> String {
     widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join("+")
 }
 
-/// Integer with thousands separators, as in Stata messages (`76,038`).
+/// Integer with thousands separators (`76,038`).
 pub fn commas(n: usize) -> String {
     let s = n.to_string();
     let mut out = String::new();

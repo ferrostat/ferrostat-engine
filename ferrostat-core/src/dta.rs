@@ -15,6 +15,12 @@ use crate::missing;
 use crate::value_label::ValueLabel;
 use crate::var::{Value, VarType, Variable};
 
+/// Root tags of the XML-style .dta formats (117-119); they are part of the
+/// file format and must be written verbatim.
+pub const FORMAT_OPEN: &[u8] = b"<stata_dta><header><release>";
+pub const FORMAT_CLOSE: &[u8] = b"</stata_dta>";
+const FORMAT_ROOT_LEN: usize = 11;
+
 /// Error type for DTA I/O operations.
 #[derive(Debug, thiserror::Error)]
 pub enum DtaError {
@@ -166,7 +172,7 @@ impl DtaReader {
 
     /// Parse a .dta from memory.
     pub fn from_bytes(data: Vec<u8>) -> Result<DataSet> {
-        if data.starts_with(b"<stata_dta>") {
+        if data.starts_with(&FORMAT_OPEN[..FORMAT_ROOT_LEN]) {
             read_tagged(&data)
         } else if !data.is_empty() && matches!(data[0], 113 | 114 | 115) {
             read_binary(&data)
@@ -180,7 +186,7 @@ impl DtaReader {
 
 fn read_tagged(data: &[u8]) -> Result<DataSet> {
     let mut c = Cursor::new(data);
-    c.expect(b"<stata_dta><header><release>")?;
+    c.expect(FORMAT_OPEN)?;
     let rel: u16 = std::str::from_utf8(c.take(3)?)?.parse().map_err(|_| bad("bad release"))?;
     if !matches!(rel, 117 | 118 | 119) {
         return Err(DtaError::UnsupportedRelease(rel));
@@ -606,7 +612,7 @@ fn write_tagged(ds: &DataSet, rel: u16) -> Result<Vec<u8>> {
         return Err(bad("too many variables for this release"));
     }
     let mut o = Out { buf: Vec::new() };
-    o.put(b"<stata_dta><header><release>");
+    o.put(FORMAT_OPEN);
     o.put(rel.to_string().as_bytes());
     o.put(b"</release><byteorder>LSF</byteorder><K>");
     if rel == 119 { o.u32(k as u32) } else { o.u16(k as u16) }
@@ -756,7 +762,7 @@ fn write_tagged(ds: &DataSet, rel: u16) -> Result<Vec<u8>> {
     o.put(b"</value_labels>");
 
     map[12] = o.buf.len() as u64;
-    o.put(b"</stata_dta>");
+    o.put(FORMAT_CLOSE);
     map[13] = o.buf.len() as u64;
     for (i, m) in map.iter().enumerate() {
         o.buf[map_at + i * 8..map_at + i * 8 + 8].copy_from_slice(&m.to_le_bytes());

@@ -1,4 +1,4 @@
-//! Dense row-major matrices with Stata-style row/column names.
+//! Dense row-major matrices with row/column names.
 
 use ferrostat_core::missing::{is_missing, SYSMISS};
 
@@ -353,7 +353,7 @@ impl Matrix {
         self.data.iter().any(|&x| is_missing(x))
     }
 
-    /// Element with Stata-style missing for out-of-range.
+    /// Element, or missing when out of range.
     pub fn el(&self, i: usize, j: usize) -> f64 {
         if i < self.rows && j < self.cols { self[(i, j)] } else { SYSMISS }
     }

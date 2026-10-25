@@ -144,7 +144,7 @@ fn format_body(v: f64, f: &NumFormat) -> String {
     }
 }
 
-/// Stata-style exponential: mantissa with `d` decimals, two-digit exponent.
+/// Exponential notation: mantissa with `d` decimals, two-digit exponent.
 pub fn fmt_e(v: f64, d: usize) -> String {
     let s = format!("{:.*e}", d, v);
     let (m, e) = s.split_once('e').unwrap();

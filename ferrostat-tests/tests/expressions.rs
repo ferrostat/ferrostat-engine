@@ -251,7 +251,7 @@ fn regex_functions() {
 
 #[test]
 fn date_functions() {
-    // Stata dates count days since 01jan1960.
+    // dates count days since 01jan1960.
     assert_eq!(val("mdy(1, 1, 1960)"), 0.0);
     assert_eq!(val("mdy(1, 1, 2000)"), 14610.0);
     assert_eq!(val("date(\"2000-01-01\", \"YMD\")"), 14610.0);

@@ -155,6 +155,16 @@ impl Session {
         self.graph().and_then(|g| ferrostat_cmd::graph::render_svg(g, w, h).ok())
     }
 
+    /// Words the language accepts as commands (with abbreviations and aliases).
+    pub fn command_words(&self) -> Vec<String> {
+        let mut w = self.interp.engine().command_words();
+        w.extend(crate::progcmd::INTERP_COMMANDS.iter().map(|s| s.to_string()));
+        w.extend(["else", "end", "set", "version", "clear", "pause", "continue", "break", "assert", "sleep", "help"].iter().map(|s| s.to_string()));
+        w.sort();
+        w.dedup();
+        w
+    }
+
     pub fn pending(&self) -> bool {
         self.interp.is_pending()
     }
@@ -180,5 +190,10 @@ mod tests {
         assert!(s.graph_svg(200, 150).unwrap().contains("<svg"));
         assert_eq!(s.run_script("di 1+1\ndi 2+2"), 0);
         assert!(s.transcript.iter().any(|e| e.kind == EntryKind::Command && e.text == ". di 2+2"));
+        let words = s.command_words();
+        for w in ["regress", "reg", "gen", "generate", "foreach", "local", "xtivreg", "su"] {
+            assert!(words.iter().any(|x| x == w), "{w}");
+        }
+        assert!(!words.iter().any(|x| x == "x"));
     }
 }

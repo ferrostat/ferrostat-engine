@@ -234,7 +234,7 @@ impl CommandHandler for Histogram {
         } else if let Some(wd) = util::opt_num(cmd, "width", 1)? {
             (((hi - lo) / wd).ceil().max(1.0) as usize, wd)
         } else {
-            // Stata default: min(sqrt(N), 10 ln(N)/ln(10))
+            // default number of bins: min(sqrt(N), 10 ln(N)/ln(10))
             let k = util::opt_num(cmd, "bin", 3)?.map(|b| b as usize).unwrap_or_else(|| (n.sqrt().min(10.0 * n.ln() / 10f64.ln())).floor().max(1.0) as usize);
             (k, (hi - lo) / k as f64)
         };

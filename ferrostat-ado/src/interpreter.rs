@@ -101,7 +101,7 @@ impl AdoInterpreter {
         &mut self.engine
     }
 
-    /// Echo commands in the output (as Stata does in batch mode).
+    /// Echo commands in the output (batch mode).
     pub fn set_echo(&mut self, on: bool) {
         self.echo = on;
     }

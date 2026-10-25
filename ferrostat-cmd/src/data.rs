@@ -370,7 +370,7 @@ fn drop_keep(ds: &mut DataSet, st: &mut Store, cmd: &Command, drop: bool) -> Res
         }
     } else {
         ds.keep_variables(&vars);
-        // keep listed order of existing dataset (Stata keeps dataset order)
+        // keep the dataset order of the listed variables
     }
     Ok(String::new())
 }
@@ -391,7 +391,7 @@ impl CommandHandler for Rename {
             let wildcard = text.is_empty() || text == "*" || text == "_all";
             for v in vars {
                 // system-style names such as _ID are left alone by `rename *, lower`
-                // (observed in Stata's log for test-andrea/Spatial.do)
+                // (matches the reference output of the Spatial.do test script)
                 if wildcard && v.starts_with('_') {
                     continue;
                 }
@@ -614,7 +614,7 @@ fn sort_range_mfirst(ds: &mut DataSet, vars: &[String], desc: &[bool], a: usize,
                 if mfirst {
                     // keep missing first when descending with mfirst
                 } else if vx.is_missing() != vy.is_missing() {
-                    // Stata's gsort -x puts missing last by default
+                    // gsort -x puts missing last by default
                     o = if vx.is_missing() { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less };
                 }
             }

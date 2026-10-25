@@ -8,7 +8,7 @@ use ferrostat_core::missing::{missing_code, missing_name};
 use ferrostat_core::DataSet;
 use ferrostat_parser::parser::{parse_expression, split_top_level_words};
 
-/// Number as stored in a macro: full precision, Stata style.
+/// Number as stored in a macro: full precision.
 pub fn macro_number(v: f64) -> String {
     if let Some(c) = missing_code(v) {
         return missing_name(c);

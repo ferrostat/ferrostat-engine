@@ -128,7 +128,7 @@ fn subtraction_is_left_associative() {
 
 #[test]
 fn unary_minus_binds_looser_than_power() {
-    // In Stata -2^2 == -4
+    // -2^2 == -4 (power binds tighter than unary minus)
     assert_eq!(
         expr("-2^2"),
         Expr::Unary(UnaryOp::Neg, Box::new(Expr::Binary(num(2.0), BinOp::Pow, num(2.0))))

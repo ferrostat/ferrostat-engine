@@ -396,7 +396,7 @@ impl CommandHandler for Spmat {
     }
 }
 
-/// Stata gray scale gs0 (black) .. gs16 (white) and a few named colours.
+/// Gray scale gs0 (black) .. gs16 (white) and a few named colours.
 pub fn color_rgb(name: &str) -> (u8, u8, u8) {
     let n = name.trim().to_lowercase();
     if let Some(g) = n.strip_prefix("gs") {

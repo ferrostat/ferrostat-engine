@@ -692,7 +692,7 @@ fn cell(v: f64) -> String {
     fmt_g(v, 8)
 }
 
-/// Stata-style coefficient table.
+/// Coefficient table.
 pub fn coef_table(s: &TableSpec) -> Vec<String> {
     let stat = if s.df.is_some() { "t" } else { "z" };
     // label column: at least 12, widened for long names (max 32)

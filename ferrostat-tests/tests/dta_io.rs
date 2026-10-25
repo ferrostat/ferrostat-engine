@@ -20,8 +20,8 @@ fn writer_emits_format_118_header() {
     let mut buf = Vec::new();
     DtaWriter::write(&mut buf, &fixture()).unwrap();
     let head = String::from_utf8_lossy(&buf[..80]);
-    assert!(head.starts_with("<stata_dta><header><release>118</release>"), "{head}");
-    assert!(buf.ends_with(b"</stata_dta>"));
+    assert!(head.as_bytes().starts_with(ferrostat_core::dta::FORMAT_OPEN) && head.contains("118</release>"), "{head}");
+    assert!(buf.ends_with(ferrostat_core::dta::FORMAT_CLOSE));
 }
 
 #[test]

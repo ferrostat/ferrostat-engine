@@ -1,6 +1,6 @@
 //! Expression evaluator.
 //!
-//! Semantics follow the Stata expression language:
+//! Semantics of the do-file expression language:
 //! - missing values are larger than every number, so `. > 5` is true;
 //! - arithmetic involving a missing value gives `.`; so do domain errors
 //!   such as `ln(0)` or `1/0`;
@@ -307,7 +307,7 @@ impl<'a> Env<'a> {
     }
 
     fn eval_binary(&self, l: &Expr, op: &BinOp, r: &Expr, row: usize) -> Result<Val, String> {
-        // short-circuit is not used by Stata; evaluate both sides
+        // no short-circuit evaluation: evaluate both sides
         let a = self.eval(l, row)?;
         let b = self.eval(r, row)?;
         use BinOp::*;
@@ -612,6 +612,7 @@ fn c_value(env: &Env, key: &str) -> Val {
         "maxfloat" => Val::Num(1.70141173319e38),
         "maxstrvarlen" => Val::Num(2045.0),
         "maxvar" => Val::Num(120000.0),
+        // the first name is kept for existing do-files that query it
         "stata_version" | "version" => Val::Num(18.0),
         "current_date" => Val::Str(now.format("%e %b %Y").to_string().trim().to_string()),
         "current_time" => Val::Str(now.format("%H:%M:%S").to_string()),
@@ -731,7 +732,7 @@ fn wildcard_match(pat: &str, text: &str) -> bool {
     pi == p.len()
 }
 
-/// Convert Stata-style regex to Rust regex syntax (mostly compatible).
+/// Convert do-file regular expressions to Rust regex syntax (mostly compatible).
 fn regex(pat: &str) -> Result<regex::Regex, String> {
     thread_local! {
         static CACHE: RefCell<HashMap<String, regex::Regex>> = RefCell::new(HashMap::new());

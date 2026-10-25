@@ -163,7 +163,7 @@ impl Parser {
         if matches!(self.current(), Token::Bang | Token::Tilde) {
             self.advance();
             // `!` applies to a whole comparison operand: !(x) == 1 is rare;
-            // Stata gives `!` the highest precedence.
+            // `!` has the highest precedence.
             let operand = self.parse_not()?;
             return Ok(Expr::Unary(UnaryOp::Not, Box::new(operand)));
         }

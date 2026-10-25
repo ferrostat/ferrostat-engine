@@ -48,7 +48,7 @@ impl CommandHandler for Use {
         let path = with_ext(&path, "dta");
         let mut new = DtaReader::open(&path).map_err(|e| match e {
             ferrostat_core::dta::DtaError::Io(_) => rc_err(601, format!("file {path} not found")),
-            other => rc_err(610, format!("file {path} not Stata format ({other})")),
+            other => rc_err(610, format!("file {path} not a valid .dta dataset ({other})")),
         })?;
         let mut sub = cmd.clone();
         sub.main.clear();

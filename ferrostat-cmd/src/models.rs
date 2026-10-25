@@ -351,7 +351,7 @@ impl CommandHandler for BinaryModel {
         } else if d.y.iter().any(|&y| y < 0.0) {
             return Err(rc_err(459, format!("{dep} must be greater than or equal to zero")));
         }
-        // perfect prediction by a dummy regressor: drop it, as Stata does
+        // perfect prediction by a dummy regressor: drop it
         let mut notes = d.notes.clone();
         if !is_count {
             for j in 0..d.k() {
@@ -1364,7 +1364,7 @@ impl CommandHandler for Xtreg {
                     _ => df_r,
                 };
                 let vv = if cl.is_some() {
-                    // Stata's xtreg fe cluster uses (N-1)/(N-K) with K excluding the absorbed effects
+                    // xtreg fe cluster uses (N-1)/(N-K) with K excluding the absorbed effects
                     fit.v.clone()
                 } else {
                     fit.v.scale(scale)
@@ -2623,7 +2623,7 @@ impl CommandHandler for Xtivreg {
             return xtivreg_other(ds, st, cmd, &dep, &panel, endog.trim(), &zlist, dx, dz, &g, ng);
         }
         let n = dx.n() as f64;
-        // within transformation (grand means added back, as Stata does)
+        // within transformation (grand means added back)
         let demean = |d: &mut Design| {
             let (ym, xm) = within(d, &g, ng);
             let ybar = util::mean(&d.y);

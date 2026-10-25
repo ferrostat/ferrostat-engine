@@ -210,7 +210,7 @@ s2 = sum(u * u for u in ufe) / (n - 3 - 1)
 emit("FE_B", bfe); emit("FE_SE", math.sqrt(s2 / sum(a * a for a in xd)))
 emit("FE_CONS", mean(Y) - bfe * mean(X))
 
-# Gaussian kernel density of x at x=6.5 with Silverman bandwidth (Stata-style: 0.9*min(sd, iqr/1.349)*n^-1/5)
+# Gaussian kernel density of x at x=6.5 with Silverman bandwidth (0.9*min(sd, iqr/1.349)*n^-1/5)
 sx = sorted(X); iqr = pctile(X, 75) - pctile(X, 25)
 h = 0.9 * min(sd(X), iqr / 1.349) * n ** (-0.2)
 emit("KD_H", h)

@@ -226,14 +226,13 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
     }))
 }
 
+/// Commands handled by the interpreter itself rather than the engine.
+pub const INTERP_COMMANDS: &[&str] = &[
+    "local", "global", "macro", "display", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "error", "exit",
+];
+
 fn is_interp_command(n: &str) -> bool {
-    matches!(
-        n,
-        "local" | "global" | "macro" | "display" | "scalar" | "program" | "syntax" | "args" | "tokenize" | "gettoken" | "confirm" | "return" | "ereturn"
-            | "sreturn" | "marksample" | "markout" | "tempvar" | "tempname" | "tempfile" | "unab" | "numlist" | "do" | "run" | "include" | "log" | "cd"
-            | "pwd" | "dir" | "erase" | "mkdir" | "type" | "copy" | "shell" | "which" | "foreach" | "forvalues" | "while" | "if" | "capture"
-            | "quietly" | "noisily" | "by" | "bysort" | "putexcel" | "error" | "exit"
-    )
+    INTERP_COMMANDS.contains(&n)
 }
 
 fn error_text(code: i32) -> &'static str {

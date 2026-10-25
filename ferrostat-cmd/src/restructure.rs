@@ -457,7 +457,7 @@ fn reshape_long(ds: &DataSet, stubs: &[String], i_vars: &[String], jname: &str, 
             std::cmp::Ordering::Equal
         });
     }
-    // i vars first, then j, then stubs, then the rest (Stata order: i j stubs others)
+    // i vars first, then j, then stubs, then the rest
     let mut layout: Vec<Variable> = Vec::new();
     for iv in i_vars {
         let mut v = ds.get_var(iv).unwrap().clone();
@@ -600,7 +600,7 @@ fn reshape_wide(ds: &DataSet, stubs: &[String], i_vars: &[String], jname: &str) 
 
 fn load_using(path: &str) -> Result<DataSet, String> {
     let p = if ferrostat_core::vfs::exists(path) || path.ends_with(".dta") { path.to_string() } else { format!("{path}.dta") };
-    DtaReader::open(&p).map_err(|e| rc_err(601, format!("file {p} not found or not a Stata dataset ({e})")))
+    DtaReader::open(&p).map_err(|e| rc_err(601, format!("file {p} not found or not a valid .dta dataset ({e})")))
 }
 
 /// Append `other` to `ds`, harmonising types. Returns number of added obs.
