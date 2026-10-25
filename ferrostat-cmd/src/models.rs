@@ -2157,11 +2157,13 @@ fn active_cols(d: &Design) -> Vec<Vec<f64>> {
 }
 
 /// Two-step efficient GMM Hansen J statistic (cluster-robust when `cl` given).
-fn hansen_j(x: &[Vec<f64>], z: &[Vec<f64>], y: &[f64], cl: Option<&[f64]>) -> (f64, f64) {
+/// Returns (J, df, S); with `s_fixed` the given moment covariance is used
+/// instead of estimating one (difference-in-Hansen C statistic).
+fn hansen_j(x: &[Vec<f64>], z: &[Vec<f64>], y: &[f64], cl: Option<&[f64]>, s_fixed: Option<&Matrix>) -> (f64, f64, Matrix) {
     let n = y.len();
     let (kx, kz) = (x.len(), z.len());
     if kz <= kx {
-        return (0.0, 0.0);
+        return (0.0, 0.0, Matrix::zeros(kz, kz));
     }
     let mat = |cols: &[Vec<f64>]| {
         let mut m = Matrix::zeros(n, cols.len());
@@ -2213,14 +2215,16 @@ fn hansen_j(x: &[Vec<f64>], z: &[Vec<f64>], y: &[f64], cl: Option<&[f64]>) -> (f
         }
         s
     };
-    let b1 = gmm(&zzi);
-    let s = s_of(&resid(&b1));
+    let s = match s_fixed {
+        Some(s) => s.clone(),
+        None => s_of(&resid(&gmm(&zzi))),
+    };
     let (si, _) = s.sym_inverse(1e-14);
     let b2 = gmm(&si);
     let u2 = resid(&b2);
     let g: Vec<f64> = (0..kz).map(|a| (0..n).map(|t| z[a][t] * u2[t]).sum()).collect();
     let j: f64 = (0..kz).map(|a| (0..kz).map(|c| g[a] * si[(a, c)] * g[c]).sum::<f64>()).sum();
-    (j, (kz - kx) as f64)
+    (j, (kz - kx) as f64, s)
 }
 
 impl CommandHandler for Xtivreg {
@@ -2358,38 +2362,22 @@ impl CommandHandler for Xtivreg {
         let r2_o = corr2(&raw_y, &xb_raw).1;
         let ui_obs: Vec<f64> = (0..dx.n()).map(|t| ui[g[t]]).collect();
         let corr_u = corr2(&ui_obs, &xb_raw).0;
-        let (wald, q) = est::wald_all(&dx, &b, &v);
-        if std::env::var("FERRO_DEBUG").is_ok() {
-            let rss_hat: f64 = (0..dx.n()).map(|t| (dx.y[t] - xhat.xb(&b, t)).powi(2)).sum();
-            let tss_w: f64 = { let m = util::mean(&dx.y); dx.y.iter().map(|y| (y - m).powi(2)).sum() };
-            eprintln!("DEBUG wald={wald} q={q} n={n} ng={ng} df_r={df_r} rss={rss} rss_hat={rss_hat} tss_w={tss_w}");
-            eprintln!("DEBUG cand hatres={} ratio={}", wald * rss / rss_hat, rss / rss_hat);
+        let (_, q) = est::wald_all(&dx, &b, &v);
+        // The reported model test covers every coefficient including the
+        // constant (grand-mean parametrisation); its p-value uses that many
+        // degrees of freedom while the label shows the number of slopes.
+        let (wald, wald_df) = {
             let act: Vec<usize> = (0..dx.k()).filter(|&j| v[(j, j)] > 0.0).collect();
-            {
-                let m = act.len();
-                let mut vs = Matrix::zeros(m, m);
-                for (a, &i) in act.iter().enumerate() { for (c, &k) in act.iter().enumerate() { vs[(a, c)] = v[(i, k)]; } }
-                let (vi, _) = vs.sym_inverse(1e-14);
-                let w: f64 = (0..m).map(|a| (0..m).map(|c| b[act[a]] * vi[(a, c)] * b[act[c]]).sum::<f64>()).sum();
-                eprintln!("DEBUG all9 -> {w}");
-                // within OLS on actual X
-                let bo = est::ols(&dx, &Vce::Ols, None)?.b;
-                let rss_ols: f64 = (0..dx.n()).map(|t| (dx.y[t] - dx.xb(&bo, t)).powi(2)).sum();
-                eprintln!("DEBUG rss_ols={rss_ols} target_ss_for_171={}", 17.658/18.63*171.0);
-                // raw (non-demeaned) residuals
-                let rr: f64 = (0..dx.n()).map(|t| (raw_y[t] - b[cons] - (0..dx.k()).filter(|&j| j != cons).map(|j| b[j] * raw_x[j][t]).sum::<f64>()).powi(2)).sum();
-                eprintln!("DEBUG rss_raw={rr}");
+            let m = act.len();
+            let mut vs = Matrix::zeros(m, m);
+            for (a, &i) in act.iter().enumerate() {
+                for (c, &k) in act.iter().enumerate() {
+                    vs[(a, c)] = v[(i, k)];
+                }
             }
-            for &skip in &act {
-                let idx: Vec<usize> = act.iter().copied().filter(|&j| j != skip).collect();
-                let m = idx.len();
-                let mut vs = Matrix::zeros(m, m);
-                for (a, &i) in idx.iter().enumerate() { for (c, &k) in idx.iter().enumerate() { vs[(a, c)] = v[(i, k)]; } }
-                let (vi, _) = vs.sym_inverse(1e-14);
-                let w: f64 = (0..m).map(|a| (0..m).map(|c| b[idx[a]] * vi[(a, c)] * b[idx[c]]).sum::<f64>()).sum();
-                eprintln!("DEBUG skip {} -> {w}", dx.names[skip]);
-            }
-        }
+            let (vi, _) = vs.sym_inverse(1e-14);
+            ((0..m).map(|a| (0..m).map(|c| b[act[a]] * vi[(a, c)] * b[act[c]]).sum::<f64>()).sum::<f64>(), m as f64)
+        };
         // F test that all u_i = 0: compare with pooled IV on the same regressors
         let tcount: Vec<f64> = (0..ng).map(|gi| g.iter().filter(|&&x| x == gi).count() as f64).collect();
         let level = util::level(cmd, st)?;
@@ -2407,7 +2395,7 @@ impl CommandHandler for Xtivreg {
         out.push(format!("     Overall = {:<37}{:>15} = {:>10}", r2s(r2_o), "max", g10(tcount.iter().cloned().fold(0.0, f64::max))));
         out.push(String::new());
         out.push(format!("{:<52}{:<15} = {:>10}", "", format!("Wald chi2({})", q), f2(wald)));
-        out.push(format!("{:<52}{:<15} = {:>10}", format!("corr(u_i, Xb) = {:.4}", corr_u), "Prob > chi2", f4(dist::chi2tail(q, wald))));
+        out.push(format!("{:<52}{:<15} = {:>10}", format!("corr(u_i, Xb) = {:.4}", corr_u), "Prob > chi2", f4(dist::chi2tail(wald_df, wald))));
         out.push(String::new());
         out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &dx.names, b: &b, v: &v, omitted: &dx.omitted, is_base: &dx.is_base, df: None, level, eform: None, coef_title: "Coefficient" }));
         out.pop();
@@ -2421,57 +2409,141 @@ impl CommandHandler for Xtivreg {
         }
         let mut diag: Vec<(String, f64)> = Vec::new();
         if self.ivreg2 {
-            // identification: cluster/robust first-stage F of the excluded instruments
+            let robust = clv.is_some() || !matches!(vce, Vce::Ols | Vce::Oim);
+            let included: Vec<usize> = az.iter().copied().filter(|&j| dx.names.contains(&dz.names[j])).collect();
             let excluded: Vec<usize> = az.iter().copied().filter(|&j| !dx.names.contains(&dz.names[j])).collect();
             let endog_cols: Vec<usize> = ax.iter().copied().filter(|&j| !dz.names.contains(&dx.names[j])).collect();
-            out.push(String::new());
-            out.push("Identification and overidentification statistics".to_string());
-            for &j in &endog_cols {
-                let mut d1 = dz.clone();
-                d1.y = dx.cols[j].clone();
-                let full = est::ols(&d1, if clv.is_some() { &vce } else { &Vce::Robust }, clv.as_deref())?;
-                let q = excluded.len();
-                let mut vsub = Matrix::zeros(q, q);
-                for (a, &ea) in excluded.iter().enumerate() {
-                    for (c, &ec) in excluded.iter().enumerate() {
-                        vsub[(a, c)] = full.v[(ea, ec)];
-                    }
-                }
-                let (vi, _) = vsub.sym_inverse(1e-14);
-                let bs: Vec<f64> = excluded.iter().map(|&e| full.b[e]).collect();
-                let w: f64 = (0..q).map(|a| (0..q).map(|c| bs[a] * vi[(a, c)] * bs[c]).sum::<f64>()).sum();
-                let df2 = full.n_clust.map_or(full.df_r, |g| g as f64 - 1.0);
-                out.push(format!("  First-stage F({}, {}) for {} (excluded instruments) = {:.3}   Prob > F = {:.4}", q, df2, dx.names[j], w / q as f64, dist::ftail(q as f64, df2, w / q as f64)));
-                out.push(format!("  Robust Wald chi2({}) for {} = {:.3}   Prob > chi2 = {:.4}", q, dx.names[j], w, dist::chi2tail(q as f64, w)));
-                diag.push((format!("F_{}", dx.names[j]), w / q as f64));
+            // partial the included exogenous regressors out of Y1 and Z1
+            let mut d2 = dz.clone();
+            let keep: Vec<usize> = (0..dz.k()).filter(|j| !included.contains(j)).collect();
+            for &j in &keep {
+                d2.omitted[j] = true;
             }
+            let partial = |col: &[f64]| -> Result<Vec<f64>, String> {
+                let mut d = d2.clone();
+                d.y = col.to_vec();
+                let fit = est::ols(&d, &Vce::Ols, None)?;
+                Ok((0..d.n()).map(|t| d.y[t] - d.xb(&fit.b, t)).collect())
+            };
+            let y1: Vec<Vec<f64>> = endog_cols.iter().map(|&j| partial(&dx.cols[j])).collect::<Result<_, _>>()?;
+            let z1: Vec<Vec<f64>> = excluded.iter().map(|&j| partial(&dz.cols[j])).collect::<Result<_, _>>()?;
+            // fixed effects are absorbed: N net of the groups, L without the constant
+            let n_eff = n - ng as f64;
+            let l_inst = az.iter().filter(|&&j| dz.names[j] != "_cons").count() as f64;
+            let dof = crate::ivdiag::IdDof { n: n_eff, l: l_inst, clusters: n_clust.map(|g| g as f64), robust };
+            let rule = "-".repeat(78);
+            out.push(String::new());
+            out.push(rule.clone());
+            if let Some(id) = crate::ivdiag::identification(&y1, &z1, clv.as_deref(), &dof) {
+                let pid = dist::chi2tail(id.df, id.lm);
+                let lm_name = if robust { "Kleibergen-Paap rk LM statistic" } else { "Anderson canon. corr. LM statistic" };
+                out.push(format!("{:<66}{:>12.3}", format!("Underidentification test ({lm_name}):"), id.lm));
+                out.push(format!("{:>66}{:>12.4}", format!("Chi-sq({}) P-val =", id.df), pid));
+                out.push(rule.clone());
+                out.push(format!("{:<66}{:>12.3}", "Weak identification test (Cragg-Donald Wald F statistic):", id.cd_f));
+                if robust {
+                    out.push(format!("{:<66}{:>12.3}", "                         (Kleibergen-Paap rk Wald F statistic):", id.kp_f));
+                }
+                out.push("Critical values for weak identification: see Stock and Yogo (2005);".to_string());
+                if robust {
+                    out.push("they are tabulated for the Cragg-Donald statistic under i.i.d. errors.".to_string());
+                }
+                diag.push(("idstat".into(), id.lm));
+                diag.push(("iddf".into(), id.df));
+                diag.push(("idp".into(), pid));
+                diag.push(("cdf".into(), id.cd_f));
+                diag.push(("widstat".into(), if robust { id.kp_f } else { id.cd_f }));
+                if robust {
+                    diag.push(("rkf".into(), id.kp_f));
+                }
+            }
+            out.push(rule.clone());
             let xc = active_cols(&dx);
             let zc = active_cols(&dz);
-            let (j, jdf) = hansen_j(&xc, &zc, &dx.y, clv.as_deref());
+            // overidentification: Hansen J (robust) or Sargan (i.i.d.); `scale` fixes
+            // the moment covariance (S, or sigma² for Sargan) when given
+            let overid = |zcols: &[Vec<f64>], scale: Option<&(Matrix, f64)>| -> (f64, f64, (Matrix, f64)) {
+                if robust {
+                    let (j, df, s) = hansen_j(&xc, zcols, &dx.y, clv.as_deref(), scale.map(|sc| &sc.0));
+                    return (j, df, (s, 0.0));
+                }
+                let df = zcols.len() as f64 - xc.len() as f64;
+                let zm = crate::ivdiag::columns(zcols);
+                let (zzi, _) = zm.transpose().mul(&zm).unwrap().sym_inverse(1e-14);
+                // 2SLS with these instruments
+                let xm = crate::ivdiag::columns(&xc);
+                let zx = zm.transpose().mul(&xm).unwrap();
+                let zy = zm.transpose().mul(&Matrix::col_vector(&dx.y)).unwrap();
+                let a = zx.transpose().mul(&zzi).unwrap();
+                let (ai, _) = a.mul(&zx).unwrap().sym_inverse(1e-14);
+                let bb = ai.mul(&a.mul(&zy).unwrap()).unwrap();
+                let u: Vec<f64> = (0..dx.n()).map(|t| dx.y[t] - (0..xc.len()).map(|j| xc[j][t] * bb[(j, 0)]).sum::<f64>()).collect();
+                let s2 = scale.map(|sc| sc.1).unwrap_or_else(|| u.iter().map(|e| e * e).sum::<f64>() / n_eff);
+                if df <= 0.0 {
+                    return (0.0, 0.0, (Matrix::zeros(0, 0), s2));
+                }
+                let zu = zm.transpose().mul(&Matrix::col_vector(&u)).unwrap();
+                let upu = zu.transpose().mul(&zzi).unwrap().mul(&zu).unwrap()[(0, 0)];
+                (upu / s2, df, (Matrix::zeros(0, 0), s2))
+            };
+            let jname = if robust { "Hansen J statistic" } else { "Sargan statistic" };
+            let (j, jdf, _) = overid(&zc, None);
             if jdf > 0.0 {
-                out.push(format!("  Hansen J statistic (overidentification): chi2({}) = {:.3}   P-val = {:.4}", jdf, j, dist::chi2tail(jdf, j)));
-                diag.push(("j".into(), j));
-                diag.push(("jdf".into(), jdf));
+                let jp = dist::chi2tail(jdf, j);
+                out.push(format!("{:<66}{:>12.3}", format!("{jname} (overidentification test of all instruments):"), j));
+                out.push(format!("{:>66}{:>12.4}", format!("Chi-sq({}) P-val =", jdf), jp));
+                diag.push(("jp".into(), jp));
             } else {
-                out.push("  Hansen J statistic: 0.000 (equation exactly identified)".to_string());
-                diag.push(("j".into(), 0.0));
+                out.push(format!("{:<66}{:>12.3}", format!("{jname} (overidentification test of all instruments):"), 0.0));
+                out.push(format!("{:>78}", "(equation exactly identified)"));
             }
+            diag.push(("j".into(), j));
+            diag.push(("jdf".into(), jdf));
             if let Some(evars) = cmd.opt("endog", 3) {
                 // C statistic: J with the variables treated as exogenous minus J as specified
-                let test: Vec<usize> = endog_cols.iter().copied().filter(|&jj| evars.split_whitespace().any(|v| v.eq_ignore_ascii_case(&dx.names[jj]))).collect();
+                let wanted: Vec<String> = evars.split_whitespace().map(|v| v.to_lowercase()).collect();
+                let test: Vec<usize> = endog_cols.iter().copied().filter(|&jj| wanted.contains(&dx.names[jj].to_lowercase())).collect();
                 let mut zc2 = zc.clone();
                 for &jj in &test {
                     zc2.push(dx.cols[jj].clone());
                 }
-                let (j2, _) = hansen_j(&xc, &zc2, &dx.y, clv.as_deref());
-                let c = (j2 - j).max(0.0);
+                // both statistics use the moment covariance of the larger instrument set
+                let (j2, _, sc) = overid(&zc2, None);
+                let sc_small = if robust {
+                    let k = zc.len();
+                    let mut s = Matrix::zeros(k, k);
+                    for a in 0..k {
+                        for c in 0..k {
+                            s[(a, c)] = sc.0[(a, c)];
+                        }
+                    }
+                    (s, 0.0)
+                } else {
+                    sc
+                };
+                let (j1, _, _) = overid(&zc, Some(&sc_small));
+                let c = (j2 - j1).max(0.0);
                 let cdf = test.len() as f64;
-                out.push(format!("  Endogeneity test of {}: chi2({}) = {:.3}   P-val = {:.4}", evars.trim(), cdf, c, dist::chi2tail(cdf, c)));
+                let cp = dist::chi2tail(cdf, c);
+                out.push(rule.clone());
+                out.push("-endog- option:".to_string());
+                out.push(format!("{:<66}{:>12.3}", "Endogeneity test of endogenous regressors:", c));
+                out.push(format!("{:>66}{:>12.4}", format!("Chi-sq({}) P-val =", cdf), cp));
+                out.push(format!("Regressors tested:    {}", test.iter().map(|&jj| dx.names[jj].clone()).collect::<Vec<_>>().join(" ")));
                 diag.push(("estat".into(), c));
+                diag.push(("estatdf".into(), cdf));
+                diag.push(("estatp".into(), cp));
             }
+            out.push(rule.clone());
+            out.push(format!("Instrumented:         {}", endog_cols.iter().map(|&j| dx.names[j].clone()).collect::<Vec<_>>().join(" ")));
+            out.push(format!("Included instruments: {}", included.iter().filter(|&&j| dz.names[j] != "_cons").map(|&j| dz.names[j].clone()).collect::<Vec<_>>().join(" ")));
+            out.push(format!("Excluded instruments: {}", excluded.iter().map(|&j| dz.names[j].clone()).collect::<Vec<_>>().join(" ")));
+            out.push(rule);
         }
-        out.push(format!("Endogenous: {}", endog.trim()));
-        out.push(format!("Exogenous:  {}", zlist.split_whitespace().collect::<Vec<_>>().join(" ")));
+        if !self.ivreg2 {
+            out.push(format!("Endogenous: {}", endog.trim()));
+            out.push(format!("Exogenous:  {}", zlist.split_whitespace().collect::<Vec<_>>().join(" ")));
+        }
         let text = out.join("\n");
         let cmdname = self.name();
         est::post(st, cmdname, &dx, &b, &v, &|e: &mut Results| {

@@ -62,7 +62,7 @@ Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with
 | Descriptive | `summarize` (incl. `detail`, weights), `tabulate` (one/two-way, `chi2`, `lrchi2`, `exact`, `V`, `gamma`, `taub`, `generate()`), `tab1`, `tab2`, `tabstat`, `correlate`, `pwcorr`, `spearman`, `centile`, `mean`, `ci`, `codebook`, `misstable` |
 | Tests | `ttest` (one-sample, paired, by-group, unequal/Welch), `prtest`, `sdtest`, `ranksum`, `signrank`, `signtest`, `kwallis`, `oneway`, `ksmirnov`, `swilk`, `hausman` |
 | Linear models | `regress` (robust, cluster, `fw`/`aw`/`pw`/`iw`), `anova`, `areg`, `qreg`, `ivregress 2sls` |
-| Panel | `xtreg` (`fe`, `re`, `be`, cluster), `xtivreg`/`xtivreg2` (`fe`, cluster, Hansen J, first-stage and endogeneity tests), `xtpmg` (PMG, MG; Pesaran CD test) |
+| Panel | `xtreg` (`fe`, `re`, `be`, cluster), `xtivreg`/`xtivreg2` (`fe`, cluster; Kleibergen–Paap and Cragg–Donald identification tests, Hansen J, C endogeneity test), `xtpmg` (PMG, MG; Pesaran CD test) |
 | Nonlinear | `logit`, `logistic`, `probit`, `cloglog`, `poisson`, `nbreg`, `ologit`, `oprobit`, `mlogit`, `tobit`, `glm` (6 families, 7 links) |
 | Post-estimation | `predict` (xb, residuals, stdp/stdf/stdr, leverage, rstandard/rstudent, cooksd, pr, n, ir, mu, u/e/xbu, scores), `test`, `testparm`, `lincom`, `margins` (predictive margins, `dydx()`, `at()`, `atmeans`; delta-method SEs), `estimates store/restore/table/stats`, `estat ic/vce/hettest/ovtest/vif/summarize/firststage` |
 | Spatial | `shp2dta` (ESRI shapefile + dBase import), `spmat contiguity` (queen/rook, row/minmax/spectral normalisation), `spmat lag`, `spmap` (choropleths) |
@@ -266,8 +266,7 @@ cargo test --workspace
 
 - Mata and Python blocks are not supported.
 - Community packages are not downloaded; only the natively implemented ones above are available.
-- `xtivreg`: the header Wald χ² can differ from the original software (coefficients and standard errors match).
-- `xtivreg2` diagnostics use robust first-stage F and two-step-GMM Hansen J; the Kleibergen–Paap rank statistics are not implemented.
+- `xtivreg2` reports the Kleibergen–Paap rk LM/Wald F (Anderson LM and Cragg–Donald F under i.i.d. errors), Hansen J/Sargan and the C endogeneity test. Its header follows `xtivreg`, and the small-sample conventions under fixed effects with clustering have not yet been checked against original output; Stock–Yogo critical values are not tabulated.
 - Random-number streams are reproducible within Ferrostat but differ from other software for the same seed.
 - `graph combine` lays out graphs in a grid; graph schemes and most styling options are accepted but ignored.
 
@@ -276,7 +275,7 @@ cargo test --workspace
 ## Provenance
 
 - The `.dta` format is implemented from publicly available documentation.
-- All statistical algorithms are textbook implementations (Wooldridge, Greene, Cameron & Trivedi, Pesaran–Shin–Smith) or standard numerical methods.
+- All statistical algorithms are textbook implementations (Wooldridge, Greene, Cameron & Trivedi, Hayashi, Pesaran–Shin–Smith, Kleibergen–Paap 2006, Cragg–Donald 1993) or standard numerical methods.
 - Every parser rule, AST node, and evaluation function is original code.
 - Expected test values come from an independent reference implementation, not from running other software.
 - Graphics are produced via the open-source `plotters` crate.

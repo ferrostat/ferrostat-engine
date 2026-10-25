@@ -9,6 +9,7 @@ pub mod eval;
 pub mod format;
 pub mod graph;
 pub mod io;
+pub mod ivdiag;
 pub mod kdensity;
 pub mod labels;
 pub mod listing;

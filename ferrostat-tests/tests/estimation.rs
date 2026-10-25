@@ -370,7 +370,44 @@ fn xtivreg2_matches_xtivreg_and_reports_diagnostics() {
     s.run("xtivreg2 y (x = z1 z2), fe cluster(id)");
     assert_close(s.scalar("_b[x]"), b, 1e-10);
     assert_eq!(s.scalar("e(N_clust)"), 20.0);
+    assert!(s.scalar("e(rkf)") > 0.0);
+    assert_eq!(s.scalar("e(iddf)"), 2.0);
     // exactly identified: J = 0
     s.run("xtivreg2 y (x = z1), fe");
     assert_eq!(s.scalar("e(j)"), 0.0);
+}
+
+#[test]
+fn xtivreg2_identification_statistics() {
+    let mut s = Session::new();
+    iv_panel(&mut s);
+    // i.i.d.: Cragg-Donald F = F test of the excluded instruments in the within first stage
+    s.run("xtreg x z1 z2, fe");
+    let f = s.scalar("e(F)");
+    s.run("xtivreg2 y (x = z1 z2), fe");
+    assert_close(s.scalar("e(cdf)"), f, 1e-8);
+    assert_close(s.scalar("e(widstat)"), f, 1e-8);
+    assert!(s.scalar("e(idstat)") > 0.0 && s.scalar("e(idp)") < 0.05);
+    let out = s.run("xtivreg2 y (x = z1 z2), fe robust");
+    assert!(out.contains("Kleibergen-Paap rk LM statistic"));
+    assert!(out.contains("Kleibergen-Paap rk Wald F statistic"));
+    assert!(out.contains("Hansen J statistic"));
+    // x shares the structural error: the endogeneity (C) test must reject
+    s.run("xtivreg2 y (x = z1 z2), fe endog(x)");
+    assert!(s.scalar("e(estatp)") < 0.01, "C = {}", s.scalar("e(estat)"));
+    s.run("xtivreg2 y (x = z1 z2), fe cluster(id) endog(x)");
+    assert!(s.scalar("e(estatp)") < 0.01, "C = {}", s.scalar("e(estat)"));
+}
+
+#[test]
+fn xtivreg_wald_covers_constant() {
+    // the header test includes _cons; its p-value uses k + 1 degrees of freedom
+    let mut s = Session::new();
+    iv_panel(&mut s);
+    s.run("xtivreg y (x = z1 z2), fe");
+    s.run("matrix b = e(b)");
+    s.run("matrix V = e(V)");
+    s.run("matrix w = b * invsym(V) * b'");
+    assert_close(s.scalar("e(chi2)"), s.scalar("w[1,1]"), 1e-8);
+    assert_eq!(s.scalar("e(df_m)"), 1.0);
 }
