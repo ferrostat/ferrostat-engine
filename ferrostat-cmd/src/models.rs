@@ -2359,6 +2359,37 @@ impl CommandHandler for Xtivreg {
         let ui_obs: Vec<f64> = (0..dx.n()).map(|t| ui[g[t]]).collect();
         let corr_u = corr2(&ui_obs, &xb_raw).0;
         let (wald, q) = est::wald_all(&dx, &b, &v);
+        if std::env::var("FERRO_DEBUG").is_ok() {
+            let rss_hat: f64 = (0..dx.n()).map(|t| (dx.y[t] - xhat.xb(&b, t)).powi(2)).sum();
+            let tss_w: f64 = { let m = util::mean(&dx.y); dx.y.iter().map(|y| (y - m).powi(2)).sum() };
+            eprintln!("DEBUG wald={wald} q={q} n={n} ng={ng} df_r={df_r} rss={rss} rss_hat={rss_hat} tss_w={tss_w}");
+            eprintln!("DEBUG cand hatres={} ratio={}", wald * rss / rss_hat, rss / rss_hat);
+            let act: Vec<usize> = (0..dx.k()).filter(|&j| v[(j, j)] > 0.0).collect();
+            {
+                let m = act.len();
+                let mut vs = Matrix::zeros(m, m);
+                for (a, &i) in act.iter().enumerate() { for (c, &k) in act.iter().enumerate() { vs[(a, c)] = v[(i, k)]; } }
+                let (vi, _) = vs.sym_inverse(1e-14);
+                let w: f64 = (0..m).map(|a| (0..m).map(|c| b[act[a]] * vi[(a, c)] * b[act[c]]).sum::<f64>()).sum();
+                eprintln!("DEBUG all9 -> {w}");
+                // within OLS on actual X
+                let bo = est::ols(&dx, &Vce::Ols, None)?.b;
+                let rss_ols: f64 = (0..dx.n()).map(|t| (dx.y[t] - dx.xb(&bo, t)).powi(2)).sum();
+                eprintln!("DEBUG rss_ols={rss_ols} target_ss_for_171={}", 17.658/18.63*171.0);
+                // raw (non-demeaned) residuals
+                let rr: f64 = (0..dx.n()).map(|t| (raw_y[t] - b[cons] - (0..dx.k()).filter(|&j| j != cons).map(|j| b[j] * raw_x[j][t]).sum::<f64>()).powi(2)).sum();
+                eprintln!("DEBUG rss_raw={rr}");
+            }
+            for &skip in &act {
+                let idx: Vec<usize> = act.iter().copied().filter(|&j| j != skip).collect();
+                let m = idx.len();
+                let mut vs = Matrix::zeros(m, m);
+                for (a, &i) in idx.iter().enumerate() { for (c, &k) in idx.iter().enumerate() { vs[(a, c)] = v[(i, k)]; } }
+                let (vi, _) = vs.sym_inverse(1e-14);
+                let w: f64 = (0..m).map(|a| (0..m).map(|c| b[idx[a]] * vi[(a, c)] * b[idx[c]]).sum::<f64>()).sum();
+                eprintln!("DEBUG skip {} -> {w}", dx.names[skip]);
+            }
+        }
         // F test that all u_i = 0: compare with pooled IV on the same regressors
         let tcount: Vec<f64> = (0..ng).map(|gi| g.iter().filter(|&&x| x == gi).count() as f64).collect();
         let level = util::level(cmd, st)?;

@@ -4,6 +4,7 @@ A statistical computing engine written in Rust. Ferrostat provides an environmen
 
 [![CI](https://img.shields.io/badge/CI-linux%20%7C%20windows%20%7C%20macOS%20%7C%20wasm-blue.svg)](.github/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
+[![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
 
 ---
 
@@ -302,7 +303,11 @@ Please open an issue before large refactors.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+Ferrostat is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE) for the full text.
+
+Ferrostat is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+Third-party crates keep their own (permissive) licences; the desktop build also embeds the egui default fonts (OFL-1.1 and Ubuntu Font Licence).
 
 ---
 
