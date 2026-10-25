@@ -176,11 +176,7 @@ sudo cp target/release/ferrostat /usr/local/bin/
 
 ### System Dependencies
 
-```bash
-# Ubuntu/Debian (fonts for graph rendering)
-sudo apt-get install libfontconfig1-dev
-```
-Windows and macOS need no extra packages.
+None: graph text uses an embedded copy of the DejaVu Sans font (`assets/fonts`, Bitstream Vera licence), so builds need no system font libraries on any platform.
 
 ---
 

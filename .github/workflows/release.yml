@@ -24,9 +24,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - name: Install font libraries (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
       - name: Build
         run: cargo build --release -p ferrostat-repl -p ferrostat-gui --target ${{ matrix.target }}
       - name: Package

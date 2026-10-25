@@ -39,6 +39,9 @@ pub struct Layer {
 pub struct Graph {
     pub title: String,
     pub xtitle: String,
+    /// display formats of the axis variables (date formats label the ticks)
+    pub xformat: String,
+    pub yformat: String,
     pub ytitle: String,
     pub layers: Vec<Layer>,
     pub xlabels: Vec<(f64, String)>,
@@ -182,20 +185,32 @@ impl CommandHandler for Twoway {
         } else {
             vec![cmd.raw.clone()]
         };
+        let mut yformats: Vec<String> = Vec::new();
         for spec in specs {
             let c = parse_line(&spec).map_err(|e| rc_err(198, e))?;
             if c.verb.is_empty() {
                 continue;
             }
             graph.layers.extend(plot_layers(ds, st, &c)?);
+            let vars = varlist::expand(ds, &c.main)?;
             if graph.xtitle.is_empty() {
-                if let Some(x) = varlist::expand(ds, &c.main)?.last() {
+                if let Some(x) = vars.last() {
                     graph.xtitle = ds.get_var(x).map(|v| if v.label.is_empty() { x.clone() } else { v.label.clone() }).unwrap_or_default();
+                    graph.xformat = ds.get_var(x).map(|v| v.format.clone()).unwrap_or_default();
                 }
+            }
+            if vars.len() >= 2 {
+                yformats.extend(vars[..vars.len() - 1].iter().map(|y| ds.get_var(y).map(|v| v.format.clone()).unwrap_or_default()));
             }
         }
         if graph.layers.is_empty() {
             return Err(rc_err(2000, "no observations"));
+        }
+        // the y axis uses the y variables' format only when they all share it
+        if let Some(first) = yformats.first() {
+            if yformats.iter().all(|f| f == first) {
+                graph.yformat = first.clone();
+            }
         }
         graph.legend = graph.layers.len() > 1;
         if graph.layers.len() == 1 {
@@ -598,7 +613,7 @@ pub fn pdf_with_image(rgb: &[u8], w: u32, h: u32) -> Vec<u8> {
 /// Save a graph in Ferrostat's own text-based .gph format.
 pub fn save_gph(g: &Graph, path: &str) -> Result<(), String> {
     let mut s = String::from("ferrostat-graph 1\n");
-    s.push_str(&format!("title\t{}\nxtitle\t{}\nytitle\t{}\nlegend\t{}\n", g.title, g.xtitle, g.ytitle, g.legend));
+    s.push_str(&format!("title\t{}\nxtitle\t{}\nytitle\t{}\nlegend\t{}\nxformat\t{}\nyformat\t{}\n", g.title, g.xtitle, g.ytitle, g.legend, g.xformat, g.yformat));
     s.push_str(&format!("ylines\t{}\nxlines\t{}\n", join(&g.ylines), join(&g.xlines)));
     for (x, l) in &g.xlabels {
         s.push_str(&format!("xlabel\t{x}\t{l}\n"));
@@ -631,6 +646,8 @@ pub fn load_gph(path: &str) -> Result<Graph, String> {
         match f[0] {
             "title" => g.title = f.get(1).unwrap_or(&"").to_string(),
             "xtitle" => g.xtitle = f.get(1).unwrap_or(&"").to_string(),
+            "xformat" => g.xformat = f.get(1).unwrap_or(&"").to_string(),
+            "yformat" => g.yformat = f.get(1).unwrap_or(&"").to_string(),
             "ytitle" => g.ytitle = f.get(1).unwrap_or(&"").to_string(),
             "legend" => g.legend = f.get(1) == Some(&"true"),
             "ylines" => g.ylines = nums(f.get(1).unwrap_or(&"")),
@@ -666,11 +683,48 @@ pub fn load_gph(path: &str) -> Result<Graph, String> {
     Ok(g)
 }
 
+/// Date and time display formats (`%td`, `%d`, `%tc`, `%tm`, `%tq`, ...).
+fn is_date_format(f: &str) -> bool {
+    let f = f.trim_start_matches('%').trim_start_matches('-');
+    f.starts_with('t') || f.starts_with('d')
+}
+
+/// Axis tick label: dates in the variable's display format, numbers in
+/// general format (no spurious trailing `.0`).
+fn tick_label(v: f64, format: &str) -> String {
+    if is_date_format(format) {
+        // ticks fall between dates: label the date they belong to
+        crate::format::fmt(v.round(), format).trim().to_string()
+    } else {
+        let r = (v * 1e9).round() / 1e9;
+        crate::format::fmt_g(r, 6)
+    }
+}
+
+/// Register the embedded font used for all graph text (native builds; the
+/// browser build measures and draws text with the page's fonts).
+#[cfg(not(target_arch = "wasm32"))]
+fn register_fonts() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        static FONT: &[u8] = include_bytes!("../../assets/fonts/DejaVuSans.ttf");
+        for family in ["sans-serif", "serif", "monospace"] {
+            for style in [FontStyle::Normal, FontStyle::Bold, FontStyle::Italic, FontStyle::Oblique] {
+                let _ = plotters::style::register_font(family, style, FONT);
+            }
+        }
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn register_fonts() {}
+
 fn draw<DB: DrawingBackend>(g: &Graph, root: &DrawingArea<DB, plotters::coord::Shift>) -> Result<(), String>
 where
     DB::ErrorType: 'static,
 {
     let e = |x: DrawingAreaErrorKind<DB::ErrorType>| rc_err(603, format!("could not render graph: {x:?}"));
+    register_fonts();
     root.fill(&WHITE).map_err(e)?;
     if !g.children.is_empty() {
         let cols = g.cols.max(1);
@@ -723,14 +777,20 @@ where
     let labels = g.xlabels.clone();
     let mut mesh = chart.configure_mesh();
     mesh.x_desc(g.xtitle.clone()).y_desc(g.ytitle.clone()).light_line_style(WHITE);
+    let (xfmt, yfmt) = (g.xformat.clone(), g.yformat.clone());
     let fmt_x = move |x: &f64| {
         if labels.is_empty() {
-            crate::format::fmt_g(*x, 6)
+            tick_label(*x, &xfmt)
         } else {
             labels.iter().find(|(p, _)| (p - x).abs() < 0.26).map(|(_, l)| l.clone()).unwrap_or_default()
         }
     };
-    mesh.x_label_formatter(&fmt_x);
+    let fmt_y = move |y: &f64| tick_label(*y, &yfmt);
+    mesh.x_label_formatter(&fmt_x).y_label_formatter(&fmt_y);
+    if is_date_format(&g.xformat) {
+        // date labels are wide: fewer of them
+        mesh.x_labels(6);
+    }
     mesh.draw().map_err(e)?;
     for (k, l) in g.layers.iter().enumerate() {
         let col = COLORS[k % COLORS.len()];
@@ -747,7 +807,8 @@ where
                 chart.draw_series(l.points.iter().map(|p| Circle::new(*p, 3, col.filled()))).map_err(e)?.label(label).legend(move |(x, y)| Circle::new((x + 10, y), 3, col.filled()));
             }
             LayerKind::Area => {
-                chart.draw_series(AreaSeries::new(l.points.clone(), 0.0, col.mix(0.4)).border_style(col)).map_err(e)?.label(label).legend(move |(x, y)| Rectangle::new([(x, y - 5), (x + 20, y + 5)], col.filled()));
+                // opaque fills drawn in order: later series cover earlier ones
+                chart.draw_series(AreaSeries::new(l.points.clone(), 0.0, col.filled()).border_style(col)).map_err(e)?.label(label).legend(move |(x, y)| Rectangle::new([(x, y - 5), (x + 20, y + 5)], col.filled()));
             }
             LayerKind::Bar => {
                 let hw = l.width / 2.0 * 0.95;

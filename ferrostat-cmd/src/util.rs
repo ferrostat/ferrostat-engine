@@ -227,6 +227,9 @@ pub fn cell_text(ds: &DataSet, var: &Variable, i: usize, labels: bool) -> String
                     return l.to_string();
                 }
             }
+            // floats hold ~7 significant digits: show the shortest decimal that
+            // is the same float, not the digits its double conversion invents
+            let v = if var.var_type == VarType::Float && !is_missing(v) { (v as f32).to_string().parse().unwrap_or(v) } else { v };
             fmt_cell(v, &var.format)
         }
     }

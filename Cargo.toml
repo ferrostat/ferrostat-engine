@@ -25,7 +25,8 @@ serde = { version = "1", features = ["derive"] }
 regex = "1"
 chrono = "0.4"
 csv = "1"
-plotters = "0.3"
+# text is drawn with an embedded font (ab_glyph), not the system font library
+plotters = { version = "0.3", default-features = false, features = ["bitmap_backend", "svg_backend", "all_series", "all_elements", "full_palette", "ab_glyph"] }
 statrs = "0.17"
 lazy_static = "1"
 

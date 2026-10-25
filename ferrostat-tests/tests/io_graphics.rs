@@ -197,3 +197,38 @@ fn export_excel_roundtrip() {
     s.run(&format!("import excel \"{}\", sheet(\"Third\") firstrow clear", path.display()));
     assert_eq!(s.nums("id"), [9.0, 10.0, 11.0, 12.0]);
 }
+
+#[test]
+fn date_axis_ticks_use_the_variable_format() {
+    let dir = temp_dir("date_axis");
+    let mut s = Session::new();
+    s.run("set obs 15");
+    s.run("generate date = mdy(1, 1, 2001) + _n");
+    s.run("format date %td");
+    s.run("generate double y = 1300 + 3 * _n");
+    s.run("generate double z = 1290 + 2 * _n");
+    s.run("twoway area y z date");
+    let f = dir.join("g.svg");
+    s.run(&format!("graph export \"{}\", replace", f.display()));
+    let svg = std::fs::read_to_string(&f).unwrap();
+    assert!(svg.contains("jan2001"), "x ticks should be dates");
+    assert!(!svg.contains(">14980<") && !svg.contains(".0<"), "no raw day numbers or trailing .0");
+    // the format survives graph save / graph use
+    let gph = dir.join("g.gph");
+    s.run(&format!("graph save \"{}\", replace", gph.display()));
+    s.run(&format!("graph use \"{}\"", gph.display()));
+    s.run(&format!("graph export \"{}\", replace", f.display()));
+    assert!(std::fs::read_to_string(&f).unwrap().contains("jan2001"));
+}
+
+#[test]
+fn float_cells_are_shown_at_float_precision() {
+    let mut s = Session::new();
+    s.run("set obs 2");
+    s.run("generate float p = 1347.56");
+    s.run("generate double d = 1347.56005859375");
+    let out = s.run("list p d");
+    assert!(out.contains(" 1347.56 "), "{out}");
+    // a double keeps its digits
+    assert!(out.contains("1347.5601"), "{out}");
+}
