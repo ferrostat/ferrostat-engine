@@ -599,7 +599,7 @@ fn reshape_wide(ds: &DataSet, stubs: &[String], i_vars: &[String], jname: &str) 
 // ---- append / merge -------------------------------------------------------------
 
 fn load_using(path: &str) -> Result<DataSet, String> {
-    let p = if std::path::Path::new(path).exists() || path.ends_with(".dta") { path.to_string() } else { format!("{path}.dta") };
+    let p = if ferrostat_core::vfs::exists(path) || path.ends_with(".dta") { path.to_string() } else { format!("{path}.dta") };
     DtaReader::open(&p).map_err(|e| rc_err(601, format!("file {p} not found or not a Stata dataset ({e})")))
 }
 

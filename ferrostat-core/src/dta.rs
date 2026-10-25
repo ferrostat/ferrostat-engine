@@ -7,8 +7,7 @@
 //! Sections of the tagged formats are located through the `<map>` offsets,
 //! never by searching the payload for tag bytes.
 
-use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::Path;
 
 use crate::dataset::DataSet;
@@ -161,9 +160,7 @@ pub struct DtaReader;
 impl DtaReader {
     /// Read a .dta file from disk.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<DataSet> {
-        let mut f = File::open(path)?;
-        let mut data = Vec::new();
-        f.read_to_end(&mut data)?;
+        let data = crate::vfs::read(&path.as_ref().to_string_lossy())?;
         Self::from_bytes(data)
     }
 

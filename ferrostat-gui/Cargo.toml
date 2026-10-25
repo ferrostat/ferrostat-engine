@@ -1,0 +1,19 @@
+[package]
+name = "ferrostat-gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Ferrostat desktop interface"
+
+[[bin]]
+name = "ferrostat-gui"
+path = "src/main.rs"
+
+[dependencies]
+ferrostat-ado = { path = "../ferrostat-ado" }
+ferrostat-cmd = { path = "../ferrostat-cmd" }
+ferrostat-core = { path = "../ferrostat-core" }
+eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "wayland", "x11"] }
+egui_extras = "0.37"
+rfd = "0.17"

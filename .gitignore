@@ -19,3 +19,4 @@
 .idea/
 .vscode/
 *.swp
+/ferrostat-wasm/web/pkg/

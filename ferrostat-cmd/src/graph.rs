@@ -304,13 +304,15 @@ impl CommandHandler for GraphCmd {
                     None => st.graph.clone(),
                 }
                 .ok_or_else(|| rc_err(693, "no graph in memory"))?;
-                if std::path::Path::new(&file).exists() && !c.has_opt("replace", 3) {
+                if ferrostat_core::vfs::exists(&file) && !c.has_opt("replace", 3) {
                     return Err(rc_err(602, format!("file {file} already exists")));
                 }
                 let width = util::opt_num(&c, "width", 2)?.unwrap_or(800.0) as u32;
                 let height = util::opt_num(&c, "height", 2)?.unwrap_or(width as f64 * 0.75) as u32;
                 render(&g, &file, width, height)?;
-                Ok(format!("file {file} written in {} format", if file.ends_with(".svg") { "SVG" } else { "PNG" }))
+                let lower = file.to_lowercase();
+                let kind = if lower.ends_with(".svg") { "SVG" } else if lower.ends_with(".pdf") { "PDF" } else if lower.ends_with(".gph") { "gph" } else { "PNG" };
+                Ok(format!("file {file} written in {kind} format"))
             }
             "twoway" | "tw" => {
                 let c = parse_line(&format!("twoway {rest}")).map_err(|e| rc_err(198, e))?;
@@ -340,7 +342,7 @@ impl CommandHandler for GraphCmd {
                     _ => return Err(rc_err(198, "graph save [graphname] filename")),
                 };
                 let file = if file.contains('.') { file } else { format!("{file}.gph") };
-                if std::path::Path::new(&file).exists() && !c.has_opt("replace", 3) {
+                if ferrostat_core::vfs::exists(&file) && !c.has_opt("replace", 3) {
                     return Err(rc_err(602, format!("file {file} already exists")));
                 }
                 let g = match name {
@@ -454,22 +456,111 @@ const COLORS: [RGBColor; 6] = [RGBColor(26, 71, 111), RGBColor(144, 53, 59), RGB
 pub fn render(g: &Graph, path: &str, w: u32, h: u32) -> Result<(), String> {
     let lower = path.to_lowercase();
     if lower.ends_with(".svg") {
-        let root = SVGBackend::new(path, (w, h)).into_drawing_area();
-        draw(g, &root)
-    } else if lower.ends_with(".pdf") {
-        // rasterise, then embed the bitmap in a single-page PDF
-        let mut buf = vec![0u8; (w * h * 3) as usize];
-        {
-            let root = BitMapBackend::with_buffer(&mut buf, (w, h)).into_drawing_area();
-            draw(g, &root)?;
-        }
-        std::fs::write(path, pdf_with_image(&buf, w, h)).map_err(|e| rc_err(603, e))
+        let svg = render_svg(g, w, h)?;
+        ferrostat_core::vfs::write(path, svg.as_bytes()).map_err(|e| rc_err(603, e))
     } else if lower.ends_with(".gph") {
         save_gph(g, path)
     } else {
-        let root = BitMapBackend::new(path, (w, h)).into_drawing_area();
-        draw(g, &root)
+        render_raster(g, path, w, h, lower.ends_with(".pdf"))
     }
+}
+
+/// The graph as an SVG document.
+pub fn render_svg(g: &Graph, w: u32, h: u32) -> Result<String, String> {
+    let mut s = String::new();
+    {
+        let root = SVGBackend::with_string(&mut s, (w, h)).into_drawing_area();
+        draw(g, &root)?;
+        root.present().map_err(|e| rc_err(693, e))?;
+    }
+    Ok(s)
+}
+
+/// The graph as packed RGB pixels (w * h * 3 bytes).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_rgb(g: &Graph, w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let mut buf = vec![0u8; (w * h * 3) as usize];
+    {
+        let root = BitMapBackend::with_buffer(&mut buf, (w, h)).into_drawing_area();
+        draw(g, &root)?;
+        root.present().map_err(|e| rc_err(693, e))?;
+    }
+    Ok(buf)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn render_raster(g: &Graph, path: &str, w: u32, h: u32, pdf: bool) -> Result<(), String> {
+    let rgb = render_rgb(g, w, h)?;
+    let bytes = if pdf { pdf_with_image(&rgb, w, h) } else { png_encode(&rgb, w, h) };
+    ferrostat_core::vfs::write(path, &bytes).map_err(|e| rc_err(603, e))
+}
+
+/// In the browser there are no system fonts to rasterise text with: the
+/// graph is queued as SVG and the host page converts it (see `take_raster_jobs`).
+#[cfg(target_arch = "wasm32")]
+fn render_raster(g: &Graph, path: &str, w: u32, h: u32, pdf: bool) -> Result<(), String> {
+    let svg = render_svg(g, w, h)?;
+    RASTER_JOBS.with(|j| j.borrow_mut().push(RasterJob { path: ferrostat_core::vfs::norm(path), svg, width: w, height: h, pdf }));
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub struct RasterJob {
+    pub path: String,
+    pub svg: String,
+    pub width: u32,
+    pub height: u32,
+    pub pdf: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static RASTER_JOBS: std::cell::RefCell<Vec<RasterJob>> = std::cell::RefCell::new(Vec::new());
+}
+
+/// PNG/PDF exports waiting to be rasterised by the host page.
+#[cfg(target_arch = "wasm32")]
+pub fn take_raster_jobs() -> Vec<RasterJob> {
+    RASTER_JOBS.with(|j| std::mem::take(&mut *j.borrow_mut()))
+}
+
+/// Encode packed RGB pixels as a PNG file.
+pub fn png_encode(rgb: &[u8], w: u32, h: u32) -> Vec<u8> {
+    use std::io::Write;
+    fn crc32(data: &[u8]) -> u32 {
+        let mut c = 0xffff_ffffu32;
+        for &b in data {
+            c ^= b as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
+    }
+    fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend_from_slice(data);
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&crc32(&body).to_be_bytes());
+    }
+    let mut raw = Vec::with_capacity(rgb.len() + h as usize);
+    for row in rgb.chunks(w as usize * 3) {
+        raw.push(0);
+        raw.extend_from_slice(row);
+    }
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let _ = z.write_all(&raw);
+    let idat = z.finish().unwrap_or_default();
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&w.to_be_bytes());
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(&mut out, b"IDAT", &idat);
+    chunk(&mut out, b"IEND", &[]);
+    out
 }
 
 /// Minimal PDF 1.4 document with one page showing an RGB image.
@@ -521,7 +612,7 @@ pub fn save_gph(g: &Graph, path: &str) -> Result<(), String> {
             s.push_str(&format!("b\t{}\n", join(b)));
         }
     }
-    std::fs::write(path, s).map_err(|e| rc_err(603, e))
+    ferrostat_core::vfs::write(path, s.as_bytes()).map_err(|e| rc_err(603, e))
 }
 
 fn join(v: &[f64]) -> String {
@@ -529,7 +620,7 @@ fn join(v: &[f64]) -> String {
 }
 
 pub fn load_gph(path: &str) -> Result<Graph, String> {
-    let text = std::fs::read_to_string(path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
+    let text = ferrostat_core::vfs::read_to_string(path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
     if !text.starts_with("ferrostat-graph") {
         return Err(rc_err(610, format!("{path} is not a Ferrostat graph file")));
     }

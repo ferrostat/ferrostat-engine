@@ -6,6 +6,8 @@ members = [
     "ferrostat-cmd",
     "ferrostat-ado",
     "ferrostat-repl",
+    "ferrostat-gui",
+    "ferrostat-wasm",
     "ferrostat-tests",
 ]
 resolver = "3"
@@ -26,3 +28,7 @@ csv = "1"
 plotters = "0.3"
 statrs = "0.17"
 lazy_static = "1"
+
+# keep build directories small: no debug info for third-party crates
+[profile.dev.package."*"]
+debug = false

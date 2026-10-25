@@ -1,8 +1,8 @@
 # Ferrostat
 
-A statistical computing engine written in Rust. Ferrostat provides a command-line environment for data manipulation, statistical estimation, and graphics, driven by a do-file command language compatible with the widely used `.do`/`.dta` ecosystem.
+A statistical computing engine written in Rust. Ferrostat provides an environment for data manipulation, statistical estimation, and graphics, driven by a do-file command language compatible with the widely used `.do`/`.dta` ecosystem. It comes in three front ends sharing one engine: a terminal (CLI), a desktop application, and a browser version compiled to WebAssembly.
 
-[![CI](https://img.shields.io/badge/CI-linux%20%7C%20windows%20%7C%20macOS-blue.svg)](.github/workflows/ci.yml)
+[![CI](https://img.shields.io/badge/CI-linux%20%7C%20windows%20%7C%20macOS%20%7C%20wasm-blue.svg)](.github/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 
 ---
@@ -12,6 +12,7 @@ A statistical computing engine written in Rust. Ferrostat provides a command-lin
 - [Overview](#overview)
 - [Features](#features)
 - [Quick Start](#quick-start)
+- [Front Ends](#front-ends)
 - [Installation](#installation)
 - [Command Reference](#command-reference)
 - [Architecture](#architecture)
@@ -33,6 +34,7 @@ Ferrostat runs existing analysis scripts unchanged: it reads and writes `.dta` f
 - **Data archaeology** — reading legacy `.dta` files (formats 113–119) on any platform
 - **Statistical education** — every algorithm is readable Rust
 - **Embedding** — use the engine and its datasets from Rust applications
+- **Zero-install teaching** — the browser version runs entirely client-side; data never leaves the page
 
 ---
 
@@ -114,11 +116,46 @@ file fit.png written in PNG format
 
 ---
 
+## Front Ends
+
+All three front ends drive the same interpreter (`ferrostat-ado::session`), so a do-file gives the same results everywhere.
+
+| Front end | Binary / crate | Runs on |
+|-----------|----------------|---------|
+| Terminal (REPL + batch) | `ferrostat` (`ferrostat-repl`) | Linux, Windows, macOS |
+| Desktop GUI | `ferrostat-gui` | Linux, Windows, macOS |
+| Browser | `ferrostat-wasm` + `ferrostat-wasm/web` | any modern browser (wasm32) |
+
+### Desktop
+
+```bash
+cargo run --release -p ferrostat-gui
+```
+
+Built with [egui/eframe](https://github.com/emilk/egui): a results window, a command line with history (↑/↓), the history list (click to edit, double-click to run), the variables list with properties, a data browser, a do-file editor (run all / run selection) and a graph window with export to PNG/SVG/PDF. The File menu opens and saves datasets, imports CSV/Excel and changes the working directory.
+
+### Browser (WebAssembly)
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129   # must match Cargo.lock
+./ferrostat-wasm/build.sh
+python3 -m http.server -d ferrostat-wasm/web 8080   # open http://localhost:8080
+```
+
+The page is static (HTML, CSS, JS and the `.wasm` module), so any static host works — including GitHub Pages via `.github/workflows/pages.yml`. Files live in an in-memory file system: upload or drop `.dta`, `.csv`, `.xlsx` and `.do` files into the session, and download anything the session writes (datasets, logs, tables, exported graphs). Differences from the native builds:
+
+- `shell`/`!` are unavailable; `sleep` returns immediately.
+- PNG and PDF graph exports are rasterised by the browser from the SVG rendering.
+- Commands run on the page's main thread, so very long computations keep the page busy until they finish.
+
+---
+
 ## Installation
 
 ### Pre-built binaries
 
-Tagged releases publish binaries for Linux (x86_64), Windows (x86_64) and macOS (Apple Silicon and Intel); see `.github/workflows/release.yml`.
+Tagged releases publish the `ferrostat` and `ferrostat-gui` binaries for Linux (x86_64), Windows (x86_64) and macOS (Apple Silicon and Intel), and a fourth `wasm32-web` archive containing the ready-to-serve browser version; see `.github/workflows/release.yml`.
 
 ### From Source
 
@@ -161,11 +198,13 @@ Community packages that Ferrostat implements natively (`outreg2`, `xtivreg2`, `x
 
 ```
 ferrostat-repl        -- terminal REPL and batch mode (--do)
-ferrostat-ado         -- interpreter: statements, blocks, macros, programs, logs, putexcel, outreg2
+ferrostat-gui         -- desktop interface (egui/eframe)
+ferrostat-wasm        -- WebAssembly bindings and the browser interface (web/)
+ferrostat-ado         -- interpreter: statements, blocks, macros, programs, logs, putexcel, outreg2, front-end session
 ferrostat-engine      -- command registry, abbreviations, by-groups, data-level commands
 ferrostat-cmd         -- commands, expression evaluator, estimation framework, graphics
 ferrostat-parser      -- lexer, expression parser, command-line splitter
-ferrostat-core        -- DataSet, Variable, Value, missing values, .dta read/write
+ferrostat-core        -- DataSet, Variable, Value, missing values, .dta read/write, file-system layer (native or in-memory)
 ferrostat-tests       -- behavioural test suite and independent reference values
 ```
 
@@ -193,6 +232,7 @@ Design matrices are built with factor variables, interactions and time-series op
 ### Text and spreadsheets
 
 - `import delimited` / `export delimited` (delimiters, `varnames()`, `case()`, `stringcols()`, locale-aware numbers via `parselocale()`, `decimalseparator()`, `groupseparator()`)
+- `import excel` / `export excel` (`.xlsx`: `sheet()`, `cellrange()`, `firstrow`, `allstring`, dates as `%td`/`%tc`; `export excel` with `sheet(, modify|replace)`)
 - `putexcel` writes `.xlsx` workbooks (cells, expressions, matrices with names); `outreg2` writes tab-delimited regression tables
 
 ---
@@ -216,7 +256,7 @@ cargo test --workspace
 ```
 
 - `ferrostat-tests` drives the interpreter exactly as a user would and checks results against **independent reference values** computed by `ferrostat-tests/reference/reference.py`, a standard-library-only Python implementation of the textbook formulas (OLS, robust SEs, logit/probit/poisson MLE, t tests, chi-square, ANOVA, fixed effects, kernel density).
-- CI builds and tests on Linux, Windows and macOS (`.github/workflows/ci.yml`).
+- CI builds and tests on Linux, Windows and macOS, and builds the WebAssembly version (`.github/workflows/ci.yml`).
 - Real-world validation: two research do-files (panel regressions, dynamic factor analysis, PMG/MG panel ARDL) were run unmodified apart from their machine-specific `cd`. Their results were compared with the logs of the original runs: all 686 coefficient rows of the regression tasks match (coefficient and standard error), as do the factor count and PMG/MG estimates and the Pesaran CD statistic.
 
 ---
@@ -268,6 +308,6 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-- The `csv`, `plotters`, `chrono`, `regex` and `statrs` crates for foundational functionality.
+- The `csv`, `plotters`, `chrono`, `regex`, `statrs`, `flate2`, `egui`/`eframe` and `wasm-bindgen` crates for foundational functionality.
 - The statistical computing tradition that inspired the user interface.
 - The Rust community for zero-cost abstractions that make numerical computing ergonomic.

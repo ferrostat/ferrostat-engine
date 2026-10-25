@@ -1,0 +1,17 @@
+[package]
+name = "ferrostat-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Ferrostat compiled to WebAssembly, with a browser interface"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ferrostat-ado = { path = "../ferrostat-ado" }
+ferrostat-cmd = { path = "../ferrostat-cmd" }
+ferrostat-core = { path = "../ferrostat-core" }
+wasm-bindgen = "0.2"
+serde_json = "1"

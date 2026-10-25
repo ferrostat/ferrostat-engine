@@ -617,7 +617,7 @@ fn c_value(env: &Env, key: &str) -> Val {
         "current_time" => Val::Str(now.format("%H:%M:%S").to_string()),
         "os" => Val::Str(if cfg!(windows) { "Windows" } else if cfg!(target_os = "macos") { "MacOSX" } else { "Unix" }.into()),
         "dirsep" => Val::Str(std::path::MAIN_SEPARATOR.to_string()),
-        "pwd" => Val::Str(std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default()),
+        "pwd" => Val::Str(ferrostat_core::vfs::current_dir()),
         "filename" => Val::Str(env.st.map(|s| s.filename.clone()).unwrap_or_default()),
         "changed" => Val::Num(bool_f(env.st.map_or(false, |s| s.data_changed))),
         "seed" => Val::Num(env.st.map_or(0, |s| s.rng.borrow().seed) as f64),
@@ -1058,7 +1058,7 @@ fn call_function(env: &Env, name: &str, v: &[Val]) -> Result<Val, String> {
             }
             num(k)
         }
-        "fileexists" => num(bool_f(std::path::Path::new(s(v, 0)?).exists())),
+        "fileexists" => num(bool_f(ferrostat_core::vfs::exists(s(v, 0)?))),
         // ---- strings
         "strlen" | "length" | "ustrlen" | "udstrlen" => {
             let x = s(v, 0)?;

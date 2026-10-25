@@ -370,13 +370,11 @@ pub fn macro_function(spec: &str, ds: &DataSet, st: &mut Store) -> Result<String
             let kind = parts.get(1).map(|s| s.to_lowercase()).unwrap_or_else(|| "files".into());
             let pat = unquote(parts.get(2).map(String::as_str).unwrap_or("*"));
             let mut names = Vec::new();
-            if let Ok(rd) = std::fs::read_dir(&dir) {
-                for e in rd.flatten() {
-                    let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if let Ok(rd) = ferrostat_core::vfs::list(&dir) {
+                for (n, is_dir) in rd {
                     if (kind.starts_with("dir")) != is_dir {
                         continue;
                     }
-                    let n = e.file_name().to_string_lossy().to_string();
                     if glob_match(&pat, &n) {
                         names.push(format!("\"{n}\""));
                     }

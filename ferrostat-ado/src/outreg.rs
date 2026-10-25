@@ -189,11 +189,11 @@ pub fn outreg2(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
         }
     }
     let ctitles: Vec<String> = opt("ctitle").map(|c| split_top_level_words(&c).iter().map(|x| unquote(x)).collect()).unwrap_or_default();
-    let replace = has("replace") || !std::path::Path::new(&path).exists() && !has("append");
+    let replace = has("replace") || !ferrostat_core::vfs::exists(&path) && !has("append");
     let mut table = if replace {
         Table::default()
     } else {
-        me.outreg_tables.get(&path).cloned().or_else(|| std::fs::read_to_string(&path).ok().map(|t| Table::from_tsv(&t))).unwrap_or_default()
+        me.outreg_tables.get(&path).cloned().or_else(|| ferrostat_core::vfs::read_to_string(&path).ok().map(|t| Table::from_tsv(&t))).unwrap_or_default()
     };
     if let Some(t) = opt("title") {
         table.title = unquote(&t);
@@ -228,7 +228,7 @@ pub fn outreg2(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
         }
         table.cols.push((header, map));
     }
-    std::fs::write(&path, table.to_tsv()).map_err(|e| rc_err(603, format!("could not write {path}: {e}")))?;
+    ferrostat_core::vfs::write(&path, table.to_tsv().as_bytes()).map_err(|e| rc_err(603, format!("could not write {path}: {e}")))?;
     me.outreg_tables.insert(path.clone(), table);
     Ok(format!("{path}\ndir : seeout"))
 }

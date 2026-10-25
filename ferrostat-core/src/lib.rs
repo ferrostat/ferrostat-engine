@@ -3,6 +3,7 @@ pub mod dta;
 pub mod missing;
 pub mod value_label;
 pub mod var;
+pub mod vfs;
 
 pub use dataset::DataSet;
 pub use missing::{is_missing, is_missing_byte, is_missing_int, is_missing_long, is_missing_float, is_missing_double, MissingValue, SYSMISS};

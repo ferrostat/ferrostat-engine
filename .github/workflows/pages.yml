@@ -1,0 +1,37 @@
+name: Web app (GitHub Pages)
+
+# Publishes the browser build. Run it by hand from the Actions tab once
+# Pages is enabled for the repository (Settings > Pages > Source: GitHub Actions).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-bindgen (version from Cargo.lock)
+        run: |
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')
+          echo "WASM_BINDGEN=$v" >> "$GITHUB_ENV"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ env.WASM_BINDGEN }}
+      - name: Build
+        run: ./ferrostat-wasm/build.sh
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ferrostat-wasm/web
+      - id: deployment
+        uses: actions/deploy-pages@v4

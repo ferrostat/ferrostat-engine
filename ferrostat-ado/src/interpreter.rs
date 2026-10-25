@@ -118,12 +118,11 @@ impl AdoInterpreter {
     }
 
     pub(crate) fn log_write(&mut self, text: &str, is_cmd: bool) {
-        use std::io::Write;
         for lg in &self.logs {
             if !lg.on {
                 continue;
             }
-            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&lg.path) {
+            {
                 let t = if lg.smcl {
                     if is_cmd { format!("{{com}}. {}\n", smcl_escape(text)) } else { format!("{{res}}{}\n", smcl_escape(text)) }
                 } else if is_cmd {
@@ -131,7 +130,7 @@ impl AdoInterpreter {
                 } else {
                     format!("{text}\n")
                 };
-                let _ = f.write_all(t.as_bytes());
+                let _ = ferrostat_core::vfs::append(&lg.path.to_string_lossy(), t.as_bytes());
             }
         }
     }
@@ -273,10 +272,15 @@ impl AdoInterpreter {
         if self.depth == 0 {
             self.log_write(&s.text, true);
         }
+        #[cfg(not(target_arch = "wasm32"))]
         let started = std::time::Instant::now();
         let flow = self.exec_text(&text, s.body.as_deref())?;
         if self.engine.store.rmsg && self.depth == 0 {
-            self.emit(&format!("r; t={:.2}", started.elapsed().as_secs_f64()));
+            #[cfg(not(target_arch = "wasm32"))]
+            let t = started.elapsed().as_secs_f64();
+            #[cfg(target_arch = "wasm32")]
+            let t = 0.0;
+            self.emit(&format!("r; t={:.2}", t));
         }
         Ok(flow)
     }
@@ -573,8 +577,8 @@ impl AdoInterpreter {
 
     /// Run a do-file (own local scope, arguments in `0`, `1`, ...).
     pub fn run_do(&mut self, path: &str, args: &str, quiet: bool, same_scope: bool) -> Result<String, String> {
-        let p = if std::path::Path::new(path).exists() || path.ends_with(".do") || path.ends_with(".ado") { path.to_string() } else { format!("{path}.do") };
-        let text = std::fs::read_to_string(&p).map_err(|_| rc_err(601, format!("file {p} not found")))?;
+        let p = if ferrostat_core::vfs::exists(path) || path.ends_with(".do") || path.ends_with(".ado") { path.to_string() } else { format!("{path}.do") };
+        let text = ferrostat_core::vfs::read_to_string(&p).map_err(|_| rc_err(601, format!("file {p} not found")))?;
         if !same_scope {
             self.engine.store.push_frame();
             self.engine.store.set_local("0", args.to_string());

@@ -6,3 +6,4 @@ pub mod putexcel;
 pub mod script;
 
 pub use interpreter::AdoInterpreter;
+pub mod session;

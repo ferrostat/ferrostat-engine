@@ -120,3 +120,80 @@ fn outreg2_builds_regression_table() {
     assert!(text.contains("Observations\t12\t12"), "{text}");
     assert!(text.contains("Extra\t\t42.000"), "{text}");
 }
+
+/// A workbook laid out the way spreadsheet programs write them: shared
+/// strings, a custom date format and deflate compression.
+fn excel_like_workbook(path: &std::path::Path) {
+    let part = |s: &str| s.as_bytes().to_vec();
+    let files = vec![
+        ("[Content_Types].xml".to_string(), part(r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#)),
+        ("xl/workbook.xml".to_string(), part(r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Notes" sheetId="1" r:id="rId1"/><sheet name="Data" sheetId="2" r:id="rId2"/></sheets></workbook>"#)),
+        ("xl/_rels/workbook.xml.rels".to_string(), part(r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="worksheet" Target="/xl/worksheets/sheet2.xml"/></Relationships>"#)),
+        ("xl/sharedStrings.xml".to_string(), part(r#"<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="6" uniqueCount="6"><si><t>Province</t></si><si><t>Outflow (k)</t></si><si><t>Date</t></si><si><t>Forlì</t></si><si><r><t>Reggio </t></r><r><t>Emilia</t></r></si><si><t>notes &amp; comments</t></si></sst>"#)),
+        ("xl/styles.xml".to_string(), part(r#"<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="dd/mm/yyyy"/></numFmts><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="164" applyNumberFormat="1"/></cellXfs></styleSheet>"#)),
+        ("xl/worksheets/sheet1.xml".to_string(), part(r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>5</v></c></row></sheetData></worksheet>"#)),
+        ("xl/worksheets/sheet2.xml".to_string(), part(r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row>
+<row r="2"><c r="A2" t="s"><v>3</v></c><c r="B2"><v>1046</v></c><c r="C2" s="1"><v>36526</v></c></row>
+<row r="3"><c r="A3" t="s"><v>4</v></c><c r="B3"><v>2.5</v></c><c r="C3" s="1"><v>36527</v></c></row>
+<row r="5"><c r="A5" t="inlineStr"><is><t>Bari</t></is></c><c r="C5" s="1"><v>36528</v></c></row>
+</sheetData></worksheet>"#)),
+    ];
+    std::fs::write(path, ferrostat_cmd::xlsx::zip(&files)).unwrap();
+}
+
+#[test]
+fn import_excel_sheet_firstrow_dates() {
+    let dir = temp_dir("xlsx_import");
+    let path = dir.join("book.xlsx");
+    excel_like_workbook(&path);
+    let mut s = Session::new();
+    let out = s.run(&format!("import excel \"{}\", describe", path.display()));
+    assert!(out.contains("Data | A1:C5"), "{out}");
+    s.run(&format!("import excel \"{}\", sheet(\"Data\") firstrow clear", path.display()));
+    assert_eq!(s.varnames(), ["Province", "Outflowk", "Date"]);
+    assert_eq!(s.n(), 4);
+    assert_eq!(s.strs("Province"), ["Forlì", "Reggio Emilia", "", "Bari"]);
+    let out = s.nums("Outflowk");
+    assert_eq!(&out[..2], [1046.0, 2.5]);
+    assert!(out[2].is_nan() && out[3].is_nan());
+    // spreadsheet dates become %td dates
+    assert_eq!(s.nums("Date")[0], 14610.0);
+    assert_eq!(s.ds().get_var("Date").unwrap().format, "%td");
+    assert_eq!(s.ds().get_var("Outflowk").unwrap().label, "Outflow (k)");
+}
+
+#[test]
+fn import_excel_defaults_and_cellrange() {
+    let dir = temp_dir("xlsx_range");
+    let path = dir.join("book.xlsx");
+    excel_like_workbook(&path);
+    let mut s = Session::new();
+    // first sheet, no header row: variables are named after the columns
+    s.run(&format!("import excel \"{}\", clear", path.display()));
+    assert_eq!(s.varnames(), ["A"]);
+    assert_eq!(s.strs("A"), ["notes & comments"]);
+    s.run(&format!("import excel \"{}\", sheet(\"Data\") cellrange(A2:B3) clear", path.display()));
+    assert_eq!(s.varnames(), ["A", "B"]);
+    assert_eq!(s.nums("B"), [1046.0, 2.5]);
+    s.run(&format!("import excel \"{}\", sheet(\"Data\") firstrow allstring case(lower) clear", path.display()));
+    assert_eq!(s.strs("outflowk")[0], "1046");
+}
+
+#[test]
+fn export_excel_roundtrip() {
+    let dir = temp_dir("xlsx_export");
+    let path = dir.join("out.xlsx");
+    let mut s = Session::with_fixture();
+    s.run("generate double when = mdy(1, 1, 2000) + _n");
+    s.run("format when %td");
+    s.run(&format!("export excel id name y when using \"{}\", firstrow(variables) replace", path.display()));
+    s.run(&format!("export excel id using \"{}\" if group == 3, sheet(\"Third\", modify) firstrow(variables)", path.display()));
+    s.run(&format!("import excel \"{}\", firstrow clear", path.display()));
+    assert_eq!(s.n(), 12);
+    assert_eq!(s.nums("y"), Y);
+    assert_eq!(s.strs("name"), NAMES);
+    assert_eq!(s.nums("when")[0], 14611.0);
+    s.run(&format!("import excel \"{}\", sheet(\"Third\") firstrow clear", path.display()));
+    assert_eq!(s.nums("id"), [9.0, 10.0, 11.0, 12.0]);
+}

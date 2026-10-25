@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ferrostat</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <span class="brand">Ferrostat</span>
+  <button id="btn-upload" title="Add files to the session">Upload…</button>
+  <input type="file" id="file-input" multiple hidden>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="results" class="active">Results</button>
+    <button role="tab" data-tab="data">Data</button>
+    <button role="tab" data-tab="editor">Do-file</button>
+    <button role="tab" data-tab="graph">Graph</button>
+  </nav>
+  <span id="status"></span>
+</header>
+
+<main>
+  <aside id="left">
+    <section>
+      <h2>History</h2>
+      <ul id="history" class="list mono"></ul>
+    </section>
+  </aside>
+
+  <section id="center">
+    <div class="pane active" id="pane-results">
+      <pre id="results" class="mono" aria-live="polite"></pre>
+    </div>
+    <div class="pane" id="pane-data">
+      <div class="toolbar">
+        <button id="data-prev">◀</button>
+        <span id="data-range"></span>
+        <button id="data-next">▶</button>
+      </div>
+      <div class="table-wrap"><table id="data-table" class="mono"></table></div>
+    </div>
+    <div class="pane" id="pane-editor">
+      <div class="toolbar">
+        <button id="ed-run">▶ Run all</button>
+        <button id="ed-run-sel">Run selection</button>
+        <button id="ed-save">Save to session as…</button>
+        <span class="hint">Ctrl+Enter runs the selection (or everything)</span>
+      </div>
+      <textarea id="editor" class="mono" spellcheck="false" placeholder="* do-file
+set obs 200
+generate x = rnormal()
+generate y = 1 + 2*x + rnormal()
+regress y x
+scatter y x"></textarea>
+    </div>
+    <div class="pane" id="pane-graph">
+      <div class="toolbar">
+        <button id="graph-svg">Download SVG</button>
+        <button id="graph-png">Download PNG</button>
+      </div>
+      <div id="graph" class="graph-box"><p class="empty">No graph yet.</p></div>
+    </div>
+    <form id="command-form" autocomplete="off">
+      <span id="prompt" class="mono">.</span>
+      <input id="command" class="mono" placeholder="Command" aria-label="Command">
+    </form>
+  </section>
+
+  <aside id="right">
+    <section class="grow">
+      <h2>Variables</h2>
+      <table id="vars" class="mono"><thead><tr><th>Name</th><th>Label</th></tr></thead><tbody></tbody></table>
+    </section>
+    <section>
+      <h2>Properties</h2>
+      <dl id="props"></dl>
+    </section>
+    <section class="grow">
+      <h2>Files <span class="hint">(drop files here)</span></h2>
+      <ul id="files" class="list mono"></ul>
+    </section>
+  </aside>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

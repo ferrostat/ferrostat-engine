@@ -26,6 +26,7 @@ pub mod tabulate;
 pub mod tests;
 pub mod util;
 pub mod varlist;
+pub mod xlsx;
 
 pub use commands::CommandHandler;
 pub use store::Store;

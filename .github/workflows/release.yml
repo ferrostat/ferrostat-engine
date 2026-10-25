@@ -15,10 +15,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  exe: ferrostat }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc,    exe: ferrostat.exe }
-          - { os: macos-latest,   target: aarch64-apple-darwin,      exe: ferrostat }
-          - { os: macos-latest,   target: x86_64-apple-darwin,       exe: ferrostat }
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  ext: '' }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,    ext: .exe }
+          - { os: macos-latest,   target: aarch64-apple-darwin,      ext: '' }
+          - { os: macos-latest,   target: x86_64-apple-darwin,       ext: '' }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -28,13 +28,14 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
       - name: Build
-        run: cargo build --release -p ferrostat-repl --target ${{ matrix.target }}
+        run: cargo build --release -p ferrostat-repl -p ferrostat-gui --target ${{ matrix.target }}
       - name: Package
         shell: bash
         run: |
           name=ferrostat-${{ github.ref_name }}-${{ matrix.target }}
           mkdir "$name"
-          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "$name/"
+          cp "target/${{ matrix.target }}/release/ferrostat${{ matrix.ext }}" "$name/"
+          cp "target/${{ matrix.target }}/release/ferrostat-gui${{ matrix.ext }}" "$name/"
           cp README.md LICENSE* "$name/" 2>/dev/null || true
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a "$name.zip" "$name"
@@ -43,6 +44,34 @@ jobs:
             tar czf "$name.tar.gz" "$name"
             echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"
           fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+
+  wasm:
+    name: build (wasm32, browser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-bindgen (version from Cargo.lock)
+        run: |
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')
+          echo "WASM_BINDGEN=$v" >> "$GITHUB_ENV"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ env.WASM_BINDGEN }}
+      - name: Build
+        run: ./ferrostat-wasm/build.sh
+      - name: Package
+        run: |
+          name=ferrostat-${{ github.ref_name }}-wasm32-web
+          cp -r ferrostat-wasm/web "$name"
+          cp README.md LICENSE* "$name/" 2>/dev/null || true
+          zip -r "$name.zip" "$name"
+          echo "ASSET=$name.zip" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.ASSET }}

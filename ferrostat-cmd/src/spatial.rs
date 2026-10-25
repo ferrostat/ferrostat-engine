@@ -31,7 +31,7 @@ fn le_f64(b: &[u8]) -> f64 {
 
 /// Read polygons/polylines/points from a .shp file.
 pub fn read_shp(path: &str) -> Result<Vec<Shape>, String> {
-    let data = std::fs::read(path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
+    let data = ferrostat_core::vfs::read(path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
     if data.len() < 100 || be_i32(&data[0..]) != 9994 {
         return Err(rc_err(610, format!("{path} is not a shapefile")));
     }
@@ -73,7 +73,7 @@ pub fn read_shp(path: &str) -> Result<Vec<Shape>, String> {
 
 /// Read a dBase table: (field names, rows of text values, numeric flags).
 pub fn read_dbf(path: &str) -> Result<(Vec<String>, Vec<bool>, Vec<Vec<String>>), String> {
-    let data = std::fs::read(path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
+    let data = ferrostat_core::vfs::read(path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
     if data.len() < 32 {
         return Err(rc_err(610, format!("{path} is not a dBase file")));
     }
@@ -116,11 +116,12 @@ fn with_dta(p: &str) -> String {
 }
 
 fn write_dta(ds: &DataSet, path: &str, replace: bool) -> Result<(), String> {
-    if std::path::Path::new(path).exists() && !replace {
+    if ferrostat_core::vfs::exists(path) && !replace {
         return Err(rc_err(602, format!("file {path} already exists")));
     }
-    let mut f = std::fs::File::create(path).map_err(|e| rc_err(603, e))?;
-    ferrostat_core::dta::DtaWriter::write(&mut f, ds).map_err(|e| rc_err(693, e))
+    let mut buf = Vec::new();
+    ferrostat_core::dta::DtaWriter::write(&mut buf, ds).map_err(|e| rc_err(693, e))?;
+    ferrostat_core::vfs::write(path, &buf).map_err(|e| rc_err(603, e))
 }
 
 /// Area-weighted centroid of the largest ring.

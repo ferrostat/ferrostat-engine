@@ -6,6 +6,7 @@ use ferrostat_cmd::matrix::Matrix;
 use ferrostat_cmd::store::Results;
 use ferrostat_cmd::{format, util, varlist};
 use ferrostat_core::missing::is_missing;
+use ferrostat_core::vfs;
 use ferrostat_core::{Value, VarType, Variable};
 use ferrostat_parser::parser::{find_top_level, parse_expression, parse_line, split_options, split_top_level_words, Parser};
 
@@ -83,7 +84,7 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
                 me.temp_counter += 1;
                 let val = format!("__{:06}", me.temp_counter);
                 let val = if verb == "tempfile" {
-                    let p = std::env::temp_dir().join(format!("ferrostat_{}_{}", std::process::id(), val));
+                    let p = std::path::PathBuf::from(vfs::temp_path(&format!("ferrostat_{}_{}", process_id(), val)));
                     me.tempfiles.push(p.clone());
                     p.display().to_string()
                 } else {
@@ -125,37 +126,37 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
         "cd" | "chdir" => {
             let p = unquote(r);
             if p.is_empty() {
-                std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default()
+                vfs::current_dir()
             } else {
-                std::env::set_current_dir(&p).map_err(|_| rc_err(170, format!("unable to change to {p}")))?;
-                std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default()
+                vfs::set_current_dir(&p).map_err(|_| rc_err(170, format!("unable to change to {p}")))?;
+                vfs::current_dir()
             }
         }
-        "pwd" => std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default(),
+        "pwd" => vfs::current_dir(),
         "dir" => {
             let pat = if r.is_empty() { "*".to_string() } else { unquote(r) };
-            let mut names: Vec<String> = std::fs::read_dir(".").map_err(|e| rc_err(601, e))?.flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| macros::glob_match(&pat, n)).collect();
+            let mut names: Vec<String> = vfs::list(".").map_err(|e| rc_err(601, e))?.into_iter().map(|e| e.0).filter(|n| macros::glob_match(&pat, n)).collect();
             names.sort();
             names.join("\n")
         }
         "erase" => {
             let p = unquote(r);
-            std::fs::remove_file(&p).map_err(|_| rc_err(601, format!("file {p} not found")))?;
+            vfs::remove(&p).map_err(|_| rc_err(601, format!("file {p} not found")))?;
             String::new()
         }
         "mkdir" => {
             let p = unquote(r.split(',').next().unwrap_or(""));
-            std::fs::create_dir_all(&p).map_err(|e| rc_err(693, e))?;
+            vfs::create_dir_all(&p).map_err(|e| rc_err(693, e))?;
             String::new()
         }
         "rmdir" => {
             let p = unquote(r);
-            std::fs::remove_dir(&p).map_err(|e| rc_err(693, e))?;
+            vfs::remove_dir(&p).map_err(|e| rc_err(693, e))?;
             String::new()
         }
         "type" => {
             let p = unquote(r.split(',').next().unwrap_or(""));
-            std::fs::read_to_string(&p).map_err(|_| rc_err(601, format!("file {p} not found")))?.trim_end().to_string()
+            vfs::read_to_string(&p).map_err(|_| rc_err(601, format!("file {p} not found")))?.trim_end().to_string()
         }
         "copy" => {
             let w = split_top_level_words(r.split(',').next().unwrap_or(""));
@@ -163,20 +164,14 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
                 return Err(rc_err(198, "copy source destination"));
             }
             let (a, b) = (unquote(&w[0]), unquote(&w[1]));
-            if std::path::Path::new(&b).exists() && !r.contains("replace") {
+            if vfs::exists(&b) && !r.contains("replace") {
                 return Err(rc_err(602, format!("file {b} already exists")));
             }
-            std::fs::copy(&a, &b).map_err(|_| rc_err(601, format!("file {a} not found")))?;
+            vfs::copy(&a, &b).map_err(|_| rc_err(601, format!("file {a} not found")))?;
             String::new()
         }
         "shell" | "!" | "winexec" | "xshell" => {
-            let out = if cfg!(windows) {
-                std::process::Command::new("cmd").arg("/C").arg(r).output()
-            } else {
-                std::process::Command::new("sh").arg("-c").arg(r).output()
-            }
-            .map_err(|e| rc_err(693, e))?;
-            String::from_utf8_lossy(&out.stdout).trim_end().to_string()
+            shell(r)?
         }
         "which" => {
             let name = r.split(',').next().unwrap_or("").trim();
@@ -207,7 +202,11 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
         "adopath" | "discard" | "more" | "pause" | "timer" | "set_defaults" | "graph_set" => String::new(),
         "sleep" => {
             let ms: u64 = r.parse().unwrap_or(0);
+            // the browser has no blocking sleep
+            #[cfg(not(target_arch = "wasm32"))]
             std::thread::sleep(std::time::Duration::from_millis(ms.min(60_000)));
+            #[cfg(target_arch = "wasm32")]
+            let _ = ms;
             String::new()
         }
         "help" | "search" | "findit" => format!("help for {r}: see the Ferrostat documentation"),
@@ -709,7 +708,7 @@ fn confirm(me: &mut AdoInterpreter, r: &str) -> Result<(), String> {
             }
             Some("file") => {
                 let p = unquote(&args(2));
-                if std::path::Path::new(&p).exists() {
+                if vfs::exists(&p) {
                     return Err(rc_err(602, format!("file {p} already exists")));
                 }
                 Ok(())
@@ -718,7 +717,7 @@ fn confirm(me: &mut AdoInterpreter, r: &str) -> Result<(), String> {
         },
         "file" => {
             let p = unquote(&args(1));
-            if std::path::Path::new(&p).exists() { Ok(()) } else { Err(rc_err(601, format!("file {p} not found"))) }
+            if vfs::exists(&p) { Ok(()) } else { Err(rc_err(601, format!("file {p} not found"))) }
         }
         "existence" => if args(1).trim().is_empty() { Err(rc_err(6, "")) } else { Ok(()) },
         "integer" | "number" | "n" => {
@@ -1095,7 +1094,7 @@ fn log_cmd(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
             let name = opts.iter().find(|(o, _)| o == "name").and_then(|(_, a)| a.clone()).unwrap_or_else(|| "<unnamed>".into());
             let smcl = !has("text") && !path.ends_with(".log") && !path.ends_with(".txt");
             let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.{}", if smcl { "smcl" } else { "log" }) } else { path };
-            if std::path::Path::new(&path).exists() && !has("replace") && !has("append") {
+            if vfs::exists(&path) && !has("replace") && !has("append") {
                 return Err(rc_err(602, format!("file {path} already exists")));
             }
             if me.logs.iter().any(|l| l.name == name) {
@@ -1103,11 +1102,9 @@ fn log_cmd(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
             }
             let header = if smcl { format!("{{smcl}}\n{{txt}}{{sf}}{{ul off}}{{.-}}\n      name:  {{res}}{name}\n {{txt}}log:  {{res}}{path}\n{{txt}}log type:  {{res}}smcl\n opened on:  {{res}}{}\n", chrono_now()) } else { format!("      name:  {name}\n       log:  {path}\n  log type:  text\n opened on:  {}\n", chrono_now()) };
             if has("append") {
-                use std::io::Write;
-                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| rc_err(603, e))?;
-                let _ = f.write_all(header.as_bytes());
+                vfs::append(&path, header.as_bytes()).map_err(|e| rc_err(603, e))?;
             } else {
-                std::fs::write(&path, header).map_err(|e| rc_err(603, e))?;
+                vfs::write(&path, header.as_bytes()).map_err(|e| rc_err(603, e))?;
             }
             me.logs.push(crate::interpreter::LogFile { path: path.clone().into(), smcl, on: true, name: name.clone() });
             Ok(format!("      name:  {name}\n       log:  {path}\n  log type:  {}", if smcl { "smcl" } else { "text" }))
@@ -1129,9 +1126,8 @@ fn log_cmd(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
             me.logs = kept;
             let mut out = Vec::new();
             for l in closed {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&l.path) {
-                    let _ = f.write_all(format!("{}      name:  {}\n       log:  {}\n closed on:  {}\n", if l.smcl { "{txt}" } else { "" }, l.name, l.path.display(), chrono_now()).as_bytes());
+                {
+                    let _ = vfs::append(&l.path.to_string_lossy(), format!("{}      name:  {}\n       log:  {}\n closed on:  {}\n", if l.smcl { "{txt}" } else { "" }, l.name, l.path.display(), chrono_now()).as_bytes());
                 }
                 out.push(format!("      name:  {}\n       log:  {}", l.name, l.path.display()));
             }
@@ -1216,4 +1212,30 @@ pub fn input(me: &mut AdoInterpreter, header: &str, lines: &[String]) -> Result<
 #[allow(dead_code)]
 fn unused(_: &str) -> String {
     err_message("")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn process_id() -> u32 {
+    std::process::id()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn process_id() -> u32 {
+    1
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn shell(r: &str) -> Result<String, String> {
+    let out = if cfg!(windows) {
+        std::process::Command::new("cmd").arg("/C").arg(r).output()
+    } else {
+        std::process::Command::new("sh").arg("-c").arg(r).output()
+    }
+    .map_err(|e| rc_err(693, e))?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn shell(_r: &str) -> Result<String, String> {
+    Err(rc_err(199, "shell commands are not available in the browser"))
 }
