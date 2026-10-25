@@ -1,3 +1,5 @@
+import { highlight } from "./highlight.js";
+
 // Ferrostat browser interface. The engine runs in a Web Worker (worker.js)
 // so long computations never freeze the page; session files are kept in the
 // browser's IndexedDB so they survive reloads. Nothing leaves the browser.
@@ -242,6 +244,7 @@ async function openFile(path) {
   if (ext === "do" || ext === "ado") {
     $("editor").value = new TextDecoder().decode(bytes);
     $("editor").dataset.path = path;
+    refreshEditor();
     return showTab("editor");
   }
   if (ext === "svg") {
@@ -364,6 +367,32 @@ function showTab(name) {
   if (name === "data") renderData();
 }
 
+// ---------- do-file editor ----------
+
+let commandWords = new Set();
+let refreshPending = false;
+
+// re-highlight at most once per frame
+function refreshEditor() {
+  if (refreshPending) return;
+  refreshPending = true;
+  requestAnimationFrame(() => {
+    refreshPending = false;
+    const text = $("editor").value;
+    $("highlight").innerHTML = highlight(text, commandWords) + " ";
+    const lines = text.split("\n").length;
+    $("gutter").textContent = Array.from({ length: lines }, (_, i) => i + 1).join("\n");
+    syncEditorScroll();
+  });
+}
+
+function syncEditorScroll() {
+  const ed = $("editor");
+  $("highlight").scrollTop = ed.scrollTop;
+  $("highlight").scrollLeft = ed.scrollLeft;
+  $("gutter").scrollTop = ed.scrollTop;
+}
+
 // ---------- wiring ----------
 
 function editorSelection() {
@@ -416,11 +445,16 @@ function wire() {
 
   const ed = $("editor");
   try { ed.value = localStorage.getItem("ferrostat.dofile") ?? ""; } catch { /* storage unavailable */ }
-  ed.oninput = () => { try { localStorage.setItem("ferrostat.dofile", ed.value); } catch { /* ignore */ } };
+  ed.oninput = () => {
+    refreshEditor();
+    try { localStorage.setItem("ferrostat.dofile", ed.value); } catch { /* ignore */ }
+  };
+  ed.onscroll = syncEditorScroll;
   ed.onkeydown = (e) => {
     if (e.key === "Tab") {
       e.preventDefault();
       ed.setRangeText("\t", ed.selectionStart, ed.selectionEnd, "end");
+      refreshEditor();
     } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       runScript(editorSelection() ?? ed.value);
@@ -456,6 +490,8 @@ async function main() {
   $("status").textContent = "loading…";
   startWorker();
   wire();
+  commandWords = new Set(await call("commandWords"));
+  refreshEditor();
   const saved = await store.all();
   await call("restoreFiles", saved);
   $("results").textContent = `Ferrostat ${await call("version")} — running in your browser; data never leaves this page.\n` +

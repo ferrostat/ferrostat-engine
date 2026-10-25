@@ -54,6 +54,7 @@ function changes() {
 
 const ops = {
   version: () => Ferrostat.version(),
+  commandWords: () => JSON.parse(fs.command_words()),
   submit: (line) => { fs.submit(line); return snapshot(); },
   runScript: (text) => { fs.run_script(text); return snapshot(); },
   snapshot: () => snapshot(),

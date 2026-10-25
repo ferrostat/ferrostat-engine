@@ -49,12 +49,18 @@
         <button id="ed-save">Save to session as…</button>
         <span class="hint">Ctrl+Enter runs the selection (or everything)</span>
       </div>
-      <textarea id="editor" class="mono" spellcheck="false" placeholder="* do-file
+      <div class="code-editor">
+        <pre id="gutter" class="gutter mono" aria-hidden="true">1</pre>
+        <div class="code-area">
+          <pre id="highlight" class="code-layer mono" aria-hidden="true"></pre>
+          <textarea id="editor" class="code-layer mono" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" aria-label="Do-file editor" placeholder="* do-file
 set obs 200
 generate x = rnormal()
 generate y = 1 + 2*x + rnormal()
 regress y x
 scatter y x"></textarea>
+        </div>
+      </div>
     </div>
     <div class="pane" id="pane-graph">
       <div class="toolbar">

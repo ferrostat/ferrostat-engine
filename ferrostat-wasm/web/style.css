@@ -9,6 +9,13 @@
   --err: #b00020;
   --str: #9a2a2a;
   --sel: #dbe7f3;
+  --tk-comment: #6a737d;
+  --tk-string: #a3402b;
+  --tk-macro: #7a3e9d;
+  --tk-command: #1a5fb4;
+  --tk-keyword: #9c2a73;
+  --tk-function: #0f7470;
+  --tk-number: #b35c00;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   color-scheme: light;
 }
@@ -24,6 +31,13 @@
     --err: #ff7b7b;
     --str: #e59a9a;
     --sel: #2a3a4c;
+    --tk-comment: #8b949e;
+    --tk-string: #f0a07a;
+    --tk-macro: #d2a8ff;
+    --tk-command: #79c0ff;
+    --tk-keyword: #ff7bb7;
+    --tk-function: #56d4c4;
+    --tk-number: #ffb86b;
     color-scheme: dark;
   }
 }
@@ -94,7 +108,29 @@ aside section.grow { flex: 1; overflow: auto; }
 #data-table td { text-align: right; }
 #data-table td.s { text-align: left; color: var(--str); }
 #data-table td.n { color: var(--muted); }
-#editor { flex: 1; resize: none; border: 0; padding: 10px 12px; background: var(--panel); color: var(--text); outline: none; tab-size: 4; }
+/* do-file editor: a transparent textarea over a highlighted copy of its text */
+.code-editor { flex: 1; display: flex; min-height: 0; background: var(--panel); }
+.gutter {
+  margin: 0; padding: 10px 8px 10px 12px; min-width: 3.2em; text-align: right; overflow: hidden;
+  color: var(--muted); background: var(--bg); border-right: 1px solid var(--border); user-select: none;
+  line-height: 1.5; white-space: pre;
+}
+.code-area { position: relative; flex: 1; min-width: 0; }
+.code-layer {
+  position: absolute; inset: 0; margin: 0; padding: 10px 12px; border: 0;
+  line-height: 1.5; white-space: pre; tab-size: 4; overflow: auto; font-size: 13px;
+}
+#highlight { pointer-events: none; overflow: hidden; color: var(--text); }
+#editor { resize: none; outline: none; background: transparent; color: transparent; caret-color: var(--text); }
+#editor::placeholder { color: var(--muted); }
+#editor::selection { background: var(--sel); color: transparent; }
+.tk-comment { color: var(--tk-comment); font-style: italic; }
+.tk-string { color: var(--tk-string); }
+.tk-macro { color: var(--tk-macro); }
+.tk-command { color: var(--tk-command); font-weight: 600; }
+.tk-keyword { color: var(--tk-keyword); font-weight: 600; }
+.tk-function { color: var(--tk-function); }
+.tk-number { color: var(--tk-number); }
 .graph-box { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 12px; }
 .graph-box svg { max-width: 100%; height: auto; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 .empty { color: var(--muted); }
