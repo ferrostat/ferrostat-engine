@@ -14,6 +14,8 @@ const PREFIXES = new Set(["capture", "cap", "quietly", "qui", "noisily", "noi", 
 
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const span = (cls, s) => `<span class="tk-${cls}">${esc(s)}</span>`;
+// strings are expanded at run time: show the macros inside them
+const stringSpan = (s) => `<span class="tk-string">${s.split(/(`[^`'"]*'|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*)/).map((part, k) => (k % 2 ? span("macro", part) : esc(part))).join("")}</span>`;
 
 /** Highlight a whole do-file. `commands` is a Set of command words. */
 export function highlight(text, commands) {
@@ -73,7 +75,7 @@ export function highlight(text, commands) {
       if (rest.startsWith('`"')) {
         const j = line.indexOf("\"'", i + 2);
         const end = j < 0 ? n : j + 2;
-        html += span("string", line.slice(i, end));
+        html += stringSpan(line.slice(i, end));
         i = end;
         atStart = false;
         continue;
@@ -106,7 +108,7 @@ export function highlight(text, commands) {
         let j = i + 1;
         while (j < n && line[j] !== '"') j++;
         const end = Math.min(n, j + 1);
-        html += span("string", line.slice(i, end));
+        html += stringSpan(line.slice(i, end));
         i = end;
         atStart = false;
         continue;
