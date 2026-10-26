@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ferrostat — statistics engine</title>
+<meta name="description" content="Ferrostat runs .do files and reads .dta data. Command line, desktop and browser versions.">
+<link rel="icon" type="image/png" href="icon-64.png">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="./"><img src="icon-64.png" alt="" width="28" height="28"> Ferrostat</a>
+  <nav>
+    <a href="#download">Download</a>
+    <a href="app/">Web app</a>
+    <a href="@PROJECT_URL@">Source</a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero">
+    <img class="wordmark" src="logo-wordmark.png" alt="Ferrostat" width="428" height="120">
+    <p class="lead">A statistics engine written in Rust. It runs existing <code>.do</code> scripts unchanged, reads and writes <code>.dta</code> files, fits the common econometric models and draws graphs.</p>
+    <div class="cta">
+      <a class="btn primary" id="cta-download" href="#download">Download</a>
+      <a class="btn" href="app/">Open in the browser</a>
+    </div>
+    <p class="muted small" id="release-line">Latest release</p>
+  </section>
+
+  <section id="download">
+    <h2>Download</h2>
+    <p class="muted">Each archive contains the command-line program (<code>ferrostat</code>) and the desktop application (<code>ferrostat-gui</code>).</p>
+    <div class="grid">
+      <article class="card" data-os="linux">
+        <h3>Linux</h3>
+        <p class="muted">x86-64, glibc</p>
+        <a class="btn primary" data-asset="ferrostat-linux-x86_64.tar.gz">Download .tar.gz</a>
+      </article>
+      <article class="card" data-os="windows">
+        <h3>Windows</h3>
+        <p class="muted">x86-64</p>
+        <a class="btn primary" data-asset="ferrostat-windows-x86_64.zip">Download .zip</a>
+      </article>
+      <article class="card" data-os="mac">
+        <h3>macOS</h3>
+        <p class="muted">Apple silicon or Intel</p>
+        <a class="btn primary" data-asset="ferrostat-macos-aarch64.tar.gz">Apple silicon</a>
+        <a class="btn" data-asset="ferrostat-macos-x86_64.tar.gz">Intel</a>
+      </article>
+      <article class="card" data-os="web">
+        <h3>Web</h3>
+        <p class="muted">Runs in the browser; data never leaves the page</p>
+        <a class="btn primary" href="app/">Open the web app</a>
+        <a class="btn" data-asset="ferrostat-web.zip">Self-host .zip</a>
+      </article>
+    </div>
+    <details class="dev">
+      <summary>Development builds from <code>main</code></summary>
+      <p class="muted">Built from the latest commit on <code>main</code>; untested between releases. Archives are kept for 30 days.</p>
+      <ul>
+        <li><a href="@PROJECT_URL@/-/jobs/artifacts/main/download?job=build%3Alinux">Linux x86-64</a></li>
+        <li><a href="@PROJECT_URL@/-/jobs/artifacts/main/download?job=build%3Awindows">Windows x86-64</a></li>
+        <li><a href="@PROJECT_URL@/-/jobs/artifacts/main/download?job=build%3Awasm">Web (self-host)</a></li>
+      </ul>
+    </details>
+  </section>
+
+  <section>
+    <h2>Three front ends, one engine</h2>
+    <div class="grid three">
+      <article>
+        <h3>Command line</h3>
+        <p>An interactive prompt, plus batch mode for scripts: <code>ferrostat --do analysis.do</code>.</p>
+      </article>
+      <article>
+        <h3>Desktop</h3>
+        <p>Results, data browser, do-file editor with syntax highlighting, and a graph viewer.</p>
+      </article>
+      <article>
+        <h3>Browser</h3>
+        <p>The same engine compiled to WebAssembly. Nothing to install; files stay on your machine.</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>Quick start</h2>
+<pre><code>$ tar xzf ferrostat-linux-x86_64.tar.gz
+$ ./ferrostat-*/ferrostat
+. use mydata.dta, clear
+. regress y x1 x2, vce(robust)
+. twoway scatter y x1 || lfit y x1
+. graph export fit.png, replace</code></pre>
+  </section>
+</main>
+
+<footer>
+  <span>GPL-3.0-or-later</span>
+  <a href="@PROJECT_URL@">Source code</a>
+  <a href="@PROJECT_URL@/-/releases">All releases</a>
+</footer>
+
+<script>
+(function () {
+  var base = "@PROJECT_URL@/-/releases/permalink/latest/downloads/";
+  var links = document.querySelectorAll("[data-asset]");
+  links.forEach(function (a) { a.href = base + a.dataset.asset; });
+
+  // Highlight the visitor's platform.
+  var ua = navigator.userAgent;
+  var os = /Windows/.test(ua) ? "windows" : /Mac/.test(ua) ? "mac" : /Linux|X11/.test(ua) && !/Android/.test(ua) ? "linux" : "web";
+  var card = document.querySelector('.card[data-os="' + os + '"]');
+  if (card) card.classList.add("yours");
+
+  // release.json is written by the pages job; without it the links still work.
+  fetch("release.json").then(function (r) { return r.ok ? r.json() : null; }).then(function (rel) {
+    if (!rel || !rel.tag_name) return;
+    var line = document.getElementById("release-line");
+    line.textContent = "Latest release: " + rel.tag_name + (rel.released_at ? " · " + rel.released_at.slice(0, 10) : "");
+    var have = (rel.assets && rel.assets.links || []).map(function (l) { return (l.direct_asset_url || "").split("/").pop(); });
+    links.forEach(function (a) {
+      if (have.indexOf(a.dataset.asset) < 0) {
+        a.removeAttribute("href");
+        a.classList.add("off");
+        a.title = "Not available in " + rel.tag_name;
+      }
+    });
+  }).catch(function () {});
+})();
+</script>
+</body>
+</html>

@@ -1,5 +1,9 @@
 # GitLab CI — mirrors .github/workflows (ci.yml, pages.yml, release.yml).
 #
+# Pipelines on main build the release archives as job artifacts (kept 30 days);
+# tags v* also publish them as a GitLab release. Pages serves site/ as the home
+# page, with the browser build under /app/.
+#
 # Runners: Linux jobs use the default gitlab.com shared runners. Windows jobs use the
 # shared Windows runners (saas-windows-medium-amd64). macOS runners are only
 # available on Premium/Ultimate, so the macOS jobs run only when the CI/CD
@@ -36,6 +40,11 @@ default:
 .rules-release: &rules-release
   - if: $CI_COMMIT_TAG =~ /^v/
 
+# Archives are built on tags and on every push to the default branch.
+.rules-build: &rules-build
+  - if: $CI_COMMIT_TAG =~ /^v/
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
+
 .linux:
   cache:
     key:
@@ -64,6 +73,9 @@ default:
 
 # Installs wasm-bindgen-cli at the version pinned in Cargo.lock.
 .wasm-setup: &wasm-setup
+  # CARGO_HOME is redirected into the project for caching, so `cargo install`
+  # puts binaries there rather than in the image's /usr/local/cargo/bin
+  - export PATH="$CARGO_HOME/bin:$PATH"
   - rustup target add wasm32-unknown-unknown
   - v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')
   - |
@@ -103,81 +115,92 @@ test:macos:
 wasm:
   extends: .linux
   stage: test
-  rules: *rules-ci
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
+      when: never  # build:wasm builds it
+    - when: on_success
   script:
     - *wasm-setup
     - ./ferrostat-wasm/build.sh
 
 # ------------------------------------------------------------- release
-# Each build job leaves its archive in dist/; the release job uploads them to
-# the generic package registry and links them from the GitLab release.
+# Each build job leaves its archive in dist/ (a job artifact, so builds from
+# main can be downloaded too); on tags the release job uploads them to the
+# generic package registry and links them from the GitLab release.
+
+.artifacts: &artifacts
+  name: $CI_JOB_NAME_SLUG-$CI_COMMIT_REF_SLUG
+  paths: [dist/]
+  expire_in: 30 days
 
 build:linux:
   extends: .linux
   stage: build
-  rules: *rules-release
+  rules: *rules-build
   variables:
     TARGET: x86_64-unknown-linux-gnu
   script:
     - cargo build --release -p ferrostat-repl -p ferrostat-gui --target $TARGET
-    - name=ferrostat-$CI_COMMIT_TAG-$TARGET
+    - name=ferrostat-${CI_COMMIT_TAG:-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA}-$TARGET
     - mkdir -p "$name" dist
     - cp target/$TARGET/release/ferrostat target/$TARGET/release/ferrostat-gui "$name/"
     - cp README.md LICENSE* "$name/" 2>/dev/null || true
     - tar czf "dist/$name.tar.gz" "$name"
-  artifacts:
-    paths: [dist/]
+  artifacts: *artifacts
 
 build:windows:
   extends: .windows
   stage: build
-  rules: *rules-release
+  rules: *rules-build
   variables:
     TARGET: x86_64-pc-windows-msvc
   script:
     - cargo build --release -p ferrostat-repl -p ferrostat-gui --target $env:TARGET
-    - $name = "ferrostat-$env:CI_COMMIT_TAG-$env:TARGET"
+    - $ver = if ($env:CI_COMMIT_TAG) { $env:CI_COMMIT_TAG } else { "$env:CI_COMMIT_REF_SLUG-$env:CI_COMMIT_SHORT_SHA" }
+    - $name = "ferrostat-$ver-$env:TARGET"
     - New-Item -ItemType Directory -Force -Path $name, dist | Out-Null
     - Copy-Item "target/$env:TARGET/release/ferrostat.exe", "target/$env:TARGET/release/ferrostat-gui.exe" $name
     - Copy-Item README.md, LICENSE* $name -ErrorAction SilentlyContinue
     - Compress-Archive -Path $name -DestinationPath "dist/$name.zip"
-  artifacts:
-    paths: [dist/]
+  artifacts: *artifacts
 
 build:macos:
   extends: .macos
   stage: build
   rules:
     - if: $CI_COMMIT_TAG =~ /^v/ && $MACOS_RUNNER == "true"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $MACOS_RUNNER == "true"
   parallel:
     matrix:
       - TARGET: [aarch64-apple-darwin, x86_64-apple-darwin]
   script:
     - rustup target add $TARGET
     - cargo build --release -p ferrostat-repl -p ferrostat-gui --target $TARGET
-    - name=ferrostat-$CI_COMMIT_TAG-$TARGET
+    - name=ferrostat-${CI_COMMIT_TAG:-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA}-$TARGET
     - mkdir -p "$name" dist
     - cp target/$TARGET/release/ferrostat target/$TARGET/release/ferrostat-gui "$name/"
     - cp README.md LICENSE* "$name/" 2>/dev/null || true
     - tar czf "dist/$name.tar.gz" "$name"
-  artifacts:
-    paths: [dist/]
+  artifacts: *artifacts
 
 build:wasm:
   extends: .linux
   stage: build
-  rules: *rules-release
+  rules: *rules-build
   script:
     - *wasm-setup
     - ./ferrostat-wasm/build.sh
     - apt-get update -qq && apt-get install -y -qq zip >/dev/null
-    - name=ferrostat-$CI_COMMIT_TAG-wasm32-web
+    - name=ferrostat-${CI_COMMIT_TAG:-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA}-wasm32-web
     - mkdir -p dist
     - cp -r ferrostat-wasm/web "$name"
     - cp README.md LICENSE* "$name/" 2>/dev/null || true
     - zip -qr "dist/$name.zip" "$name"
   artifacts:
-    paths: [dist/]
+    <<: *artifacts
+    paths: [dist/, ferrostat-wasm/web/]
 
 release:
   stage: release
@@ -198,25 +221,45 @@ release:
         asset=$(basename "$f")
         url="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/ferrostat/$CI_COMMIT_TAG/$asset"
         curl --fail --silent --show-error --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" "$url"
-        set -- "$@" --assets-link "{\"name\":\"$asset\",\"url\":\"$url\",\"link_type\":\"package\"}"
+        # version-free path, so <project>/-/releases/permalink/latest/downloads/<stable>
+        # always points at the newest release (the home page links there)
+        case "$asset" in
+          *-x86_64-unknown-linux-gnu.tar.gz) stable=ferrostat-linux-x86_64.tar.gz ;;
+          *-x86_64-pc-windows-msvc.zip)      stable=ferrostat-windows-x86_64.zip ;;
+          *-aarch64-apple-darwin.tar.gz)     stable=ferrostat-macos-aarch64.tar.gz ;;
+          *-x86_64-apple-darwin.tar.gz)      stable=ferrostat-macos-x86_64.tar.gz ;;
+          *-wasm32-web.zip)                  stable=ferrostat-web.zip ;;
+          *)                                 stable=$asset ;;
+        esac
+        set -- "$@" --assets-link "{\"name\":\"$asset\",\"url\":\"$url\",\"filepath\":\"/$stable\",\"link_type\":\"package\"}"
       done
       release-cli create --name "$CI_COMMIT_TAG" --tag-name "$CI_COMMIT_TAG" "$@"
 
 # --------------------------------------------------------------- pages
-# Publishes the browser build to GitLab Pages. Run it by hand from the
-# pipeline page (or "Run pipeline" on main).
+# Home page (site/) with download links to the latest release, and the browser
+# build under /app/. Deployed automatically after each release; on main it can
+# be run by hand from the pipeline page.
 
 pages:
-  extends: .linux
   stage: deploy
+  image: alpine:latest
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
       when: manual
       allow_failure: true
-  needs: []
+  needs:
+    - build:wasm
+    - job: release
+      optional: true
   script:
-    - *wasm-setup
-    - ./ferrostat-wasm/build.sh
-    - rm -rf public && cp -r ferrostat-wasm/web public
+    - apk add --no-cache curl
+    - rm -rf public && mkdir public
+    - cp site/* public/
+    - cp assets/icon-64.png assets/logo-wordmark.png public/
+    - sed -i "s|@PROJECT_URL@|$CI_PROJECT_URL|g" public/index.html
+    - cp -r ferrostat-wasm/web public/app
+    # Release metadata for the page (version, which assets exist); optional.
+    - curl --fail --silent --header "JOB-TOKEN: $CI_JOB_TOKEN" "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases/permalink/latest" -o public/release.json || rm -f public/release.json
   artifacts:
     paths: [public]
