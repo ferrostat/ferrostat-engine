@@ -462,7 +462,7 @@ pub fn parse_in_text(s: &str) -> Result<InRange, ParseError> {
     if x > 0 { Ok(InRange::Single(x as usize)) } else { Ok(InRange::Rel(x, x)) }
 }
 
-const WEIGHT_TYPES: [&str; 9] = ["fw", "fweight", "aw", "aweight", "pw", "pweight", "iw", "iweight", "weight"];
+const WEIGHT_TYPES: [&str; 10] = ["fw", "fweight", "aw", "aweight", "pw", "pweight", "iw", "iweight", "weight", "w"];
 
 /// Parse a full command line from text.
 fn parse_command_text(raw: &str) -> Result<Command, ParseError> {

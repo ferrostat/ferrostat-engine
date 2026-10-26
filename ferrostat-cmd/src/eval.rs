@@ -1211,6 +1211,21 @@ fn call_function(env: &Env, name: &str, v: &[Val]) -> Result<Val, String> {
                 num(SYSMISS)
             }
         }
+        // date literals: td(15jan2001), tc(15jan2001 10:30:00), tm(1960m1), tq(1967q1), ...
+        "td" => num(dates::date(s(v, 0)?, "DMY", None)),
+        "tc" | "tC" => num(dates::clock(s(v, 0)?, "DMYhms")),
+        "tw" | "tm" | "tq" | "th" | "ty" => {
+            let txt = s(v, 0)?.to_lowercase();
+            let parts: Vec<f64> = txt.split(|c: char| !c.is_ascii_digit() && c != '-').filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect();
+            num(match (name, parts.as_slice()) {
+                ("ty", [y]) => *y,
+                ("tw", [y, k]) => dates::yw(*y, *k),
+                ("tm", [y, k]) => dates::ym(*y, *k),
+                ("tq", [y, k]) => dates::yq(*y, *k),
+                ("th", [y, k]) => dates::yh(*y, *k),
+                _ => return Err(rc_err(198, format!("{name}({txt}): invalid date literal"))),
+            })
+        }
         "yearly" => num(real(s(v, 0)?)),
         "year" => num1(v, dates::year),
         "month" => num1(v, dates::month),

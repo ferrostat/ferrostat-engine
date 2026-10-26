@@ -114,6 +114,8 @@ pub struct Store {
     /// Default storage type for generate (`set type`).
     pub default_type: ferrostat_core::VarType,
     pub filename: String,
+    /// Colour scheme for new graphs (`set scheme`); empty = default (Okabe-Ito).
+    pub scheme: String,
     /// Current graph and named graphs in memory.
     pub graph: Option<crate::graph::Graph>,
     pub graphs: BTreeMap<String, crate::graph::Graph>,
@@ -146,6 +148,7 @@ impl Default for Store {
             by_groups: None,
             default_type: ferrostat_core::VarType::Float,
             filename: String::new(),
+            scheme: String::new(),
             graph: None,
             graphs: BTreeMap::new(),
             cwd: None,

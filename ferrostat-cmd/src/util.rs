@@ -117,7 +117,7 @@ pub fn weights(ds: &DataSet, st: &Store, cmd: &Command, mask: &mut [bool], allow
         "aw" | "aweight" | "cellsize" => WeightKind::A,
         "pw" | "pweight" => WeightKind::P,
         "iw" | "iweight" => WeightKind::I,
-        "weight" => {
+        "weight" | "w" => {
             if allowed.contains('f') { WeightKind::F } else { WeightKind::A }
         }
         w => return Err(rc_err(198, format!("{w} not allowed"))),

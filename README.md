@@ -68,6 +68,8 @@ Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with
 | Nonlinear | `logit`, `logistic`, `probit`, `cloglog`, `poisson`, `nbreg`, `ologit`, `oprobit`, `mlogit`, `tobit`, `glm` (6 families, 7 links) |
 | Post-estimation | `predict` (xb, residuals, stdp/stdf/stdr, leverage, rstandard/rstudent, cooksd, pr, n, ir, mu, u/e/xbu, scores), `test`, `testparm`, `lincom`, `margins` (predictive margins, `dydx()`, `at()`, `atmeans`; delta-method SEs), `estimates store/restore/table/stats`, `estat ic/vce/hettest/ovtest/vif/summarize/firststage` |
 | Spatial | `shp2dta` (ESRI shapefile + dBase import), `spmat contiguity` (queen/rook, row/minmax/spectral normalisation), `spmat lag`, `spmap` (choropleths) |
+| Survival | `stset`, `sts graph`, `strate` (exact Poisson CIs), `ltable` (actuarial life tables, Greenwood SEs) |
+| ROC | `roctab` (DeLong SE, Lorenz/Gini/Pietra), `roccomp`, `rocgold` (DeLong comparisons), `rocfit` (binormal ML) |
 | Other | `kdensity` (8 kernels), `outreg2`-style regression tables, `putexcel` (.xlsx) |
 
 ---
@@ -241,11 +243,16 @@ Design matrices are built with factor variables, interactions and time-series op
 
 Graph commands build the graph in memory; nothing is written until `graph export` (or a `saving()` option):
 
-- `twoway` with `scatter`, `line`, `connected`, `area`, `bar`, `lfit` layers; `histogram`, `graph bar`, `graph box`, `kdensity`, `spmap` choropleths, `graph combine` grids
-- `title()`, `xtitle()`, `ytitle()`, `yline()`, `xline()`, `legend()`, `name()`
+- **twoway** plot types: `scatter` (weighted markers `[w=]`, `mlabel()`, hollow symbols), `line`, `connected`, `area`, `bar`, `spike`, `dropline`, the range plots `rarea`, `rbar`, `rspike`, `rcap`, `rcapsym`, `rline`, `rconnected`, `rscatter`, and the prediction plots `lfit`, `qfit`, `fpfit` (fractional polynomials) with their `…ci` confidence-band variants; `horizontal`, `base()`, `barwidth()`; overlays with `||` or `()`; `by(var, total rows() cols())` panels; time-series operators in plotted variables (`d.gnp96`)
+- `graph bar`, `graph hbar` (`over()`, `stack`, `blabel()`), `graph dot`, `graph box` (`over()`, `horizontal`, `medtype(marker)`, outside values), `graph pie` (`over()`, `pie(#, explode)`, `plabel()`), `histogram` (`normal`, `kdensity` overlays), `kdensity`, `graph combine`, `spmap` choropleths
+- Distribution plots: `qnorm`, `pnorm`, `quantile`, `qqplot`, `symplot`, `qchi`, `pchi`, `gladder`, `qladder`, `spikeplot`, `sunflower`
+- Time-series plots: `tsline`, `tsrline`, `ac`, `pac`, `pergram`, `cumsp`, `xcorr`, `wntestb`
+- Survival and ROC graphs: `sts graph` (Kaplan–Meier, Nelson–Aalen, `by()`, `atrisk`), `strate`, `ltable`, `roctab`, `roccomp`, `rocgold`, `rocfit`
+- Axes use the display format of their variables (`%td` dates label the ticks); `title()`, `xtitle()`, `ytitle()`, `yline()`, `xline()`, `legend(off|order(# "text" …))`, `name()`
+- Colour-blind-safe default palette (Okabe & Ito, *Color Universal Design*); `set scheme okabeito|classic|mono` or `scheme()` per graph
 - Export to **PNG**, **SVG** and **PDF**; `graph save`/`graph use` store graphs in Ferrostat's own text format
 
-Rendering uses the open-source [`plotters`](https://crates.io/crates/plotters) crate.
+Rendering uses the open-source [`plotters`](https://crates.io/crates/plotters) crate with an embedded DejaVu Sans font.
 
 ---
 
@@ -256,6 +263,7 @@ cargo test --workspace
 ```
 
 - `ferrostat-tests` drives the interpreter exactly as a user would and checks results against **independent reference values** computed by `ferrostat-tests/reference/reference.py`, a standard-library-only Python implementation of the textbook formulas (OLS, robust SEs, logit/probit/poisson MLE, t tests, chi-square, ANOVA, fixed effects, kernel density).
+- `ferrostat-tests/tests/gallery.rs` runs every example of the original graph gallery (109 graphs) on synthetic stand-ins for its datasets; the 5 examples needing VAR/VEC estimation are marked ignored.
 - CI builds and tests on Linux, Windows and macOS, and builds the WebAssembly version (`.github/workflows/ci.yml`).
 - Real-world validation: two research do-files (panel regressions, dynamic factor analysis, PMG/MG panel ARDL) were run unmodified apart from their machine-specific `cd`. Their results were compared with the logs of the original runs: all 686 coefficient rows of the regression tasks match (coefficient and standard error), as do the factor count and PMG/MG estimates and the Pesaran CD statistic.
 
@@ -265,6 +273,7 @@ cargo test --workspace
 
 - Mata and Python blocks are not supported.
 - Community packages are not downloaded; only the natively implemented ones above are available.
+- Not yet implemented: VAR/VEC models (`var`, `svar`, `irf`, `vec`, `varfcast`), mixed models, `svy`, `mi`, frames, `collect`/`table`, Bayesian and SEM suites.
 - `xtivreg` `be`/`fd`/`re` and `ivregress liml`/`gmm` are validated against independent textbook implementations, not yet against original output; the random-effects variance components use the Swamy–Arora-type within/between 2SLS estimates (Baltagi, ch. 7).
 - `xtivreg2` reports the Kleibergen–Paap rk LM/Wald F (Anderson LM and Cragg–Donald F under i.i.d. errors), Hansen J/Sargan and the C endogeneity test. Stock–Yogo critical values (TSLS bias and size, from the published tables) are shown alongside. Its header follows `xtivreg`, and the small-sample conventions under fixed effects with clustering have not yet been checked against original output.
 - Random-number streams are reproducible within Ferrostat but differ from other software for the same seed.
@@ -290,7 +299,7 @@ This project exists to ensure long-term accessibility of statistical datasets an
 
 Contributions are welcome! Priority areas:
 
-- [ ] Survival analysis: `stset`, `stcox`, `streg`
+- [ ] Survival models: `stcox`, `streg`; VAR/VEC (`var`, `irf`, `vec`)
 - [ ] Time series: `arima`, `var`, `newey`, `prais`
 - [ ] Survey data: `svyset`, `svy:`
 - [ ] Multiple imputation: `mi`

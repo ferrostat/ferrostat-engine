@@ -7,7 +7,7 @@ use ferrostat_cmd::commands::CommandHandler;
 use ferrostat_cmd::eval::{rc_err, Groups};
 use ferrostat_cmd::store::Store;
 use ferrostat_cmd::{
-    correlate, data, egen, graph, io, kdensity, labels, listing, matcmd, models, postest, restructure, summarize, tabulate, tests,
+    correlate, data, egen, distplot, graph, io, kdensity, labels, listing, matcmd, models, postest, restructure, roc, summarize, survival, tabulate, tests, tsplot,
     util, varlist,
 };
 use ferrostat_core::DataSet;
@@ -287,6 +287,33 @@ impl Engine {
             ("scatter", Box::new(graph::Twoway)),
             ("line", Box::new(graph::Twoway)),
             ("connected", Box::new(graph::Twoway)),
+            ("tsline", Box::new(graph::TsLine)),
+            ("qnorm", Box::new(distplot::DistPlot)),
+            ("pnorm", Box::new(distplot::DistPlot)),
+            ("qchi", Box::new(distplot::DistPlot)),
+            ("pchi", Box::new(distplot::DistPlot)),
+            ("quantile", Box::new(distplot::DistPlot)),
+            ("qqplot", Box::new(distplot::DistPlot)),
+            ("symplot", Box::new(distplot::DistPlot)),
+            ("gladder", Box::new(distplot::DistPlot)),
+            ("qladder", Box::new(distplot::DistPlot)),
+            ("spikeplot", Box::new(distplot::DistPlot)),
+            ("sunflower", Box::new(distplot::DistPlot)),
+            ("ac", Box::new(tsplot::TsPlot)),
+            ("stset", Box::new(survival::Stset)),
+            ("roctab", Box::new(roc::Roc)),
+            ("roccomp", Box::new(roc::Roc)),
+            ("rocgold", Box::new(roc::Roc)),
+            ("rocfit", Box::new(roc::Roc)),
+            ("sts", Box::new(survival::Sts)),
+            ("strate", Box::new(survival::Strate)),
+            ("ltable", Box::new(survival::Ltable)),
+            ("pac", Box::new(tsplot::TsPlot)),
+            ("xcorr", Box::new(tsplot::TsPlot)),
+            ("pergram", Box::new(tsplot::TsPlot)),
+            ("cumsp", Box::new(tsplot::TsPlot)),
+            ("wntestb", Box::new(tsplot::TsPlot)),
+            ("tsrline", Box::new(graph::TsLine)),
             ("histogram", Box::new(graph::Histogram)),
             ("graph", Box::new(graph::GraphCmd)),
         ];
@@ -448,8 +475,14 @@ impl Engine {
                 self.store.varabbrev = v.trim() == "on";
                 Ok(String::new())
             }
+            "scheme" => {
+                // unknown scheme names (from other software) keep the default palette
+                let name = v.split(',').next().unwrap_or("").trim().to_lowercase();
+                self.store.scheme = if ferrostat_cmd::graph::is_scheme(&name) { name } else { String::new() };
+                Ok(String::new())
+            }
             // accepted for compatibility; no effect
-            "more" | "maxvar" | "matsize" | "linesize" | "pagesize" | "graphics" | "scheme" | "trace" | "tracedepth" | "logtype"
+            "more" | "maxvar" | "matsize" | "linesize" | "pagesize" | "graphics" | "trace" | "tracedepth" | "logtype"
             | "output" | "processors" | "niceness" | "dp" | "emptycells" | "fvlabel" | "showbaselevels" | "cformat" | "pformat"
             | "sformat" | "maxiter" | "checksum" | "autotabgraphs" | "segmentsize" | "max_memory" | "min_memory" | "copycolor" | "locale_functions"
             | "locale_ui" | "charset" | "httpproxy" | "update_query" | "timeout1" | "timeout2" | "printcolor" | "haverdir" | "odbcmgr" | "notifyuser"

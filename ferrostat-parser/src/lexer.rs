@@ -95,6 +95,8 @@ pub struct Lexer {
     input: String,
     pos: usize,
     current_char: Option<char>,
+    /// tokens already scanned, returned before reading further input
+    pending: Vec<Token>,
 }
 
 impl Lexer {
@@ -105,6 +107,7 @@ impl Lexer {
             input,
             pos: 0,
             current_char,
+            pending: Vec::new(),
         }
     }
 
@@ -257,6 +260,18 @@ impl Lexer {
                 break;
             }
         }
+        // date literals: td(15jan2001), tm(1960m1), tq(1967q1), ... take their
+        // argument as raw text, returned as a string
+        if matches!(s.as_str(), "td" | "tc" | "tC" | "tw" | "tm" | "tq" | "th" | "ty") && self.current_char == Some('(') {
+            if let Some(close) = self.input[self.pos..].find(')') {
+                let raw = self.input[self.pos + 1..self.pos + close].trim().to_string();
+                for _ in 0..self.input[self.pos..self.pos + close + 1].chars().count() {
+                    self.advance();
+                }
+                // returned in reverse order by next_token
+                self.pending = vec![Token::RParen, Token::Str(raw), Token::LParen];
+            }
+        }
         Token::Ident(s)
     }
 
@@ -303,6 +318,9 @@ impl Lexer {
     }
 
     pub fn next_token(&mut self) -> Token {
+        if let Some(t) = self.pending.pop() {
+            return t;
+        }
         self.skip_whitespace();
         match self.current_char {
             None => Token::Eof,

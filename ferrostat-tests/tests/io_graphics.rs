@@ -232,3 +232,51 @@ fn float_cells_are_shown_at_float_precision() {
     // a double keeps its digits
     assert!(out.contains("1347.5601"), "{out}");
 }
+
+#[test]
+fn new_graph_types_survive_graph_save_and_use() {
+    let dir = temp_dir("gph_roundtrip");
+    let mut s = Session::new();
+    s.script("set obs 40\ngenerate byte g = mod(_n, 4) + 1\nlabel define gl 1 \"one\" 2 \"two\" 3 \"three\" 4 \"four\"\nlabel values g gl\ngenerate double y = _n");
+    for (cmd, marker) in [
+        ("graph pie y, over(g) pie(2, explode) plabel(_all percent)", "pie\t"),
+        ("graph dot y, over(g)", "guides\t"),
+        ("graph hbar y, over(g)", "ylabel\t"),
+        ("graph box y, over(g) medtype(marker)", "\ttrue\n"),
+        ("twoway line y g, legend(order(1 \"Values\"))", "order\t1\tValues"),
+    ] {
+        s.run(cmd);
+        let f = dir.join("g.gph");
+        s.run(&format!("graph save \"{}\", replace", f.display()));
+        let text = std::fs::read_to_string(&f).unwrap();
+        assert!(text.contains(marker), "{cmd}: {marker:?} missing in\n{text}");
+        let before = s.run(&format!("graph export \"{}\", replace", dir.join("a.svg").display()));
+        s.run(&format!("graph use \"{}\"", f.display()));
+        s.run(&format!("graph export \"{}\", replace", dir.join("b.svg").display()));
+        let (a, b) = (std::fs::read_to_string(dir.join("a.svg")).unwrap(), std::fs::read_to_string(dir.join("b.svg")).unwrap());
+        assert_eq!(a, b, "{cmd}: graph use draws a different graph");
+        let _ = before;
+    }
+}
+
+#[test]
+fn pie_slices_are_group_sums_and_scheme_is_okabe_ito() {
+    let dir = temp_dir("pie_scheme");
+    let mut s = Session::new();
+    s.script("set obs 4\ngenerate byte g = _n\ngenerate double v = _n");
+    s.run("graph pie v, over(g) plabel(_all percent)");
+    let f = dir.join("p.gph");
+    s.run(&format!("graph save \"{}\", replace", f.display()));
+    let text = std::fs::read_to_string(&f).unwrap();
+    // 1+2+3+4 = 10: the fourth slice is 40%
+    assert!(text.contains("pie\t4\tfalse\t4\t40%"), "{text}");
+    // default palette: Okabe-Ito blue first; `set scheme classic` restores the old colours
+    s.run("twoway line v g");
+    let svg = dir.join("l.svg");
+    s.run(&format!("graph export \"{}\", replace", svg.display()));
+    assert!(std::fs::read_to_string(&svg).unwrap().to_uppercase().contains("#0072B2"));
+    s.run("set scheme classic");
+    s.run("twoway line v g");
+    s.run(&format!("graph export \"{}\", replace", svg.display()));
+    assert!(std::fs::read_to_string(&svg).unwrap().to_uppercase().contains("#1A476F"));
+}
