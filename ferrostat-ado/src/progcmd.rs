@@ -426,7 +426,11 @@ pub fn display(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
             s = s[end + 1..].to_string();
             continue;
         }
-        if lower.starts_with("as ") || lower.starts_with("in smcl") {
+        // `as style` and the old `in smcl` / `in red|green|yellow|white|blue`
+        let old_in = lower.strip_prefix("in ").map(|x| x.trim_start()).map_or(false, |x| {
+            ["smcl", "red", "green", "yellow", "white", "blue"].iter().any(|c| x.starts_with(c) && !x[c.len()..].starts_with(|ch: char| ch.is_alphanumeric() || ch == '_'))
+        });
+        if lower.starts_with("as ") || old_in {
             let mut parts = s.splitn(3, char::is_whitespace);
             parts.next();
             parts.next();

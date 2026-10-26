@@ -547,6 +547,7 @@ impl AdoInterpreter {
         }
         self.engine.store.push_frame();
         self.engine.store.set_local("0", args.to_string());
+        self.engine.store.set_local("*", args.trim().to_string());
         for (k, w) in macros::words(args).iter().enumerate() {
             self.engine.store.set_local(&(k + 1).to_string(), unquote(w));
         }
@@ -582,6 +583,7 @@ impl AdoInterpreter {
         if !same_scope {
             self.engine.store.push_frame();
             self.engine.store.set_local("0", args.to_string());
+            self.engine.store.set_local("*", args.trim().to_string());
             for (k, w) in macros::words(args).iter().enumerate() {
                 self.engine.store.set_local(&(k + 1).to_string(), unquote(w));
             }

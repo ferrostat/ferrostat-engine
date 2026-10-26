@@ -213,3 +213,11 @@ fn foreach_newlist_ranges() {
     s.script("foreach v of newlist z1-z3 {\ngen `v' = 1\n}");
     assert!(s.has_var("z1") && s.has_var("z2") && s.has_var("z3"));
 }
+
+#[test]
+fn star_macro_and_old_display_colors() {
+    let mut s = Session::new();
+    s.script("program p\nargs a b\ndisplay \"[`*'] \" wordcount(\"`*'\")\nend");
+    assert_eq!(s.run("p x y").trim(), "[x y] 2");
+    assert_eq!(s.run("display in red \"x\" in green \"y\"").trim(), "xy");
+}
