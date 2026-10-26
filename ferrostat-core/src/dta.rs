@@ -217,7 +217,14 @@ fn read_tagged(data: &[u8]) -> Result<DataSet> {
 
     let mut types = Vec::with_capacity(k);
     let sec = |c: &mut Cursor, off: u64, tag: &[u8]| -> Result<()> {
-        c.pos = off as usize;
+        // some writers leave map entries at 0: fall back to scanning forward
+        if off == 0 {
+            if let Some(i) = c.buf[c.pos..].windows(tag.len()).position(|w| w == tag) {
+                c.pos += i;
+            }
+        } else {
+            c.pos = off as usize;
+        }
         c.expect(tag)
     };
 
