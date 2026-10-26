@@ -243,13 +243,21 @@ Design matrices are built with factor variables, interactions and time-series op
 
 Graph commands build the graph in memory; nothing is written until `graph export` (or a `saving()` option):
 
-- **twoway** plot types: `scatter` (weighted markers `[w=]`, `mlabel()`, hollow symbols), `line`, `connected`, `area`, `bar`, `spike`, `dropline`, the range plots `rarea`, `rbar`, `rspike`, `rcap`, `rcapsym`, `rline`, `rconnected`, `rscatter`, and the prediction plots `lfit`, `qfit`, `fpfit` (fractional polynomials) with their `…ci` confidence-band variants; `horizontal`, `base()`, `barwidth()`; overlays with `||` or `()`; `by(var, total rows() cols())` panels; time-series operators in plotted variables (`d.gnp96`)
-- `graph bar`, `graph hbar` (`over()`, `stack`, `blabel()`), `graph dot`, `graph box` (`over()`, `horizontal`, `medtype(marker)`, outside values), `graph pie` (`over()`, `pie(#, explode)`, `plabel()`), `histogram` (`normal`, `kdensity` overlays), `kdensity`, `graph combine`, `spmap` choropleths
+- **twoway** plot types:
+  - points and lines: `scatter` (`[w=]` weighted markers, `mlabel()`), `scatteri`, `line`, `connected`, `area`, `bar`, `spike`, `dropline`, `dot`, `function`, `tsline`, `tsrline`
+  - ranges: `rarea`, `rbar`, `rspike`, `rcap`, `rcapsym`, `rline`, `rconnected`, `rscatter`, `rpcap`, `rpspike`
+  - paired coordinates: `pcspike`, `pccapsym`, `pcarrow`, `pcbarrow`, `pcscatter`, `pci`, `pcarrowi`
+  - fits and smoothers: `lfit`, `qfit`, `fpfit` (fractional polynomials) and their `…ci` bands, `lowess`, `lpoly`, `lpolyci`, `mband`, `mspline`
+  - distributions: `histogram`, `kdensity`
+  - surfaces: `contour`, `contourline`, `heatmap` (thin-plate-spline interpolation of scattered data, colour key)
+  - overlays with `||` or `()`, `by(var, total rows() cols())` panels, `horizontal`, `base()`, `barwidth()`, time-series operators in plotted variables
+- Styles: `msymbol()` (circle, diamond, triangle, square, plus, x, point, small and hollow variants), `lpattern()` (solid, dash, dot, …), `mcolor()`/`lcolor()`/`fcolor()`/`color()` by name, `"R G B"`, `#rrggbb` or `gs0`–`gs16`
+- `graph bar`, `graph hbar` (`over()`, `stack`, `blabel()`), `graph dot`, `graph box` (`over()`, `horizontal`, `medtype(marker)`), `graph pie` (`over()`, `pie(#, explode)`, `plabel()`), `graph matrix` (`half`), `graph combine`, `histogram` (`normal`, `kdensity`), `kdensity`, `spmap`
 - Distribution plots: `qnorm`, `pnorm`, `quantile`, `qqplot`, `symplot`, `qchi`, `pchi`, `gladder`, `qladder`, `spikeplot`, `sunflower`
-- Time-series plots: `tsline`, `tsrline`, `ac`, `pac`, `pergram`, `cumsp`, `xcorr`, `wntestb`
-- Survival and ROC graphs: `sts graph` (Kaplan–Meier, Nelson–Aalen, `by()`, `atrisk`), `strate`, `ltable`, `roctab`, `roccomp`, `rocgold`, `rocfit`
+- Time-series plots: `ac`, `pac`, `pergram`, `cumsp`, `xcorr`, `wntestb`; survival and ROC graphs: `sts graph`, `strate`, `ltable`, `roctab`, `roccomp`, `rocgold`, `rocfit`
+- Managing graphs: `graph save`, `use`, `export`, `print` (system spooler), `display`, `replay`, `describe`, `dir`, `copy`, `rename`, `drop`, `close`, `query`, `set`, `play` (a recording of option edits, one per line); `palette color|linepalette|symbolpalette`; `set graphics on|off`, `set printcolor` (grayscale or black-and-white printing and PDF export)
 - Axes use the display format of their variables (`%td` dates label the ticks); `title()`, `xtitle()`, `ytitle()`, `yline()`, `xline()`, `legend(off|order(# "text" …))`, `name()`
-- Colour-blind-safe default palette (Okabe & Ito, *Color Universal Design*); `set scheme okabeito|classic|mono` or `scheme()` per graph
+- Colour-blind-safe default palette (Okabe & Ito, *Color Universal Design*); `set scheme okabeito|classic|mono` or `scheme()` per graph; surfaces use a colour-blind-safe sequential ramp
 - Export to **PNG**, **SVG** and **PDF**; `graph save`/`graph use` store graphs in Ferrostat's own text format
 
 Rendering uses the open-source [`plotters`](https://crates.io/crates/plotters) crate with an embedded DejaVu Sans font.

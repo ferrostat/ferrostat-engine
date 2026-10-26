@@ -136,8 +136,9 @@ async function applySnapshot(s) {
   await rasterJobs(s.rasterJobs || []);
   if (s.graphSerial !== shownGraph) {
     shownGraph = s.graphSerial;
-    if (await renderGraph()) showTab("graph");
+    if ((await renderGraph()) && s.graphVisible) showTab("graph");
   }
+  if (!s.graphVisible && activeTab() === "graph") showTab("results");
   await store.apply(await call("changes"));
 }
 

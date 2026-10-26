@@ -116,6 +116,14 @@ pub struct Store {
     pub filename: String,
     /// Colour scheme for new graphs (`set scheme`); empty = default (Okabe-Ito).
     pub scheme: String,
+    /// `set graphics off`: graphs are drawn but not shown in a window.
+    pub graphics_off: bool,
+    /// `graph close` closed the graph window (reopened by the next graph).
+    pub graph_window_closed: bool,
+    /// `set printcolor automatic|asis|gs1|gs2|gs3`.
+    pub printcolor: String,
+    /// `graph set <group> <setting> <value>`: (group, setting) -> value.
+    pub graph_settings: BTreeMap<(String, String), String>,
     /// Current graph and named graphs in memory.
     pub graph: Option<crate::graph::Graph>,
     pub graphs: BTreeMap<String, crate::graph::Graph>,
@@ -149,6 +157,10 @@ impl Default for Store {
             default_type: ferrostat_core::VarType::Float,
             filename: String::new(),
             scheme: String::new(),
+            graphics_off: false,
+            graph_window_closed: false,
+            printcolor: String::new(),
+            graph_settings: BTreeMap::new(),
             graph: None,
             graphs: BTreeMap::new(),
             cwd: None,

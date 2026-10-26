@@ -124,6 +124,11 @@ impl Ferrostat {
         self.session.graph_serial as f64
     }
 
+    /// False after `graph close` or under `set graphics off`.
+    pub fn graph_visible(&self) -> bool {
+        self.session.graph_visible()
+    }
+
     pub fn graph_svg(&self, width: u32, height: u32) -> Option<String> {
         self.session.graph_svg(width, height)
     }

@@ -43,6 +43,7 @@ function snapshot() {
     cwd: fs.cwd(),
     pending: fs.pending(),
     graphSerial: fs.graph_serial(),
+    graphVisible: fs.graph_visible(),
     rasterJobs: JSON.parse(fs.take_raster_jobs()),
   };
 }

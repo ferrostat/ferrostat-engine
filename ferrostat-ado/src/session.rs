@@ -151,6 +151,13 @@ impl Session {
         self.interp.engine().store.graph.as_ref()
     }
 
+    /// Should a graph window show the current graph? (not after `graph close`
+    /// or under `set graphics off`)
+    pub fn graph_visible(&self) -> bool {
+        let st = &self.interp.engine().store;
+        st.graph.is_some() && !st.graphics_off && !st.graph_window_closed
+    }
+
     pub fn graph_svg(&self, w: u32, h: u32) -> Option<String> {
         self.graph().and_then(|g| ferrostat_cmd::graph::render_svg(g, w, h).ok())
     }

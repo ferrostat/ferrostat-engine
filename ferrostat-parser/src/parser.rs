@@ -529,7 +529,13 @@ fn parse_command_text(raw: &str) -> Result<Command, ParseError> {
     cmd.main = body[..main_end].trim().to_string();
     for (j, &(_, cstart, kind)) in marks.iter().enumerate() {
         let cend = marks.get(j + 1).map(|m| m.0).unwrap_or(body.len());
-        let content = body[cstart..cend].trim();
+        let mut content = body[cstart..cend].trim();
+        // `||` separates twoway plots: a qualifier never extends past it
+        if matches!(kind, K::If | K::In) {
+            if let Some(k) = content.find("||") {
+                content = content[..k].trim();
+            }
+        }
         match kind {
             K::If => {
                 cmd.if_raw = Some(content.to_string());

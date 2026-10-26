@@ -288,6 +288,7 @@ impl Engine {
             ("line", Box::new(graph::Twoway)),
             ("connected", Box::new(graph::Twoway)),
             ("tsline", Box::new(graph::TsLine)),
+            ("palette", Box::new(graph::Palette)),
             ("qnorm", Box::new(distplot::DistPlot)),
             ("pnorm", Box::new(distplot::DistPlot)),
             ("qchi", Box::new(distplot::DistPlot)),
@@ -475,6 +476,18 @@ impl Engine {
                 self.store.varabbrev = v.trim() == "on";
                 Ok(String::new())
             }
+            "graphics" => {
+                self.store.graphics_off = v.trim() == "off";
+                Ok(String::new())
+            }
+            "printcolor" => {
+                let p = v.split(',').next().unwrap_or("").trim().to_lowercase();
+                if !matches!(p.as_str(), "automatic" | "asis" | "gs1" | "gs2" | "gs3") {
+                    return Err(rc_err(198, format!("printcolor {p} not allowed")));
+                }
+                self.store.printcolor = p;
+                Ok(String::new())
+            }
             "scheme" => {
                 // unknown scheme names (from other software) keep the default palette
                 let name = v.split(',').next().unwrap_or("").trim().to_lowercase();
@@ -482,10 +495,10 @@ impl Engine {
                 Ok(String::new())
             }
             // accepted for compatibility; no effect
-            "more" | "maxvar" | "matsize" | "linesize" | "pagesize" | "graphics" | "trace" | "tracedepth" | "logtype"
+            "more" | "maxvar" | "matsize" | "linesize" | "pagesize" | "trace" | "tracedepth" | "logtype"
             | "output" | "processors" | "niceness" | "dp" | "emptycells" | "fvlabel" | "showbaselevels" | "cformat" | "pformat"
             | "sformat" | "maxiter" | "checksum" | "autotabgraphs" | "segmentsize" | "max_memory" | "min_memory" | "copycolor" | "locale_functions"
-            | "locale_ui" | "charset" | "httpproxy" | "update_query" | "timeout1" | "timeout2" | "printcolor" | "haverdir" | "odbcmgr" | "notifyuser"
+            | "locale_ui" | "charset" | "httpproxy" | "update_query" | "timeout1" | "timeout2" | "haverdir" | "odbcmgr" | "notifyuser"
             | "include_bitmap" | "doublebuffer" | "reventries" | "varkeyboard" | "showomitted" | "showemptycells" | "lstretch" | "coeftabresults"
             | "fvwrap" | "fvwrapon" | "collect_label" | "collect_style" | "table_style" | "dots" | "iterlog" | "python_exec" | "rng" | "rngstream"
             | "sortseed" | "sortmethod" | "matacache" | "matafavor" | "matastrict" | "matalnum" | "mataoptimize" | "matalibs" | "matamofirst" => Ok(String::new()),

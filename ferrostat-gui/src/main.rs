@@ -67,8 +67,11 @@ impl App {
     }
 
     fn after_run(&mut self, serial: u64) {
-        if self.session.graph_serial != serial && self.session.graph().is_some() {
+        if self.session.graph_serial != serial && self.session.graph_visible() {
             self.show_graph = true;
+        }
+        if !self.session.graph_visible() {
+            self.show_graph = false;
         }
         self.scroll_to_end = true;
     }

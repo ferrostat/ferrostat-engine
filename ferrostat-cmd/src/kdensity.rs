@@ -32,7 +32,7 @@ pub fn kernel(name: &str, u: f64) -> f64 {
     }
 }
 
-fn canonical_kernel(k: &str) -> &'static str {
+pub fn canonical_kernel(k: &str) -> &'static str {
     match k {
         k if k.starts_with("gau") => "gaussian",
         k if k.starts_with("epan2") => "epan2",

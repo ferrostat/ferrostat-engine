@@ -32,6 +32,11 @@ fn print_result(interp: &mut AdoInterpreter, res: Result<String, String>) -> boo
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    // every word accepted as a command (with abbreviations), one per line
+    if args.iter().any(|a| a == "--list-commands") {
+        println!("{}", ferrostat_ado::session::Session::new().command_words().join("\n"));
+        return;
+    }
     let mut interp = AdoInterpreter::new();
 
     // Batch mode: ferrostat --do file.do [args]  (also: ferrostat -b do file.do)
