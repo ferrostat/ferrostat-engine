@@ -260,6 +260,9 @@ pages:
     - sed -i "s|@PROJECT_URL@|$CI_PROJECT_URL|g" public/index.html
     - cp -r ferrostat-wasm/web public/app
     # Release metadata for the page (version, which assets exist); optional.
-    - curl --fail --silent --header "JOB-TOKEN: $CI_JOB_TOKEN" "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases/permalink/latest" -o public/release.json || rm -f public/release.json
+    - |
+      curl --fail --silent --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases/permalink/latest" \
+        -o public/release.json || rm -f public/release.json
   artifacts:
     paths: [public]

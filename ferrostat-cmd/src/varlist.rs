@@ -144,7 +144,8 @@ pub fn split_operator(tok: &str) -> Option<(&str, &str)> {
 /// Validate a list of new variable names.
 pub fn new_names(ds: &DataSet, text: &str) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
-    for t in text.split_whitespace() {
+    for t in text.split_whitespace().flat_map(new_range) {
+        let t = t.as_str();
         check_name(t)?;
         if ds.var_index.contains_key(t) {
             return Err(rc_err(110, format!("variable {t} already defined")));
@@ -152,6 +153,22 @@ pub fn new_names(ds: &DataSet, text: &str) -> Result<Vec<String>, String> {
         out.push(t.to_string());
     }
     Ok(out)
+}
+
+/// `x1-x3` -> x1 x2 x3; anything else is returned unchanged.
+fn new_range(t: &str) -> Vec<String> {
+    let split = |s: &str| {
+        let i = s.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+        (s[..i].to_string(), s[i..].parse::<u64>().ok())
+    };
+    if let Some((a, b)) = t.split_once('-') {
+        if let ((sa, Some(na)), (sb, Some(nb))) = (split(a), split(b)) {
+            if sa == sb && !sa.is_empty() && na <= nb {
+                return (na..=nb).map(|n| format!("{sa}{n}")).collect();
+            }
+        }
+    }
+    vec![t.to_string()]
 }
 
 pub fn check_name(t: &str) -> Result<(), String> {

@@ -145,6 +145,27 @@ fn expand_one(inner: &str, ds: &DataSet, st: &mut Store) -> Result<String, Strin
         st.set_local(n, macro_number(v));
         return Ok(old);
     }
+    // `r(name)', `e(name)', `s(name)', `c(name)'
+    if let Some((k, name)) = inner.split_once('(').and_then(|(k, r)| Some((k, r.strip_suffix(')')?))) {
+        let res = match k {
+            "r" => Some(&st.r),
+            "e" => Some(&st.e),
+            "s" => Some(&st.s),
+            _ => None,
+        };
+        if let Some(res) = res {
+            if let Some(m) = res.macros.get(name) {
+                return Ok(m.clone());
+            }
+            if let Some(v) = res.scalars.get(name) {
+                return Ok(macro_number(*v));
+            }
+            return Ok(if res.matrices.contains_key(name) { "matrix".into() } else { String::new() });
+        }
+        if k == "c" && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return eval_to_macro(ds, st, inner);
+        }
+    }
     Ok(get_macro(st, inner))
 }
 

@@ -619,6 +619,7 @@ fn c_value(env: &Env, key: &str) -> Val {
         "os" => Val::Str(if cfg!(windows) { "Windows" } else if cfg!(target_os = "macos") { "MacOSX" } else { "Unix" }.into()),
         "dirsep" => Val::Str(std::path::MAIN_SEPARATOR.to_string()),
         "pwd" => Val::Str(ferrostat_core::vfs::current_dir()),
+        "username" => Val::Str(std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default()),
         "filename" => Val::Str(env.st.map(|s| s.filename.clone()).unwrap_or_default()),
         "changed" => Val::Num(bool_f(env.st.map_or(false, |s| s.data_changed))),
         "seed" => Val::Num(env.st.map_or(0, |s| s.rng.borrow().seed) as f64),

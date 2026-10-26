@@ -771,6 +771,14 @@ fn estimates_table(models: &[(String, Results)], cmd: &Command) -> Result<String
                 (Some(b), Some(v), Some(j)) => {
                     let bj = b.get(0, j);
                     let se = v.get(j, j).max(0.0).sqrt();
+                    if se == 0.0 {
+                        // base or omitted level
+                        cells.push(fmtv(bj));
+                        for col in [&mut ses, &mut ts, &mut ps] {
+                            col.push(".".into());
+                        }
+                        continue;
+                    }
                     let t = bj / se;
                     let p = match e.get("df_r") {
                         Some(d) => 2.0 * dist::ttail(d, t.abs()),

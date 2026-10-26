@@ -118,7 +118,7 @@ pub fn invnormal(p: f64) -> f64 {
 
 /// Upper-tail probability P(T > t).
 pub fn ttail(df: f64, t: f64) -> f64 {
-    if df <= 0.0 {
+    if df <= 0.0 || t.is_nan() {
         return M;
     }
     let x = df / (df + t * t);

@@ -477,7 +477,7 @@ impl AdoInterpreter {
                     "local" | "loc" => macros::words(self.engine.store.local(list_text.trim()).map(String::as_str).unwrap_or("")).into_iter().map(|x| unquote(&x)).collect(),
                     "global" | "glo" => macros::words(self.engine.store.globals.get(list_text.trim()).map(String::as_str).unwrap_or("")).into_iter().map(|x| unquote(&x)).collect(),
                     "varlist" | "var" => varlist::expand(&self.engine.dataset, &list_text)?,
-                    "newlist" | "new" => list_text.split_whitespace().map(String::from).collect(),
+                    "newlist" | "new" => varlist::new_names(&self.engine.dataset, &list_text)?,
                     "numlist" | "num" => macros::numlist(&list_text)?.into_iter().map(macro_number).collect(),
                     _ => return Err(rc_err(198, format!("foreach: {kind} invalid"))),
                 }

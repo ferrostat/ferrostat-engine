@@ -193,3 +193,23 @@ fn unknown_command_fails_with_199() {
     s.run("capture nosuchcommand");
     assert_eq!(s.scalar("_rc"), 199.0);
 }
+
+#[test]
+fn stored_results_in_macro_quotes() {
+    let mut s = Session::with_fixture();
+    s.run("quietly summarize x");
+    let n = s.scalar("r(N)");
+    assert_eq!(s.run("display \"`r(N)'\"").trim(), format!("{n}"));
+    s.run("local k `c(k)'");
+    assert_eq!(s.run("display `k'").trim(), format!("{}", s.ds().n_vars()));
+    assert_eq!(s.run("display \"[`r(nosuch)']\"").trim(), "[]");
+    // _N is the observation count, not the _n directive
+    assert_eq!(s.run("display _N").trim(), format!("{}", s.n()));
+}
+
+#[test]
+fn foreach_newlist_ranges() {
+    let mut s = Session::with_fixture();
+    s.script("foreach v of newlist z1-z3 {\ngen `v' = 1\n}");
+    assert!(s.has_var("z1") && s.has_var("z2") && s.has_var("z3"));
+}

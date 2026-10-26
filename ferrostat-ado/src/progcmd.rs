@@ -439,8 +439,8 @@ pub fn display(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
                 None => (s.clone(), String::new()),
             };
             let (name, arg) = match word.find('(') {
-                Some(i) => (word[..i].to_lowercase(), word[i + 1..].trim_end_matches(')').to_string()),
-                None => (word.to_lowercase(), String::new()),
+                Some(i) => (word[..i].to_string(), word[i + 1..].trim_end_matches(')').to_string()),
+                None => (word.clone(), String::new()),
             };
             let n: usize = arg.trim().parse().unwrap_or(1);
             let handled = match name.as_str() {
