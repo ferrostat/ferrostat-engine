@@ -615,7 +615,7 @@ impl AdoInterpreter {
         if self.engine.store.programs.contains_key(verb_raw) {
             return self.run_program(verb_raw, rest.trim());
         }
-        if self.engine.is_command(verb) || matches!(verb, "clear" | "preserve" | "restore" | "set" | "sysuse" | "webuse") {
+        if self.engine.is_command(verb) || matches!(verb, "clear" | "preserve" | "restore" | "set" | "sysuse") {
             let cmd: Command = parse_line(full).map_err(|e| rc_err(198, e.message))?;
             return self.engine.execute(&cmd);
         }

@@ -414,7 +414,7 @@ impl Engine {
                 Ok(String::new())
             }
             "set" => self.set(&cmd),
-            "sysuse" | "webuse" => {
+            "sysuse" => {
                 let name = cmd.main.trim().trim_end_matches(".dta");
                 if name == "dir" {
                     return Ok(String::new());
