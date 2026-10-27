@@ -34,7 +34,7 @@ A statistical computing engine written in Rust. Ferrostat provides an environmen
 Ferrostat runs existing analysis scripts unchanged: it reads and writes `.dta` files, executes `.do` files (macros, loops, programs), fits the common econometric models, and exports tables (Excel, tab-delimited), logs (SMCL/text) and graphs (PNG/SVG/PDF). It is designed for:
 
 - **Reproducible research** — batch scripts with deterministic execution on Linux, Windows and macOS
-- **Data archaeology** — reading legacy `.dta` files (formats 113–119) on any platform
+- **Data archaeology** — reading legacy `.dta` files (formats 102–119) and fixed-format text (`infile`, `infix` dictionaries) on any platform
 - **Statistical education** — every algorithm is readable Rust
 - **Embedding** — use the engine and its datasets from Rust applications
 - **Zero-install teaching** — the browser version runs entirely client-side; data never leaves the page
@@ -46,33 +46,37 @@ Ferrostat runs existing analysis scripts unchanged: it reads and writes `.dta` f
 ### Language
 - Macros: `` `local' ``, `$global`, `` `=exp' ``, `` `:extended function' ``, `` `++i' ``, nested macros, compound quotes
 - Control flow: `foreach` (in/of local/global/varlist/newlist/numlist), `forvalues`, `while`, `if`/`else if`/`else`, `continue`, `break`
-- Prefixes: `quietly`, `noisily`, `capture` (sets `_rc`), `by`/`bysort` (group-aware `_n`, `_N`, subscripts)
+- Prefixes: `quietly`, `noisily`, `capture` (sets `_rc`), `by`/`bysort` (group-aware `_n`, `_N`, subscripts), `xi:`, `frame name:`, `bootstrap:`, `simulate:`, `permute:`, `collect:`
 - Programs: `program define … end` with `syntax`, `args`, `tokenize`, `gettoken`, `marksample`, `tempvar`/`tempname`/`tempfile`, `return`/`ereturn`
 - Stored results `r()`, `e()`, `c()`, `_b[]`, `_se[]`, scalars and a matrix language (`J()`, `I()`, `diag()`, `inv()`, joins, subscripts, `accum`, `symeigen`, `mkmat`/`svmat`)
 - Command abbreviations (`gen`, `su`, `reg`, `tab`, …), varlist wildcards and ranges, factor variables (`i.`, `ib#.`, `c.`, `#`, `##`) and time-series operators (`L.`, `F.`, `D.`, `S.`)
-- `#delimit ;`, `///` continuation, `//` and `/* */` comments, `do`/`run`/`include`, `log using`, `set rmsg on`
+- `#delimit ;`, `///` continuation, `//` and `/* */` comments, `do`/`run`/`include`, `log using`, `set rmsg on`, `cls`
+- User-written `egen` functions (`program _gname`)
 
 ### Expressions
 Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with missing yields missing, and logical tests follow the usual rules (`x > 5` is true for missing `x`). Around 200 functions: mathematics, distributions (`normal`, `invnormal`, `t`/`ttail`, `chi2`/`chi2tail`, `F`/`Ftail`, `binomial`, `poisson`, `gammap`, `ibeta`, inverses), random numbers (`runiform`, `rnormal`, … with `set seed`), strings (`substr`, `strpos`, `subinstr`, `regexm`, `ustrregexra`, `word`, `strtrim`, …), dates (`mdy`, `date`, `clock`, `year`, `dofm`, `age`, `datediff`, `birthday`, `%td`/`%tc`/`%tm`/`%tq` formats), programming (`cond`, `inlist`, `inrange`, `missing`, running `sum()`).
 
 ### Data management
-`generate`/`replace` (storage types, sequential evaluation), `egen` (~35 functions), `drop`/`keep`, `rename` (groups, wildcards, `lower`/`upper`), `clonevar`, `browse`/`edit` (no-ops in batch mode), `order`, `sort`/`gsort`, `label` (define/values/variable/data/list), `encode`/`decode`, `destring`/`tostring`, `recode`, `mvencode`/`mvdecode`, `split`, `format`, `compress`, `recast`, `collapse` (all statistics), `contract`, `expand`, `fillin`, `reshape long|wide` (numeric and string `j`), `merge 1:1|m:1|1:m|m:m` (with `keep()`, `keepusing()`, `update`, `replace`, `assert()`), `append`, `joinby`, `cross`, `xpose`, `sample`, `duplicates`, `isid`, `levelsof`, `preserve`/`restore`, `input`, `set obs`, `tsset`/`xtset`; frames: `frame create|change|copy|put|drop|rename|dir|reset`, `frame name: cmd`, `cwf`/`pwf`, `frlink`, `frget`, `frval()`.
+`generate`/`replace` (storage types, sequential evaluation), `egen` (~35 functions), `drop`/`keep`, `rename` (groups, wildcards, `lower`/`upper`), `clonevar`, `browse`/`edit` (no-ops in batch mode), `order`, `sort`/`gsort`, `label` (define/values/variable/data/list), `encode`/`decode`, `destring`/`tostring`, `recode`, `mvencode`/`mvdecode`, `split`, `format`, `compress`, `recast`, `collapse` (all statistics), `contract`, `expand`, `fillin`, `reshape long|wide` (numeric and string `j`), `merge 1:1|m:1|1:m|m:m` (with `keep()`, `keepusing()`, `update`, `replace`, `assert()`), `append`, `joinby`, `cross`, `xpose`, `sample`, `duplicates`, `isid`, `levelsof`, `preserve`/`restore`, `input`, `infile`/`infix` (free format and dictionaries), `separate`, `set obs`, `tsset`/`xtset`; frames: `frame create|change|copy|put|drop|rename|dir|reset`, `frame name: cmd`, `cwf`/`pwf`, `frlink`, `frget`, `frval()`.
 
 ### Statistics
 | Area | Commands |
 |------|----------|
-| Descriptive | `summarize` (incl. `detail`, weights), `tabulate` (one/two-way, `chi2`, `lrchi2`, `exact`, `V`, `gamma`, `taub`, `generate()`), `tab1`, `tab2`, `tabstat`, `table` (current and legacy `contents()` syntax), `correlate`, `pwcorr`, `spearman`, `centile`, `mean`, `total`, `ci`, `codebook`, `misstable` |
+| Descriptive | `summarize` (incl. `detail`, weights), `tabulate` (one/two-way, `chi2`, `lrchi2`, `exact`, `V`, `gamma`, `taub`, `generate()`), `tab1`, `tab2`, `tabstat`, `table` (current and legacy `contents()` syntax), `dtable`, `correlate`, `pwcorr`, `spearman`, `centile`, `mean`, `total`, `ci`, `codebook`, `misstable` |
 | Tests | `ttest` (one-sample, paired, by-group, unequal/Welch), `prtest`, `sdtest`, `ranksum`, `signrank`, `signtest`, `kwallis`, `oneway`, `ksmirnov`, `swilk`, `hausman` |
-| Linear models | `regress` (robust, cluster, `fw`/`aw`/`pw`/`iw`), `anova`, `areg`, `qreg`, `ivregress 2sls`/`liml`/`gmm` (`wmatrix()`, `igmm`; `estat firststage`, `estat overid`) |
+| Linear models | `regress` (robust, HC2/HC3, cluster, `fw`/`aw`/`pw`/`iw`), `anova`, `areg`, `qreg`, `rreg`, `mvreg`, `manova`/`manovatest`, `ivregress 2sls`/`liml`/`gmm` (`wmatrix()`, `igmm`; `estat firststage`, `estat overid`) |
 | Panel | `xtreg` (`fe`, `re`, `be`, cluster), `xtivreg` (`fe`, `be`, `fd`, `re` with G2SLS or `ec2sls`), `xtivreg2` (`fe`, cluster; Kleibergen–Paap and Cragg–Donald identification tests with Stock–Yogo critical values, Hansen J, C endogeneity test), `xtpmg` (PMG, MG; Pesaran CD test) |
-| Nonlinear | `logit`, `logistic`, `probit`, `cloglog`, `poisson`, `nbreg`, `ologit`, `oprobit`, `mlogit`, `tobit`, `glm` (6 families, 7 links) |
-| Post-estimation | `predict` (xb, residuals, stdp/stdf/stdr, leverage, rstandard/rstudent, cooksd, pr, n, ir, mu, u/e/xbu, scores), `test`, `testparm`, `lincom`, `margins` (predictive margins, `dydx()`, `at()`, `atmeans`; delta-method SEs), `contrast` (r./a./ar./g. operators, `@` groups, joint Wald tests, `effects`, `post`), r(table) after every coefficient table, `estimates store/restore/table/stats`, `estat ic/vce/hettest/ovtest/vif/summarize/firststage` |
+| Nonlinear | `logit`, `logistic`, `probit`, `cloglog`, `poisson`, `nbreg`, `zip`, `zinb`, `ologit`, `oprobit`, `mlogit`, `tobit`, `glm` (6 families, 7 links) |
+| Multilevel | `melogit`/`meqrlogit` (random intercepts and independent slopes, nested levels, adaptive Gauss–Hermite quadrature) |
+| Resampling | `bootstrap` (and `vce(bootstrap)`, `estat bootstrap` with normal/percentile/BC/BCa intervals), `simulate`, `permute` |
+| Post-estimation | `predict` (xb, residuals, stdp/stdf/stdr, leverage, rstandard/rstudent, cooksd, pr, n, ir, mu, u/e/xbu, scores), `test`, `testparm`, `lincom`, `margins` (predictive margins, `dydx()`, `at()` with numlists and statistics, `atmeans`, `over()`, `predict()` outcomes; delta-method SEs), `marginsplot`, `contrast` (r./a./ar./g. operators, `@` groups, joint Wald tests, `effects`, `post`), r(table) after every coefficient table, `estimates store/restore/table/stats`, `estat ic/vce/hettest/ovtest/vif/summarize/firststage/gof` |
 | Spatial | `shp2dta` (ESRI shapefile + dBase import), `spmat contiguity` (queen/rook, row/minmax/spectral normalisation), `spmat lag`, `spmap` (choropleths) |
 | Survival | `stset`, `sts graph`, `strate` (exact Poisson CIs), `ltable` (actuarial life tables, Greenwood SEs) |
 | ROC | `roctab` (DeLong SE, Lorenz/Gini/Pietra), `roccomp`, `rocgold` (DeLong comparisons), `rocfit` (binormal ML) |
 | Mata | `mata`/`mata:` … `end` blocks and `mata:` one-liners (real/string matrices, operators incl. colon ops, subscripts and ranges, typed functions, loops, pointers), `mata describe/drop/clear`, `clear mata`; library (J, I, select, sort, cross, invsym, colsum, mean, tokens, sprintf/printf, …), `st_data/st_sdata/st_view/st_store/st_addvar/st_local/st_global/st_numscalar/st_matrix`… and the `xl()` class (load_book, get_sheets, get_string/get_number, put_*) |
 | Python | `python:` one-liners and `python`/`python:` … `end` blocks in a persistent external Python 3 process, `python query/search/which/describe/drop/clear/script/set exec`, `set python_exec`; `sfi` module subset (Data, Macro, Scalar, Matrix, SFIToolkit); not in the browser |
 | Other | `kdensity` (8 kernels), `outreg2`-style regression tables, `eststo`/`esttab`/`estout`/`estpost`/`estadd` (stored-model and descriptive tables to screen/RTF/CSV/LaTeX/HTML), `putexcel` (.xlsx, with cell formats: borders, number formats, fonts, fills, alignment, merged cells), `frmttable` (matrix tables to screen/RTF/LaTeX, merge/append/substat/annotate), `unique` |
+| Tables | `collect` (tags, `get`, `label`, `style`, `layout`, `preview`, `export` to .docx/.xlsx/.html/.md/.tex/.txt), `table` results stored in collections, `dtable`, `etable` |
 | Documents | `putdocx` (.docx: styled paragraphs, text, images, tables from data/matrices/estimates, page breaks, append), `putpdf` (basic PDF), `dyndoc`/`dyntext` (dynamic Markdown with `dd_do`/`dd_display`/`dd_graph`/skip/ignore/remove/include tags to HTML, .docx or text), `markdown`, `html2docx` |
 
 ---
@@ -151,7 +155,7 @@ cargo install wasm-bindgen-cli --version 0.2.129   # must match Cargo.lock
 python3 -m http.server -d ferrostat-wasm/web 8080   # open http://localhost:8080
 ```
 
-The page is static (HTML, CSS, JS and the `.wasm` module), so any static host works — including GitHub Pages via `.github/workflows/pages.yml`. Files live in an in-memory file system: upload or drop `.dta`, `.csv`, `.xlsx` and `.do` files into the session, and download anything the session writes (datasets, logs, tables, exported graphs). Differences from the native builds:
+The page is static (HTML, CSS, JS and the `.wasm` module), so any static host works. CI publishes it under `/app/` of the project site, next to the download page in `site/`, on GitLab Pages (`.gitlab-ci.yml`) and GitHub Pages (`.github/workflows/pages.yml`) after every push to `main` and every release. Files live in an in-memory file system: upload or drop `.dta`, `.csv`, `.xlsx` and `.do` files into the session, and download anything the session writes (datasets, logs, tables, exported graphs). Differences from the native builds:
 
 - The engine runs in a Web Worker, so the page stays responsive; **Stop** cancels a long computation (the engine restarts with an empty dataset, files are kept).
 - Session files are saved in the browser's IndexedDB and restored on the next visit; *clear* in the Files panel deletes them.
@@ -195,7 +199,7 @@ None: graph text uses an embedded copy of the DejaVu Sans font (`assets/fonts`, 
 
 Commands, prefixes and options follow the familiar conventions of do-file syntax, including minimal abbreviations, `[fw=]`/`[aw=]`/`[pw=]`/`[iw=]` weights and `in f/l` ranges. Error messages end with the usual return code (`r(111);`), which `capture` stores in `_rc`; in batch mode the process exit status is the return code of the failing command.
 
-Community packages that Ferrostat implements natively (`outreg2`, `xtivreg2`, `xtpmg`, `spmap`, `shp2dta`, `spmat`) are reported by `which` and accepted by `ssc install`, which installs nothing. Other community packages are not downloaded.
+Community packages that Ferrostat implements natively (`estout`/`esttab`/`eststo`, `coefplot`, `outreg2`, `frmttable`, `unique`, `xtivreg2`/`ivreg2`, `xtpmg`, `spmap`, `shp2dta`, `spmat`) are reported by `which` and accepted by `ssc install`, which installs nothing. Other community packages are not downloaded.
 
 ---
 
@@ -221,15 +225,15 @@ ferrostat-tests       -- behavioural test suite and independent reference values
 4. **Evaluator** — evaluates per observation with access to stored results, by-groups and time-series structure.
 
 ### Estimation framework
-Design matrices are built with factor variables, interactions and time-series operators; collinear columns are detected and reported as omitted. Variance estimators include OLS, heteroskedasticity-robust (HC1) and cluster-robust sandwiches; likelihood models are fitted by Newton–Raphson with step halving.
+Design matrices are built with factor variables, interactions and time-series operators; collinear columns are detected and reported as omitted. Variance estimators include OLS, heteroskedasticity-robust (HC1; HC2/HC3 for `regress`), cluster-robust sandwiches and the bootstrap; likelihood models are fitted by Newton–Raphson with step halving.
 
 ---
 
 ## Data Formats
 
-### .dta (formats 113–119)
+### .dta (formats 102–119)
 
-- Reads formats 113, 114, 115, 117, 118 and 119 (both byte orders); writes 115, 117, 118 and 119 (`save`, `saveold, version()`)
+- Reads formats 102–115 and 117–119 (both byte orders); writes 115, 117, 118 and 119 (`save`, `saveold, version()`)
 - All storage types: `byte`, `int`, `long`, `float`, `double`, `str1`–`str2045`, `strL`
 - Variable labels, value labels, display formats, characteristics, sort order and dataset label are preserved
 - The 27 missing values per type (`.`, `.a`–`.z`) are preserved exactly
@@ -238,6 +242,7 @@ Design matrices are built with factor variables, interactions and time-series op
 
 - `import delimited` / `export delimited` (delimiters, `varnames()`, `case()`, `stringcols()`, locale-aware numbers via `parselocale()`, `decimalseparator()`, `groupseparator()`)
 - `import excel` / `export excel` (`.xlsx`: `sheet()`, `cellrange()`, `firstrow`, `allstring`, dates as `%td`/`%tc`; `export excel` with `sheet(, modify|replace)`)
+- `infile` (free format or with a dictionary) and `infix` (fixed columns, dictionaries in a file or inline in a do-file)
 - `putexcel` writes `.xlsx` workbooks (cells, expressions, matrices with names); `outreg2` writes tab-delimited regression tables
 
 ---
@@ -277,20 +282,21 @@ cargo test --workspace
 
 - `ferrostat-tests` drives the interpreter exactly as a user would and checks results against **independent reference values** computed by `ferrostat-tests/reference/reference.py`, a standard-library-only Python implementation of the textbook formulas (OLS, robust SEs, logit/probit/poisson MLE, t tests, chi-square, ANOVA, fixed effects, kernel density).
 - `ferrostat-tests/tests/gallery.rs` runs every example of the original graph gallery (109 graphs) on synthetic stand-ins for its datasets; the 5 examples needing VAR/VEC estimation are marked ignored.
-- CI builds and tests on Linux, Windows and macOS, and builds the WebAssembly version (`.github/workflows/ci.yml`).
+- CI builds and tests on Linux, Windows and macOS, and builds the WebAssembly version, on both GitLab (`.gitlab-ci.yml`) and GitHub (`.github/workflows/ci.yml`).
+- Tutorial suites: the do-files of public courses (the Göttingen *Economic analysis* course, UCLA OARC data-analysis examples, Princeton tutorials, *The Mixtape*, *Mostly Harmless Econometrics*) are run as acceptance tests; their datasets are not redistributed.
 - Real-world validation: two research do-files (panel regressions, dynamic factor analysis, PMG/MG panel ARDL) were run unmodified apart from their machine-specific `cd`. Their results were compared with the logs of the original runs: all 686 coefficient rows of the regression tasks match (coefficient and standard error), as do the factor count and PMG/MG estimates and the Pesaran CD statistic.
 
 ---
 
 ## Known Limitations
 
-- Mata and Python blocks are not supported.
+- Mata covers the common matrix language and `st_*` interface but not complex numbers or classes (other than `xl()`), and views are copies. Python needs an external Python 3 and is unavailable in the browser.
 - Community packages are not downloaded; only the natively implemented ones above are available.
-- Not yet implemented: VAR/VEC models (`var`, `svar`, `irf`, `vec`, `varfcast`), mixed models, `svy`, `mi`, frames, `collect`/`table`, Bayesian and SEM suites.
+- Not yet implemented: VAR/VEC models (`var`, `svar`, `irf`, `vec`, `varfcast`), linear mixed models (`mixed`) and the other `me` commands besides `melogit`, `svy`, `mi`, Bayesian and SEM suites.
 - `xtivreg` `be`/`fd`/`re` and `ivregress liml`/`gmm` are validated against independent textbook implementations, not yet against original output; the random-effects variance components use the Swamy–Arora-type within/between 2SLS estimates (Baltagi, ch. 7).
 - `xtivreg2` reports the Kleibergen–Paap rk LM/Wald F (Anderson LM and Cragg–Donald F under i.i.d. errors), Hansen J/Sargan and the C endogeneity test. Stock–Yogo critical values (TSLS bias and size, from the published tables) are shown alongside. Its header follows `xtivreg`, and the small-sample conventions under fixed effects with clustering have not yet been checked against original output.
 - Random-number streams are reproducible within Ferrostat but differ from other software for the same seed.
-- `graph combine` lays out graphs in a grid; graph schemes and most styling options are accepted but ignored.
+- `graph combine` lays out graphs in a grid; only the `okabeito`, `classic` and `mono` schemes exist, and some styling options are accepted but ignored.
 
 ---
 
@@ -312,12 +318,12 @@ This project exists to ensure long-term accessibility of statistical datasets an
 
 Contributions are welcome! Priority areas:
 
-- [ ] Survival models: `stcox`, `streg`; VAR/VEC (`var`, `irf`, `vec`)
-- [ ] Time series: `arima`, `var`, `newey`, `prais`
+- [ ] Survival models: `stcox`, `streg`
+- [ ] Time series: `arima`, `newey`, `prais`, VAR/VEC (`var`, `irf`, `vec`)
 - [ ] Survey data: `svyset`, `svy:`
 - [ ] Multiple imputation: `mi`
-- [ ] `heckman`, `clogit`, `xtlogit`, `mixed`
-- [ ] A Mata-compatible matrix programming language
+- [ ] `heckman`, `clogit`, `xtlogit`, `mixed` and the other multilevel models
+- [ ] Mata: complex numbers, classes and views
 - [ ] Graph schemes and the remaining styling options
 
 Please open an issue before large refactors.
