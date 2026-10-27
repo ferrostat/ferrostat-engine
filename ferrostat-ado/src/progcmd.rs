@@ -185,6 +185,8 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             }
         }
         "pwd" => vfs::current_dir(),
+        // the front ends clear their results window at this marker
+        "cls" => crate::interpreter::CLS.to_string(),
         "dir" => dir_listing(r)?,
         "erase" => {
             let p = unquote(r);
@@ -406,7 +408,7 @@ fn dir_listing(r: &str) -> Result<String, String> {
 
 /// Commands handled by the interpreter itself rather than the engine.
 pub const INTERP_COMMANDS: &[&str] = &[
-    "local", "global", "macro", "display", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit", "collect", "dtable", "etable",
+    "local", "global", "macro", "display", "cls", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit", "collect", "dtable", "etable",
 ];
 
 fn is_interp_command(n: &str) -> bool {

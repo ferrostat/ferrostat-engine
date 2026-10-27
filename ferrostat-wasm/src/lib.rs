@@ -25,6 +25,8 @@ pub struct Ferrostat {
     session: Session,
     /// transcript entries already handed to the page
     sent: usize,
+    /// `session.clears` already reported to the page
+    clears: u64,
 }
 
 impl Default for Ferrostat {
@@ -39,7 +41,7 @@ impl Ferrostat {
     pub fn new() -> Ferrostat {
         #[cfg(target_arch = "wasm32")]
         install_panic_hook();
-        Ferrostat { session: Session::new(), sent: 0 }
+        Ferrostat { session: Session::new(), sent: 0, clears: 0 }
     }
 
     pub fn version() -> String {
@@ -62,10 +64,17 @@ impl Ferrostat {
     }
 
     /// New transcript entries since the last call:
-    /// `[{"kind": "command"|"output"|"error", "text": ...}]`.
+    /// `[{"kind": "command"|"output"|"error", "text": ...}]`; a leading
+    /// `{"kind": "clear"}` means `cls` cleared the results first.
     pub fn take_output(&mut self) -> String {
+        let mut new: Vec<Value> = Vec::new();
+        if self.session.clears != self.clears {
+            self.clears = self.session.clears;
+            self.sent = 0;
+            new.push(json!({"kind": "clear"}));
+        }
         let t = &self.session.transcript;
-        let new: Vec<Value> = t[self.sent.min(t.len())..]
+        new.extend(t[self.sent.min(t.len())..]
             .iter()
             .map(|e| {
                 let kind = match e.kind {
@@ -74,8 +83,7 @@ impl Ferrostat {
                     EntryKind::Error => "error",
                 };
                 json!({"kind": kind, "text": e.text})
-            })
-            .collect();
+            }));
         self.sent = t.len();
         Value::Array(new).to_string()
     }

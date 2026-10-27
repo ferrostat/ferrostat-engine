@@ -127,3 +127,20 @@ fn front_end_session_clear_empties_data() {
     assert_eq!(fe.submit("clear"), 0);
     assert_eq!((fe.n_obs(), fe.n_vars()), (0, 0));
 }
+
+#[test]
+fn cls_clears_front_end_transcript_only() {
+    let _lock = Session::new();
+    let mut fe = ferrostat_ado::session::Session::new();
+    fe.submit("set obs 2");
+    fe.submit("di \"before\"");
+    assert!(!fe.transcript.is_empty());
+    assert_eq!(fe.submit("cls"), 0);
+    assert!(fe.transcript.is_empty());
+    assert_eq!((fe.clears, fe.n_obs()), (1, 2));
+    // in a do-file, output before `cls` goes and output after it stays
+    fe.run_script("di \"one\"\ncls\ndi \"two\"");
+    let text: Vec<&str> = fe.transcript.iter().map(|e| e.text.as_str()).collect();
+    assert_eq!(fe.clears, 2);
+    assert!(text.iter().any(|t| t.contains("two")) && !text.iter().any(|t| t.contains("one")), "{text:?}");
+}

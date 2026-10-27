@@ -110,6 +110,8 @@ async function restartEngine(reason) {
 function appendEntries(entries) {
   const res = $("results");
   for (const e of entries) {
+    // `cls`
+    if (e.kind === "clear") { res.replaceChildren(); continue; }
     const span = document.createElement("span");
     if (e.kind === "command") span.className = "cmd";
     if (e.kind === "error") span.className = "err";

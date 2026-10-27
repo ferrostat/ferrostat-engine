@@ -121,6 +121,11 @@ impl AdoInterpreter {
         if text.is_empty() {
             return;
         }
+        if text == CLS {
+            // `cls` clears the screen, not the log
+            self.out.push(text.to_string());
+            return;
+        }
         if self.quiet > 0 && self.noisy == 0 {
             return;
         }
@@ -786,6 +791,10 @@ fn frame_prefix(rest: &str, block: bool) -> Option<(String, String)> {
     }
     (block && after.is_empty()).then(|| (name.to_string(), String::new()))
 }
+
+/// Output marker written by `cls`: front ends clear their results window
+/// (and drop the output before it) where it appears.
+pub const CLS: &str = "\u{c}";
 
 pub fn split_verb(text: &str) -> (String, String) {
     let t = text.trim();

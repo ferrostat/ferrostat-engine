@@ -38,6 +38,8 @@ pub struct Session {
     pub graph_serial: u64,
     last_graph: Option<Graph>,
     pub exited: bool,
+    /// bumped every time `cls` clears the transcript
+    pub clears: u64,
 }
 
 impl Default for Session {
@@ -48,7 +50,7 @@ impl Default for Session {
 
 impl Session {
     pub fn new() -> Self {
-        Session { interp: AdoInterpreter::new(), transcript: Vec::new(), history: Vec::new(), graph_serial: 0, last_graph: None, exited: false }
+        Session { interp: AdoInterpreter::new(), transcript: Vec::new(), history: Vec::new(), graph_serial: 0, last_graph: None, exited: false, clears: 0 }
     }
 
     fn push(&mut self, kind: EntryKind, text: &str) {
@@ -101,11 +103,21 @@ impl Session {
         rc
     }
 
-    /// Output text may contain echoed commands (". cmd" lines) from do-files.
+    /// Output text may contain echoed commands (". cmd" lines) from do-files,
+    /// and `cls` markers, which clear the transcript.
     fn push_output(&mut self, out: &str) {
         let mut buf = String::new();
         for line in out.lines() {
-            if line.starts_with(". ") || line == "." {
+            if line.contains(crate::interpreter::CLS) {
+                buf.clear();
+                self.transcript.clear();
+                self.clears += 1;
+                let rest = line.rsplit(crate::interpreter::CLS).next().unwrap_or("");
+                if !rest.is_empty() {
+                    buf.push_str(rest);
+                    buf.push('\n');
+                }
+            } else if line.starts_with(". ") || line == "." {
                 self.push(EntryKind::Output, &std::mem::take(&mut buf));
                 self.push(EntryKind::Command, line);
             } else {

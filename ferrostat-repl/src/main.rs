@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 
 use ferrostat_ado::interpreter::{err_message, rc_of, AdoInterpreter};
 
@@ -13,7 +13,17 @@ fn print_result(interp: &mut AdoInterpreter, res: Result<String, String>) -> boo
     match res {
         Ok(out) => {
             let exit = out.ends_with("__EXIT__");
-            let text = out.trim_end_matches("__EXIT__").trim_end();
+            let mut text = out.trim_end_matches("__EXIT__").trim_end().to_string();
+            // `cls` clears a terminal; redirected output keeps everything
+            let cls = ferrostat_ado::interpreter::CLS;
+            if let Some(i) = text.rfind(cls) {
+                text = if io::stdout().is_terminal() {
+                    print!("\x1b[2J\x1b[H");
+                    text[i + cls.len()..].trim_start_matches('\n').to_string()
+                } else {
+                    text.lines().filter(|l| !l.contains(cls)).collect::<Vec<_>>().join("\n")
+                };
+            }
             if !text.is_empty() {
                 println!("{text}");
             }
