@@ -130,8 +130,8 @@ All three front ends drive the same interpreter (`ferrostat-ado::session`), so a
 
 | Front end | Binary / crate | Runs on |
 |-----------|----------------|---------|
-| Terminal (REPL + batch) | `ferrostat` (`ferrostat-repl`) | Linux, Windows, macOS |
-| Desktop GUI | `ferrostat-gui` | Linux, Windows, macOS |
+| Terminal (REPL + batch) | `ferrostat` (`ferrostat-repl`) | Linux (incl. Raspberry Pi), Windows, macOS |
+| Desktop GUI | `ferrostat-gui` | Linux (incl. Raspberry Pi), Windows, macOS |
 | Browser | `ferrostat-wasm` + `ferrostat-wasm/web` | any modern browser (wasm32) |
 
 ### Desktop
@@ -164,7 +164,7 @@ The page is static (HTML, CSS, JS and the `.wasm` module), so any static host wo
 
 ### Pre-built binaries
 
-Tagged releases publish the `ferrostat` and `ferrostat-gui` binaries for Linux (x86_64), Windows (x86_64) and macOS (Apple Silicon and Intel), and a fourth `wasm32-web` archive containing the ready-to-serve browser version; see `.github/workflows/release.yml`.
+Tagged releases publish the `ferrostat` and `ferrostat-gui` binaries for Linux (x86_64), Raspberry Pi and other ARM Linux (64-bit aarch64 and 32-bit armv7), Windows (x86_64) and macOS (Apple Silicon and Intel), each as two single-file executables and as an archive, plus `ferrostat-web.zip`, the ready-to-serve browser version. Linux builds need glibc 2.36 or later (Debian 12, Ubuntu 22.10, Raspberry Pi OS bookworm). The file names carry no version, so `<project>/releases/latest/download/<file>` (GitHub) and `<project>/-/releases/permalink/latest/downloads/<file>` (GitLab) always fetch the newest release. GitLab (`.gitlab-ci.yml`) and GitHub (`.github/workflows/release.yml`) build the same files with `ci/package.sh`.
 
 ### From Source
 

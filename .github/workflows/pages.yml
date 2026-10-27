@@ -1,8 +1,19 @@
-name: Web app (GitHub Pages)
+name: Pages
 
-# Publishes the browser build. Run it by hand from the Actions tab once
-# Pages is enabled for the repository (Settings > Pages > Source: GitHub Actions).
+# Mirrors the pages job of .gitlab-ci.yml: the home page (site/) with download
+# links to the latest release, and the browser build under /app/. Deployed on
+# every push to main and after each release. Needs Pages enabled for the
+# repository (Settings > Pages > Source: GitHub Actions).
+#
+# Releases trigger it through workflow_run, which runs in the context of the
+# default branch: the github-pages environment only accepts deployments from
+# it, so a tag push could not deploy directly.
 on:
+  push:
+    branches: [main, master]
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -10,8 +21,17 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
   deploy:
+    # From Release, only runs started by a v* tag (pushes to main are already
+    # covered by the push trigger).
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -30,8 +50,21 @@ jobs:
           tool: wasm-bindgen@${{ env.WASM_BINDGEN }}
       - name: Build
         run: ./ferrostat-wasm/build.sh
+      - name: Assemble site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf public && mkdir public
+          cp site/* public/
+          cp assets/icon-64.png assets/logo-wordmark.png public/
+          sed -i -e "s|@PROJECT_URL@|$GITHUB_SERVER_URL/$GITHUB_REPOSITORY|g" -e "s|@FORGE@|github|g" public/index.html
+          cp -r ferrostat-wasm/web public/app
+          # Release metadata for the page (version, which assets exist); optional.
+          curl --fail --silent --header "Authorization: Bearer $GH_TOKEN" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/latest" \
+            -o public/release.json || rm -f public/release.json
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: ferrostat-wasm/web
+          path: public
       - id: deployment
         uses: actions/deploy-pages@v4

@@ -1,24 +1,77 @@
 name: Release
 
+# Mirrors the build/release jobs of .gitlab-ci.yml. Pushes to main build the
+# release files as workflow artifacts (kept 30 days); tags v* also publish
+# them as a GitHub release. ci/package.sh names the files, so both forges
+# publish the same assets.
+#
+# Linux builds run in Debian bookworm (glibc 2.36) so the programs also run on
+# older distributions, including Raspberry Pi OS bookworm. The Raspberry Pi
+# builds (64-bit aarch64, 32-bit armv7) are cross-compiled.
+
 on:
   push:
+    branches: [main, master]
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  build:
+  linux:
+    name: build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    container: rust:1-bookworm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu,      cc: '',                      pkg: '' }
+          - { target: aarch64-unknown-linux-gnu,     cc: aarch64-linux-gnu-gcc,   pkg: gcc-aarch64-linux-gnu }
+          - { target: armv7-unknown-linux-gnueabihf, cc: arm-linux-gnueabihf-gcc, pkg: gcc-arm-linux-gnueabihf }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cross toolchain
+        if: matrix.cc != ''
+        run: |
+          apt-get update -qq && apt-get install -y -qq ${{ matrix.pkg }} >/dev/null
+          rustup target add ${{ matrix.target }}
+          echo "CARGO_TARGET_$(echo ${{ matrix.target }} | tr a-z- A-Z_)_LINKER=${{ matrix.cc }}" >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build --release -p ferrostat-repl -p ferrostat-gui --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          # same as GitLab: the tag, or <branch>-<short sha>
+          VERSION=$GITHUB_REF_NAME; [ "$GITHUB_REF_TYPE" = tag ] || VERSION=$GITHUB_REF_NAME-${GITHUB_SHA::8}
+          ci/package.sh ${{ matrix.target }} "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/
+          retention-days: 30
+      - uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          files: dist/*
+
+  native:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  ext: '' }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc,    ext: .exe }
-          - { os: macos-latest,   target: aarch64-apple-darwin,      ext: '' }
-          - { os: macos-latest,   target: x86_64-apple-darwin,       ext: '' }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest,   target: aarch64-apple-darwin }
+          - { os: macos-latest,   target: x86_64-apple-darwin }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -27,23 +80,19 @@ jobs:
       - name: Build
         run: cargo build --release -p ferrostat-repl -p ferrostat-gui --target ${{ matrix.target }}
       - name: Package
-        shell: bash
         run: |
-          name=ferrostat-${{ github.ref_name }}-${{ matrix.target }}
-          mkdir "$name"
-          cp "target/${{ matrix.target }}/release/ferrostat${{ matrix.ext }}" "$name/"
-          cp "target/${{ matrix.target }}/release/ferrostat-gui${{ matrix.ext }}" "$name/"
-          cp README.md LICENSE* "$name/" 2>/dev/null || true
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            7z a "$name.zip" "$name"
-            echo "ASSET=$name.zip" >> "$GITHUB_ENV"
-          else
-            tar czf "$name.tar.gz" "$name"
-            echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"
-          fi
-      - uses: softprops/action-gh-release@v2
+          # same as GitLab: the tag, or <branch>-<short sha>
+          VERSION=$GITHUB_REF_NAME; [ "$GITHUB_REF_TYPE" = tag ] || VERSION=$GITHUB_REF_NAME-${GITHUB_SHA::8}
+          ci/package.sh ${{ matrix.target }} "$VERSION"
+      - uses: actions/upload-artifact@v4
         with:
-          files: ${{ env.ASSET }}
+          name: dist-${{ matrix.target }}
+          path: dist/
+          retention-days: 30
+      - uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          files: dist/*
 
   wasm:
     name: build (wasm32, browser)
@@ -64,11 +113,15 @@ jobs:
         run: ./ferrostat-wasm/build.sh
       - name: Package
         run: |
-          name=ferrostat-${{ github.ref_name }}-wasm32-web
-          cp -r ferrostat-wasm/web "$name"
-          cp README.md LICENSE* "$name/" 2>/dev/null || true
-          zip -r "$name.zip" "$name"
-          echo "ASSET=$name.zip" >> "$GITHUB_ENV"
-      - uses: softprops/action-gh-release@v2
+          # same as GitLab: the tag, or <branch>-<short sha>
+          VERSION=$GITHUB_REF_NAME; [ "$GITHUB_REF_TYPE" = tag ] || VERSION=$GITHUB_REF_NAME-${GITHUB_SHA::8}
+          ci/package.sh wasm32-web "$VERSION"
+      - uses: actions/upload-artifact@v4
         with:
-          files: ${{ env.ASSET }}
+          name: dist-wasm32-web
+          path: dist/
+          retention-days: 30
+      - uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          files: dist/*

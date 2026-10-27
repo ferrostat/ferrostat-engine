@@ -509,6 +509,20 @@ fn macro_cmd(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
             }
             Ok(String::new())
         }
+        "shift" => {
+            // `1' takes `2', `2' takes `3', ...; the last one is dropped
+            let by: usize = w.next().map(|n| n.parse().map_err(|_| rc_err(198, &format!("{n} invalid"))) ).transpose()?.unwrap_or(1);
+            let st = &mut me.engine.store;
+            let mut i = 1;
+            while st.local(&i.to_string()).is_some() {
+                match st.local(&(i + by).to_string()).cloned() {
+                    Some(v) => st.set_local(&i.to_string(), v),
+                    None => st.clear_local(&i.to_string()),
+                }
+                i += 1;
+            }
+            Ok(String::new())
+        }
         _ => {
             let st = &me.engine.store;
             let mut out: Vec<String> = st.globals.iter().map(|(k, v)| format!("{:<13}{}", format!("{k}:"), v)).collect();
@@ -613,6 +627,16 @@ pub fn display(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
             s = parts.next().unwrap_or("").to_string();
             continue;
         }
+        // `,` puts one blank between two directives, `,,` none
+        if let Some(rest) = s.strip_prefix(",,") {
+            s = rest.to_string();
+            continue;
+        }
+        if let Some(rest) = s.strip_prefix(',') {
+            out.push(' ');
+            s = rest.to_string();
+            continue;
+        }
         if s.starts_with('_') {
             let (word, rest) = match s.find(|c: char| c.is_whitespace()) {
                 Some(i) => (s[..i].to_string(), s[i..].to_string()),
@@ -665,8 +689,10 @@ pub fn display(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
             s = s[i..].to_string();
             continue;
         }
-        // expression: longest prefix of words that parses
-        let words = split_top_level_words(&s);
+        // expression: longest prefix of words that parses, up to a top-level comma
+        let cut = top_level_comma(&s).unwrap_or(s.len());
+        let tail = s[cut..].to_string();
+        let words = split_top_level_words(&s[..cut]);
         let mut matched = None;
         for k in (1..=words.len()).rev() {
             let cand = words[..k].join(" ");
@@ -686,10 +712,26 @@ pub fn display(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
         fmt = None;
         out.push_str(&text.repeat(dup));
         dup = 1;
-        s = words[k..].join(" ");
+        s = words[k..].join(" ") + &tail;
     }
     let _ = newline_end;
     Ok(out)
+}
+
+/// Byte offset of the first comma outside quotes and brackets.
+fn top_level_comma(s: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut quote = false;
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => quote = !quote,
+            '(' | '[' if !quote => depth += 1,
+            ')' | ']' if !quote => depth -= 1,
+            ',' if !quote && depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
 }
 
 fn scalar(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
@@ -1086,6 +1128,21 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
         None => (spec.to_string(), String::new()),
     };
     let spec_main = spec_main.replace("[,", " ");
+    // `=exp` / `=/exp`: the expression after the first top-level `=`
+    let mut main_text = cmd.main.clone();
+    if let Some(k) = spec_main.find('=') {
+        let optional = spec_main[..k].trim_end().ends_with('[');
+        let raw = spec_main[k + 1..].starts_with('/');
+        match find_top_level(&cmd.main, '=') {
+            Some(i) => {
+                let e = cmd.main[i + 1..].trim().to_string();
+                main_text = cmd.main[..i].to_string();
+                me.engine.store.set_local("exp", if raw { e } else { format!("= {e}") });
+            }
+            None if optional => me.engine.store.set_local("exp", ""),
+            None => return Err(rc_err(100, "=exp required")),
+        }
+    }
     let mut main_used = false;
     for item in split_top_level_words(&spec_main) {
         let optional = item.starts_with('[');
@@ -1094,7 +1151,19 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
         let st = &mut me.engine.store;
         if lower.starts_with("varlist") || lower.starts_with("newvarlist") || lower.starts_with("varname") || lower.starts_with("newvarname") {
             main_used = true;
-            let text = cmd.main.trim();
+            let mut text = main_text.trim();
+            if lower.starts_with("new") {
+                // an optional storage type in front of the new names
+                let first = text.split_whitespace().next().unwrap_or("");
+                let is_type = matches!(first, "byte" | "int" | "long" | "float" | "double" | "strL")
+                    || first.strip_prefix("str").is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+                let typ = if is_type { first } else { "float" };
+                if is_type {
+                    text = text[first.len()..].trim_start();
+                }
+                let n = text.split_whitespace().count();
+                me.engine.store.set_local("typlist", vec![typ; n].join(" "));
+            }
             if text.is_empty() {
                 if optional {
                     let default_all = !lower.contains("default=none");
@@ -1131,10 +1200,10 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
         } else if lower.starts_with("anything") || lower.starts_with("namelist") || lower.starts_with("name") {
             main_used = true;
             let n = if lower.starts_with("anything") { "anything" } else { "namelist" };
-            if cmd.main.trim().is_empty() && !optional {
+            if main_text.trim().is_empty() && !optional {
                 return Err(rc_err(100, format!("{n} required")));
             }
-            st.set_local(n, cmd.main.trim());
+            st.set_local(n, main_text.trim());
         } else if lower == "if" {
             st.set_local("if", cmd.if_raw.as_ref().map(|i| format!("if {i}")).unwrap_or_default());
         } else if lower == "in" {
@@ -1164,8 +1233,8 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
             }
         }
     }
-    if !main_used && !cmd.main.trim().is_empty() {
-        return Err(rc_err(198, format!("{} invalid", cmd.main.trim())));
+    if !main_used && !main_text.trim().is_empty() {
+        return Err(rc_err(198, format!("{} invalid", main_text.trim())));
     }
     // options
     let given = cmd.opts.clone();

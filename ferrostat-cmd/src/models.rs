@@ -34,10 +34,10 @@ fn resolve_dep(ds: &DataSet, dep: &str) -> Result<String, String> {
 }
 
 fn f2(v: f64) -> String {
-    format!("{:.2}", v)
+    if v.is_nan() || v >= ferrostat_core::missing::SYSMISS { ".".into() } else { format!("{:.2}", v) }
 }
 fn f4(v: f64) -> String {
-    format!("{:.4}", v)
+    if v.is_nan() || v >= ferrostat_core::missing::SYSMISS { ".".into() } else { format!("{:.4}", v) }
 }
 fn g10(v: f64) -> String {
     fmt_g(v, 9)
@@ -94,7 +94,12 @@ impl CommandHandler for Regress {
         let (f, df_m_f, df_r_f) = if robust {
             let (w, q) = est::wald_all(&d, &fit.b, &fit.v);
             let df_r = fit.n_clust.map_or(fit.df_r, |g| g as f64 - 1.0);
-            (w / q, q, df_r)
+            match fit.n_clust {
+                // the clustered VCE has rank at most G-1: with more coefficients
+                // than that the overall test cannot be computed
+                Some(g) if d.active().into_iter().filter(|&j| d.names[j] != "_cons").count() as f64 > g as f64 - 1.0 => (ferrostat_core::missing::SYSMISS, g as f64 - 1.0, df_r),
+                _ => (w / q, q, df_r),
+            }
         } else {
             ((mss / fit.df_m) / (fit.rss / fit.df_r), fit.df_m, fit.df_r)
         };
@@ -977,8 +982,13 @@ impl CommandHandler for Mlogit {
         let mut is_base = Vec::new();
         let mut map = Vec::new();
         let eqs: Vec<usize> = (0..ncat).filter(|&c| c != base).collect();
+        // equations are named by the outcome's value label when it has one
+        let eq_name = |v: f64| {
+            let lab = ds.get_var(&dep).and_then(|var| ds.value_labels.get(&var.value_label_name)).and_then(|vl| vl.lookup(v)).map(str::to_string);
+            lab.filter(|l| !l.is_empty() && !l.contains(|c: char| c.is_whitespace() || c == ':' || c == '.')).unwrap_or_else(|| fmt_g(v, 12))
+        };
         for c in 0..ncat {
-            let eq = fmt_g(cats[c], 12);
+            let eq = eq_name(cats[c]);
             for j in 0..k {
                 names.push(format!("{eq}:{}", d.names[j]));
                 if c == base {
@@ -1012,7 +1022,7 @@ impl CommandHandler for Mlogit {
         out.push(format!("{:<52}{:<15} = {:>10}", format!("Log likelihood = {}", fmt_g(res.ll, 10)), "Pseudo R2", f4(1.0 - res.ll / ll0)));
         out.push(String::new());
         out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &names, b: &b, v: &v, omitted: &omitted, is_base: &is_base, df: None, level, eform: if cmd.has_opt("rrr", 2) { Some("RRR") } else { None }, coef_title: "Coefficient" }));
-        out.push(format!("Note: {} is the base outcome.", fmt_g(cats[base], 12)));
+        out.push(format!("Note: {} is the base outcome.", eq_name(cats[base])));
         let text = out.join("\n");
         let mut d2 = d.clone();
         d2.names = names;

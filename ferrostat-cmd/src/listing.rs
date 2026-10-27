@@ -168,6 +168,9 @@ impl CommandHandler for List {
         let noobs = cmd.has_opt("noobs", 5);
         let sep: usize = cmd.opt("separator", 3).and_then(|s| s.trim().parse().ok()).unwrap_or(5);
         let rows = util::rows(&mask);
+        if vars.is_empty() || rows.is_empty() {
+            return Ok(String::new());
+        }
         let mut cols: Vec<Vec<String>> = Vec::new();
         let mut right: Vec<bool> = Vec::new();
         for v in &vars {

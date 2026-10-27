@@ -20,6 +20,7 @@ pub mod ivest;
 pub mod kdensity;
 pub mod labels;
 pub mod listing;
+pub mod margins;
 pub mod matcmd;
 pub mod matrix;
 pub mod models;

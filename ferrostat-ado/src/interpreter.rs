@@ -340,7 +340,8 @@ impl AdoInterpreter {
             }
             "xi" | "timer" if rest.contains(':') => {
                 let i = rest.find(':').unwrap();
-                return self.exec_text(&rest[i + 1..], body);
+                let command = if verb == "xi" { xi_terms(&rest[i + 1..]) } else { rest[i + 1..].to_string() };
+                return self.exec_text(&command, body);
             }
             "by" | "bysort" => return self.by_prefix(&verb, &rest),
             "foreach" => return self.foreach(&rest, body.ok_or_else(|| rc_err(198, "foreach requires {"))?),
@@ -355,6 +356,12 @@ impl AdoInterpreter {
                 return Ok(Flow::Exit);
             }
             _ => {}
+        }
+        // bootstrap / simulate / permute prefixes, vce(bootstrap), estat bootstrap
+        if body.is_none() {
+            if let Some(f) = crate::resample::intercept(self, &verb_raw, &rest, text)? {
+                return Ok(f);
+            }
         }
         if let Some(b) = body {
             // a bare block such as `{ ... }` after other text
@@ -403,7 +410,8 @@ impl AdoInterpreter {
                 // capture: suppress output and errors, set _rc
                 self.quiet += 1;
                 let saved = self.noisy;
-                let noisily = rest.to_lowercase().starts_with("noi");
+                let first = split_verb(rest).0;
+                let noisily = self.engine.resolve_verb(first.trim_end_matches(':')) == "noisily";
                 if !noisily {
                     self.noisy = 0;
                 }
@@ -675,6 +683,11 @@ impl AdoInterpreter {
         if self.engine.store.programs.contains_key(verb_raw) {
             return self.run_program(verb_raw, rest.trim());
         }
+        if verb == "egen" {
+            if let Some((prog, args)) = user_egen(rest, |p| self.engine.store.programs.contains_key(p)) {
+                return self.run_program(&prog, &args);
+            }
+        }
         if self.engine.is_command(verb) || matches!(verb, "clear" | "preserve" | "restore" | "set" | "sysuse") {
             if verb == "clear" && matches!(rest.trim(), "mata" | "all" | "*") {
                 crate::mata::clear(self);
@@ -685,6 +698,64 @@ impl AdoInterpreter {
         // a command with a trailing native ado: allow programs with abbreviations disabled
         Err(rc_err(199, format!("command {verb_raw} is unrecognized")))
     }
+}
+
+/// `xi:` interaction terms in factor-variable notation: `i.a*i.b` is
+/// `i.a##i.b`, `i.a*b` is `i.a##c.b` and `i.a|b` is `i.a i.a#c.b`.
+fn xi_terms(command: &str) -> String {
+    command
+        .split(' ')
+        .map(|w| {
+            let lower = w.to_lowercase();
+            if !lower.starts_with("i.") {
+                return w.to_string();
+            }
+            let cont = |v: &str| if v.to_lowercase().starts_with("i.") { v.to_string() } else { format!("c.{v}") };
+            if let Some((a, b)) = w.split_once('*') {
+                format!("{a}##{}", cont(b))
+            } else if let Some((a, b)) = w.split_once('|') {
+                format!("{a} {a}#c.{b}")
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `egen [type] newvar = fcn(args) [if] [in] [, options]` where a program
+/// `_gfcn` is defined: that program and its arguments,
+/// `type newvar = (args) [if] [in] [, options]`.
+fn user_egen(rest: &str, defined: impl Fn(&str) -> bool) -> Option<(String, String)> {
+    let (lhs, rhs) = rest.split_once('=')?;
+    let rhs = rhs.trim_start();
+    let open = rhs.find('(')?;
+    let fcn = rhs[..open].trim();
+    let prog = format!("_g{fcn}");
+    if fcn.is_empty() || !defined(&prog) {
+        return None;
+    }
+    let mut depth = 0;
+    let close = rhs[open..].char_indices().find_map(|(i, c)| {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open + i);
+                }
+            }
+            _ => {}
+        }
+        None
+    })?;
+    let lhs: Vec<&str> = lhs.split_whitespace().collect();
+    let (ty, name) = match lhs.as_slice() {
+        [name] => ("float", *name),
+        [ty, name] => (*ty, *name),
+        _ => return None,
+    };
+    Some((prog, format!("{ty} {name} = ({}){}", &rhs[open + 1..close], &rhs[close + 1..])))
 }
 
 /// First word (the verb) and the rest of a statement.

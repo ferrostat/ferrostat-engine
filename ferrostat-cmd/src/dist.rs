@@ -5,11 +5,20 @@
 //! arguments return system missing, as in the expression language.
 
 use ferrostat_core::missing::SYSMISS;
-use statrs::function::beta::{beta_reg, ln_beta};
+use statrs::function::beta::{beta_reg as statrs_beta_reg, ln_beta};
 use statrs::function::erf::erfc_inv;
 use statrs::function::gamma::{digamma as sr_digamma, gamma_lr, gamma_ur, ln_gamma};
 
 const M: f64 = SYSMISS;
+
+/// Regularized incomplete beta; missing (instead of a panic) for arguments
+/// out of range, e.g. a missing test statistic.
+fn beta_reg(a: f64, b: f64, x: f64) -> f64 {
+    if !(a > 0.0 && b > 0.0 && (0.0..=1.0).contains(&x)) {
+        return M;
+    }
+    statrs_beta_reg(a, b, x)
+}
 
 fn ok(v: f64) -> f64 {
     if v.is_finite() { v } else { M }
@@ -197,7 +206,7 @@ pub fn f_cdf(df1: f64, df2: f64, f: f64) -> f64 {
 }
 
 pub fn ftail(df1: f64, df2: f64, f: f64) -> f64 {
-    if df1 <= 0.0 || df2 <= 0.0 {
+    if df1 <= 0.0 || df2 <= 0.0 || f.is_nan() || f >= M {
         return M;
     }
     if f <= 0.0 { 1.0 } else { beta_reg(df2 / 2.0, df1 / 2.0, df2 / (df2 + df1 * f)) }

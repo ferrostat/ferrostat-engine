@@ -402,8 +402,35 @@ impl CommandHandler for Predict {
 // Linear constraints (test / lincom)
 // ---------------------------------------------------------------------------
 
+/// `[eq]name` is shorthand for `_b[eq:name]`.
+fn eq_shorthand(text: &str) -> String {
+    let c: Vec<char> = text.chars().collect();
+    let ident = |ch: char| ch.is_alphanumeric() || ch == '_' || ch == '.' || ch == '#';
+    let mut out = String::new();
+    let mut i = 0;
+    while i < c.len() {
+        let after_ident = i > 0 && (ident(c[i - 1]) || c[i - 1] == ']');
+        if c[i] == '[' && !after_ident {
+            if let Some(j) = c[i..].iter().position(|&x| x == ']').map(|j| i + j) {
+                let k = (j + 1..c.len()).find(|&k| !ident(c[k])).unwrap_or(c.len());
+                if k > j + 1 {
+                    let eq: String = c[i + 1..j].iter().collect();
+                    let name: String = c[j + 1..k].iter().collect();
+                    out.push_str(&format!("_b[{}:{name}]", eq.trim()));
+                    i = k;
+                    continue;
+                }
+            }
+        }
+        out.push(c[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Wrap coefficient names in `_b[ ]` so the constraint can be evaluated.
 fn wrap_coefs(text: &str, b: &Matrix) -> String {
+    let text = &eq_shorthand(text);
     let mut out = String::new();
     let mut tok = String::new();
     let mut in_brack = 0;

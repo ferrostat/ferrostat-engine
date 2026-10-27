@@ -10,6 +10,7 @@ pub mod pdf;
 pub mod progcmd;
 pub mod putdocx;
 pub mod putexcel;
+pub mod resample;
 pub mod python;
 pub mod script;
 

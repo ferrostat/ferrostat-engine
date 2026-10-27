@@ -203,6 +203,7 @@ pub struct DesignSpec<'a> {
 
 /// Build the design for a command like `regress y x1 x2 [if] [in] [w]`.
 pub fn build(ds: &DataSet, st: &Store, cmd: &Command, spec: DesignSpec) -> Result<Design, String> {
+    remember_level_labels(ds, st);
     let n_all = ds.n_obs;
     let mut mask = util::touse(ds, st, cmd)?;
     let w = util::weights(ds, st, cmd, &mut mask, spec.weights)?;
@@ -758,6 +759,35 @@ thread_local! {
     static LAST_TABLE: std::cell::RefCell<Option<(Matrix, f64)>> = const { std::cell::RefCell::new(None) };
 }
 
+thread_local! {
+    /// Value labels of the variables in memory (variable -> level -> label),
+    /// used to name factor levels in results tables (`set fvlabel on`).
+    static LEVEL_LABELS: std::cell::RefCell<std::collections::HashMap<String, std::collections::HashMap<String, String>>> = std::cell::RefCell::new(Default::default());
+}
+
+/// Capture the value labels used by `display_name` for factor levels.
+pub fn remember_level_labels(ds: &DataSet, st: &Store) {
+    let on = st.settings.get("fvlabel").map_or(true, |v| v != "off");
+    LEVEL_LABELS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        if !on {
+            return;
+        }
+        for var in &ds.vars {
+            if let Some(vl) = ds.value_labels.get(&var.value_label_name) {
+                let levels = vl.iter().map(|(v, l)| (fmt_g(v, 12), l.to_string())).collect();
+                m.insert(var.name.clone(), levels);
+            }
+        }
+    });
+}
+
+/// The value label of level `level` of `var`, if any.
+fn level_label(level: &str, var: &str) -> Option<String> {
+    LEVEL_LABELS.with(|m| m.borrow().get(var).and_then(|l| l.get(level)).cloned())
+}
+
 /// Remember a results table to be returned in r(table).
 pub fn stash_table(m: Matrix, level: f64) {
     LAST_TABLE.with(|t| *t.borrow_mut() = Some((m, level)));
@@ -932,6 +962,7 @@ pub fn coef_table(s: &TableSpec) -> Vec<String> {
 /// "2.g" -> ("2", "g"); "L.x" -> ("L1.", "x"); "2.g#c.x" -> ("2#c.x", "g#c.x").
 pub(crate) fn display_name(n: &str) -> (String, Option<String>) {
     let clean = |s: &str| s.trim_end_matches(['b', 'o', 'n']).to_string();
+    let level = |l: &str, v: &str| level_label(&clean(l), v).unwrap_or_else(|| clean(l));
     let n = n.strip_prefix("o.").unwrap_or(n);
     if n.contains('#') {
         let parts: Vec<&str> = n.split('#').collect();
@@ -941,7 +972,7 @@ pub(crate) fn display_name(n: &str) -> (String, Option<String>) {
             match p.split_once('.') {
                 Some((l, v)) if l.trim_end_matches(['b', 'o', 'n']).parse::<f64>().is_ok() => {
                     header.push(v.to_string());
-                    label.push(clean(l));
+                    label.push(level(l, v));
                 }
                 Some(("c", v)) => {
                     header.push(format!("c.{v}"));
@@ -955,7 +986,7 @@ pub(crate) fn display_name(n: &str) -> (String, Option<String>) {
         return (label.join("#"), Some(header.join("#")));
     }
     match n.split_once('.') {
-        Some((l, v)) if l.trim_end_matches(['b', 'o', 'n']).parse::<f64>().is_ok() => (clean(l), Some(v.to_string())),
+        Some((l, v)) if l.trim_end_matches(['b', 'o', 'n']).parse::<f64>().is_ok() => (level(l, v), Some(v.to_string())),
         Some((op, v)) if op.chars().all(|c| "LFDSlfds0123456789".contains(c)) => {
             let up = op.to_uppercase();
             let label = if up.len() == 1 { format!("{up}1.") } else { format!("{up}.") };

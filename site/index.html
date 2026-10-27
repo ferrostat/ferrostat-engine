@@ -31,23 +31,37 @@
 
   <section id="download">
     <h2>Download</h2>
-    <p class="muted">Each archive contains the command-line program (<code>ferrostat</code>) and the desktop application (<code>ferrostat-gui</code>).</p>
+    <p class="muted">Two programs per platform: <code>ferrostat</code>, the command line, and <code>ferrostat-gui</code>, the desktop application. Each is a single file; there is nothing to install.</p>
     <div class="grid">
       <article class="card" data-os="linux">
         <h3>Linux</h3>
         <p class="muted">x86-64, glibc</p>
-        <a class="btn primary" data-asset="ferrostat-linux-x86_64.tar.gz">Download .tar.gz</a>
+        <a class="btn primary" data-asset="ferrostat-gui-linux-x86_64">Desktop app</a>
+        <a class="btn" data-asset="ferrostat-linux-x86_64">Command line</a>
       </article>
       <article class="card" data-os="windows">
         <h3>Windows</h3>
         <p class="muted">x86-64</p>
-        <a class="btn primary" data-asset="ferrostat-windows-x86_64.zip">Download .zip</a>
+        <a class="btn primary" data-asset="ferrostat-gui-windows-x86_64.exe">Desktop app (.exe)</a>
+        <a class="btn" data-asset="ferrostat-windows-x86_64.exe">Command line (.exe)</a>
+      </article>
+      <article class="card" data-os="pi">
+        <h3>Raspberry Pi</h3>
+        <p class="muted">64-bit OS (Pi 3, 4, 5, Zero 2; any ARM64 Linux)</p>
+        <a class="btn primary" data-asset="ferrostat-gui-linux-aarch64">Desktop app</a>
+        <a class="btn" data-asset="ferrostat-linux-aarch64">Command line</a>
+        <p class="muted">32-bit OS (Pi 2 and later)</p>
+        <a class="btn" data-asset="ferrostat-gui-linux-armv7">Desktop app</a>
+        <a class="btn" data-asset="ferrostat-linux-armv7">Command line</a>
       </article>
       <article class="card" data-os="mac">
         <h3>macOS</h3>
-        <p class="muted">Apple silicon or Intel</p>
-        <a class="btn primary" data-asset="ferrostat-macos-aarch64.tar.gz">Apple silicon</a>
-        <a class="btn" data-asset="ferrostat-macos-x86_64.tar.gz">Intel</a>
+        <p class="muted">Apple silicon (M1 and later)</p>
+        <a class="btn primary" data-asset="ferrostat-gui-macos-aarch64">Desktop app</a>
+        <a class="btn" data-asset="ferrostat-macos-aarch64">Command line</a>
+        <p class="muted">Intel</p>
+        <a class="btn" data-asset="ferrostat-gui-macos-x86_64">Desktop app</a>
+        <a class="btn" data-asset="ferrostat-macos-x86_64">Command line</a>
       </article>
       <article class="card" data-os="web">
         <h3>Web</h3>
@@ -56,13 +70,20 @@
         <a class="btn" data-asset="ferrostat-web.zip">Self-host .zip</a>
       </article>
     </div>
+    <p class="muted small">The programs are not signed. On Linux and macOS make the file executable first (<code>chmod +x</code>); macOS may also need <code>xattr -d com.apple.quarantine &lt;file&gt;</code>, and Windows may ask you to confirm under &ldquo;More info &rarr; Run anyway&rdquo;. Archives with both programs are attached to each <a data-link="releases">release</a>.</p>
     <details class="dev">
       <summary>Development builds from <code>main</code></summary>
-      <p class="muted">Built from the latest commit on <code>main</code>; untested between releases. Archives are kept for 30 days.</p>
-      <ul>
-        <li><a href="@PROJECT_URL@/-/jobs/artifacts/main/download?job=build%3Alinux">Linux x86-64</a></li>
-        <li><a href="@PROJECT_URL@/-/jobs/artifacts/main/download?job=build%3Awindows">Windows x86-64</a></li>
-        <li><a href="@PROJECT_URL@/-/jobs/artifacts/main/download?job=build%3Awasm">Web (self-host)</a></li>
+      <p class="muted">Built from the latest commit on <code>main</code>; untested between releases. Kept for 30 days.</p>
+      <ul id="dev-builds">
+        <li data-job="linux" data-target="x86_64-unknown-linux-gnu">Linux x86-64:
+          <a data-dev="ferrostat-gui-linux-x86_64">desktop app</a>, <a data-dev="ferrostat-linux-x86_64">command line</a></li>
+        <li data-job="linux" data-target="aarch64-unknown-linux-gnu">Raspberry Pi, 64-bit:
+          <a data-dev="ferrostat-gui-linux-aarch64">desktop app</a>, <a data-dev="ferrostat-linux-aarch64">command line</a></li>
+        <li data-job="linux" data-target="armv7-unknown-linux-gnueabihf">Raspberry Pi, 32-bit:
+          <a data-dev="ferrostat-gui-linux-armv7">desktop app</a>, <a data-dev="ferrostat-linux-armv7">command line</a></li>
+        <li data-job="windows" data-target="x86_64-pc-windows-msvc">Windows x86-64:
+          <a data-dev="ferrostat-gui-windows-x86_64.exe">desktop app</a>, <a data-dev="ferrostat-windows-x86_64.exe">command line</a></li>
+        <li data-job="wasm" data-target="wasm32-web">Web: <a data-dev="ferrostat-web.zip">self-host .zip</a></li>
       </ul>
     </details>
   </section>
@@ -87,8 +108,8 @@
 
   <section>
     <h2>Quick start</h2>
-<pre><code>$ tar xzf ferrostat-linux-x86_64.tar.gz
-$ ./ferrostat-*/ferrostat
+<pre><code>$ chmod +x ferrostat-linux-x86_64
+$ ./ferrostat-linux-x86_64
 . use mydata.dta, clear
 . regress y x1 x2, vce(robust)
 . twoway scatter y x1 || lfit y x1
@@ -99,18 +120,40 @@ $ ./ferrostat-*/ferrostat
 <footer>
   <span>GPL-3.0-or-later</span>
   <a href="@PROJECT_URL@">Source code</a>
-  <a href="@PROJECT_URL@/-/releases">All releases</a>
+  <a data-link="releases">All releases</a>
 </footer>
 
 <script>
 (function () {
-  var base = "@PROJECT_URL@/-/releases/permalink/latest/downloads/";
+  // The pages job of either forge fills these in; release URLs differ.
+  var project = "@PROJECT_URL@";
+  var github = "@FORGE@" === "github";
+  var base = project + (github ? "/releases/latest/download/" : "/-/releases/permalink/latest/downloads/");
   var links = document.querySelectorAll("[data-asset]");
   links.forEach(function (a) { a.href = base + a.dataset.asset; });
+  document.querySelectorAll('[data-link="releases"]').forEach(function (a) {
+    a.href = project + (github ? "/releases" : "/-/releases");
+  });
+
+  // Builds from main: GitLab serves single files from job artifacts; GitHub
+  // only offers zipped artifacts, to signed-in users, on the workflow run.
+  var dev = document.getElementById("dev-builds");
+  if (github) {
+    dev.innerHTML = '<li><a href="' + project + '/actions/workflows/release.yml?query=branch%3Amain">Latest successful run</a> (sign-in to GitHub required; each platform is a zip under &ldquo;Artifacts&rdquo;)</li>';
+  } else {
+    dev.querySelectorAll("li").forEach(function (li) {
+      var job = li.dataset.job === "linux" ? "build:linux: [" + li.dataset.target + "]" : "build:" + li.dataset.job;
+      li.querySelectorAll("[data-dev]").forEach(function (a) {
+        a.href = project + "/-/jobs/artifacts/main/raw/dist/" + a.dataset.dev + "?job=" + encodeURIComponent(job);
+      });
+    });
+  }
 
   // Highlight the visitor's platform.
   var ua = navigator.userAgent;
-  var os = /Windows/.test(ua) ? "windows" : /Mac/.test(ua) ? "mac" : /Linux|X11/.test(ua) && !/Android/.test(ua) ? "linux" : "web";
+  var os = /Windows/.test(ua) ? "windows" : /Mac/.test(ua) ? "mac" :
+    /aarch64|armv[78]/.test(ua) && !/Android/.test(ua) ? "pi" :
+    /Linux|X11/.test(ua) && !/Android/.test(ua) ? "linux" : "web";
   var card = document.querySelector('.card[data-os="' + os + '"]');
   if (card) card.classList.add("yours");
 
@@ -118,8 +161,11 @@ $ ./ferrostat-*/ferrostat
   fetch("release.json").then(function (r) { return r.ok ? r.json() : null; }).then(function (rel) {
     if (!rel || !rel.tag_name) return;
     var line = document.getElementById("release-line");
-    line.textContent = "Latest release: " + rel.tag_name + (rel.released_at ? " · " + rel.released_at.slice(0, 10) : "");
-    var have = (rel.assets && rel.assets.links || []).map(function (l) { return (l.direct_asset_url || "").split("/").pop(); });
+    var date = rel.released_at || rel.published_at;  // GitLab / GitHub
+    line.textContent = "Latest release: " + rel.tag_name + (date ? " · " + date.slice(0, 10) : "");
+    var have = Array.isArray(rel.assets)
+      ? rel.assets.map(function (x) { return x.name; })
+      : (rel.assets && rel.assets.links || []).map(function (l) { return (l.direct_asset_url || "").split("/").pop(); });
     links.forEach(function (a) {
       if (have.indexOf(a.dataset.asset) < 0) {
         a.removeAttribute("href");

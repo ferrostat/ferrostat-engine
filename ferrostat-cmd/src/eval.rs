@@ -577,6 +577,15 @@ pub fn find_coef(b: &crate::matrix::Matrix, name: &str) -> Option<usize> {
         return Some(j);
     }
     let bare = name.rsplit(':').next().unwrap_or(name);
+    // `eq:name`: only that equation's coefficients, when the equation exists
+    if let Some((eq, rest)) = name.rsplit_once(':') {
+        let first = b.colnames.iter().position(|c| c.rsplit_once(':').is_some_and(|(e, _)| e == eq));
+        if let Some(start) = first {
+            let end = b.colnames.iter().rposition(|c| c.rsplit_once(':').is_some_and(|(e, _)| e == eq)).unwrap() + 1;
+            let sub = crate::matrix::Matrix::row_vector(&vec![0.0; end - start]).with_names(vec!["y1".into()], b.colnames[start..end].iter().map(|c| c.rsplit(':').next().unwrap_or(c).to_string()).collect());
+            return find_coef(&sub, rest).map(|j| start + j);
+        }
+    }
     if let Some(j) = b.colnames.iter().position(|c| c.rsplit(':').next() == Some(bare)) {
         return Some(j);
     }
