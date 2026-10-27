@@ -1052,7 +1052,27 @@ impl CommandHandler for Mlogit {
         out.push(format!("{:<52}{:<15} = {:>10}", format!("Log likelihood = {}", fmt_g(res.ll, 10)), "Pseudo R2", f4(1.0 - res.ll / ll0)));
         out.push(String::new());
         out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &names, b: &b, v: &v, omitted: &omitted, is_base: &is_base, df: None, level, eform: if cmd.has_opt("rrr", 2) { Some("RRR") } else { None }, coef_title: "Coefficient" }));
-        out.push(format!("Note: {} is the base outcome.", eq_name(cats[base])));
+        // the base outcome gets its own row, in its place among the equations
+        {
+            let sep = "-------------+----------------------------------------------------------------".to_string();
+            let base_line = format!("{:<12} |  (base outcome)", crate::summarize::abbrev(&eq_name(cats[base]), 12));
+            let eq_line = |c: usize| format!("{:<12} |", crate::summarize::abbrev(&eq_name(cats[c]), 12));
+            let next = (base + 1..ncat).next().map(eq_line);
+            let at = next.and_then(|l| out.iter().position(|x| *x == l));
+            match at {
+                // before the next equation (whose separator stays in front of it)
+                Some(i) => {
+                    out.insert(i, sep.clone());
+                    out.insert(i, base_line);
+                }
+                // base is the last outcome: before the closing rule
+                None => {
+                    let end = out.iter().rposition(|x| x.starts_with("-----") && !x.contains('+')).unwrap_or(out.len());
+                    out.insert(end, base_line);
+                    out.insert(end, sep);
+                }
+            }
+        }
         let text = out.join("\n");
         let mut d2 = d.clone();
         d2.names = names;

@@ -493,14 +493,27 @@ impl CommandHandler for Recode {
     }
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         let main = cmd.main.trim();
-        let first_paren = main.find('(').ok_or_else(|| rc_err(198, "rules required"))?;
-        let vars = varlist::expand(ds, &main[..first_paren])?;
         let mut rules = Vec::new();
-        for w in split_top_level_words(&main[first_paren..]) {
-            let w = w.trim();
-            let inner = w.strip_prefix('(').and_then(|x| x.strip_suffix(')')).ok_or_else(|| rc_err(198, format!("{w}: rules must be in parentheses")))?;
-            rules.push(parse_rule(inner)?);
-        }
+        let vars = match main.find('(') {
+            Some(first_paren) => {
+                let vars = varlist::expand(ds, &main[..first_paren])?;
+                for w in split_top_level_words(&main[first_paren..]) {
+                    let w = w.trim();
+                    let inner = w.strip_prefix('(').and_then(|x| x.strip_suffix(')')).ok_or_else(|| rc_err(198, format!("{w}: rules must be in parentheses")))?;
+                    rules.push(parse_rule(inner)?);
+                }
+                vars
+            }
+            None => {
+                // the old syntax without parentheses: `recode x 0/4=1 5/14=2`
+                let words: Vec<&str> = main.split_whitespace().collect();
+                let first_rule = words.iter().position(|w| w.contains('=')).ok_or_else(|| rc_err(198, "rules required"))?;
+                for w in &words[first_rule..] {
+                    rules.push(parse_rule(w)?);
+                }
+                varlist::expand(ds, &words[..first_rule].join(" "))?
+            }
+        };
         let mask = util::touse(ds, st, cmd)?;
         let newnames: Option<Vec<String>> = if let Some(p) = cmd.opt("prefix", 3) {
             let names: Vec<String> = vars.iter().map(|v| format!("{}{v}", p.trim())).collect();

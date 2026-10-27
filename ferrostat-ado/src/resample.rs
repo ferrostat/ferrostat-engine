@@ -22,6 +22,7 @@ use ferrostat_parser::Expr;
 
 use crate::interpreter::{split_verb, AdoInterpreter, Flow};
 use crate::macros::unquote;
+use crate::parallel;
 
 type Opts = Vec<(String, Option<String>)>;
 
@@ -357,7 +358,50 @@ fn eval_stats(me: &AdoInterpreter, stats: &[Stat], parsed: &[Expr]) -> Vec<f64> 
 }
 
 /// Run a command with its output suppressed (unless `noisily`).
-fn run_cmd(me: &mut AdoInterpreter, cmd: &str, noisily: bool) -> Result<(), String> {
+/// The statistics as (`b` | `se` | `exp`, name or expression text).
+fn spec_of(stats: &[Stat]) -> Vec<(String, String)> {
+    stats
+        .iter()
+        .map(|s| match &s.src {
+            Src::B(c) => ("b".to_string(), c.clone()),
+            Src::Se(c) => ("se".to_string(), c.clone()),
+            Src::Expr(_) => ("exp".to_string(), s.label.clone()),
+        })
+        .collect()
+}
+
+/// The evaluator for statistics described by `spec_of`.
+pub(crate) fn stats_from_spec(spec: &[(String, String)]) -> Result<std::sync::Arc<dyn Fn(&AdoInterpreter) -> Vec<f64> + Send + Sync>, String> {
+    let mut stats = Vec::new();
+    let mut parsed = Vec::new();
+    for (kind, text) in spec {
+        let src = match kind.as_str() {
+            "b" => Src::B(text.clone()),
+            "se" => Src::Se(text.clone()),
+            _ => {
+                parsed.push(parse_expression(text).map_err(|e| rc_err(198, e.message))?);
+                Src::Expr(parsed.len() - 1)
+            }
+        };
+        stats.push(Stat { name: text.clone(), var: text.clone(), label: text.clone(), src });
+    }
+    Ok(stats_fn(&stats, &parsed))
+}
+
+/// The statistics of a replication, evaluated on its interpreter.
+fn stats_fn(stats: &[Stat], parsed: &[Expr]) -> std::sync::Arc<dyn Fn(&AdoInterpreter) -> Vec<f64> + Send + Sync> {
+    let (stats, parsed) = (stats.to_vec(), parsed.to_vec());
+    std::sync::Arc::new(move |me: &AdoInterpreter| eval_stats(me, &stats, &parsed))
+}
+
+/// Replication results with failures as missing values, and their dots.
+fn collect_reps(outs: Vec<Option<Vec<f64>>>, k: usize) -> (Vec<Vec<f64>>, Vec<char>) {
+    let results: Vec<Vec<f64>> = outs.into_iter().map(|o| o.unwrap_or_else(|| vec![SYSMISS; k])).collect();
+    let marks = results.iter().map(|v| if v.iter().any(|x| is_missing(*x)) { 'x' } else { '.' }).collect();
+    (results, marks)
+}
+
+pub(crate) fn run_cmd(me: &mut AdoInterpreter, cmd: &str, noisily: bool) -> Result<(), String> {
     let saved = me.noisy;
     if noisily {
         me.noisy += 1;
@@ -405,21 +449,7 @@ fn apply_seed(me: &mut AdoInterpreter, opts: &Opts) -> Result<(), String> {
     Ok(())
 }
 
-fn uniform(me: &AdoInterpreter) -> f64 {
-    me.engine.store.rng.borrow_mut().uniform()
-}
-
-/// A dataset with the variables of `shell` and the rows `rows` of `base`.
-fn take_rows(shell: &DataSet, base: &DataSet, rows: &[usize]) -> DataSet {
-    let mut d = shell.clone();
-    for (v, src) in d.vars.iter_mut().zip(&base.vars) {
-        v.data = rows.iter().map(|&r| src.data[r].clone()).collect();
-    }
-    d.n_obs = rows.len();
-    d
-}
-
-fn empty_shell(base: &DataSet) -> DataSet {
+pub(crate) fn empty_shell(base: &DataSet) -> DataSet {
     let mut shell = base.clone();
     for v in shell.vars.iter_mut() {
         v.data = Vec::new();
@@ -477,27 +507,6 @@ fn units(ds: &DataSet, cluster: &[String], strata: &[String]) -> Units {
         u.rows[id].push(i);
     }
     u
-}
-
-/// One bootstrap draw: rows of the sample and, per row, the id of the
-/// drawn unit (1, 2, ... in draw order).
-fn draw(me: &AdoInterpreter, u: &Units, size: Option<usize>) -> (Vec<usize>, Vec<f64>) {
-    let mut rows = Vec::new();
-    let mut ids = Vec::new();
-    let mut next = 0.0;
-    for h in &u.strata {
-        let m = h.len();
-        let k = size.unwrap_or(m);
-        for _ in 0..k {
-            let j = ((uniform(me) * m as f64) as usize).min(m - 1);
-            next += 1.0;
-            for &r in &u.rows[h[j]] {
-                rows.push(r);
-                ids.push(next);
-            }
-        }
-    }
-    (rows, ids)
 }
 
 /// Results of the replications as a dataset (one observation per rep).
@@ -645,38 +654,21 @@ fn bootstrap(me: &mut AdoInterpreter, rest: &str) -> Result<(), String> {
         me.engine.store.e = old_e;
         return Err(rc_err(498, "size() must not be greater than the number of sampling units"));
     }
-    let shell = empty_shell(&base);
-    let id_base = &base;
-
-    let mut marks = Vec::with_capacity(reps);
-    let mut results: Vec<Vec<f64>> = Vec::with_capacity(reps);
-    for _ in 0..reps {
-        let (rows, ids) = draw(me, &u, size);
-        let mut d = take_rows(&shell, id_base, &rows);
-        if let Some(id) = &idcluster {
-            let var = d.get_var_mut(id).unwrap();
-            var.var_type = VarType::Long;
-            var.data = ids.iter().map(|&x| util::typed_value(VarType::Long, x)).collect();
-        }
-        me.engine.dataset = d;
-        let vals = match run_cmd(me, &p.command, noisily) {
-            Ok(()) => eval_stats(me, &stats, &parsed),
-            Err(_) => vec![SYSMISS; stats.len()],
-        };
-        marks.push(if vals.iter().any(|x| is_missing(*x)) { 'x' } else { '.' });
-        results.push(vals);
-    }
+    let mut job = parallel::Job {
+        shell: empty_shell(&base),
+        base,
+        command: p.command.clone(),
+        draw: parallel::Draw::Bootstrap { units: u.rows.clone(), strata: u.strata.clone(), size, idcluster: idcluster.clone() },
+        stats: stats_fn(&stats, &parsed),
+        spec: spec_of(&stats),
+        seed: parallel::base_seed(me),
+    };
+    let (results, marks) = collect_reps(parallel::run_all(me, &job, 0, reps, noisily), stats.len());
 
     // jackknife for the acceleration of BCa intervals
     let accel = if want_bca {
-        let mut jk: Vec<Vec<f64>> = Vec::new();
-        for leave in 0..u.rows.len() {
-            let rows: Vec<usize> = (0..u.rows.len()).filter(|&k| k != leave).flat_map(|k| u.rows[k].iter().copied()).collect();
-            me.engine.dataset = take_rows(&shell, id_base, &rows);
-            if let Ok(()) = run_cmd(me, &p.command, false) {
-                jk.push(eval_stats(me, &stats, &parsed));
-            }
-        }
+        job.draw = parallel::Draw::LeaveOut { units: u.rows.clone() };
+        let jk: Vec<Vec<f64>> = parallel::run_all(me, &job, 0, u.rows.len(), false).into_iter().flatten().collect();
         Some(
             (0..stats.len())
                 .map(|j| {
@@ -780,7 +772,7 @@ fn bootstrap(me: &mut AdoInterpreter, rest: &str) -> Result<(), String> {
         e.set_str("cmd", "bootstrap");
         e.set_str("cmdname", cmd_name.clone());
         e.set_str("title", "Bootstrap results");
-        e.set("N", if eclass { obs_e.get("N").unwrap_or(base.n_obs as f64) } else { base.n_obs as f64 });
+        e.set("N", if eclass { obs_e.get("N").unwrap_or(job.base.n_obs as f64) } else { job.base.n_obs as f64 });
         e.set("k_eq", 1.0);
         e.sample = Some(sample.clone());
     }
@@ -1127,49 +1119,45 @@ fn simulate(me: &mut AdoInterpreter, rest: &str) -> Result<(), String> {
         }
     }
     let orig = me.engine.dataset.clone();
-    let mut stats: Option<(Vec<Stat>, Vec<Expr>)> = None;
-    let mut results: Vec<Vec<f64>> = Vec::with_capacity(reps);
-    let mut marks = Vec::with_capacity(reps);
-    for rep in 0..reps {
-        let r = run_cmd(me, &p.command, noisily);
-        if let Err(e) = r {
-            if rep == 0 {
-                me.engine.dataset = orig;
-                return Err(e);
-            }
-            marks.push('x');
-            results.push(Vec::new());
-            continue;
-        }
-        if stats.is_none() {
-            let exps = if p.exps.is_empty() {
-                if me.engine.store.e.matrices.get("b").is_none() {
-                    me.engine.dataset = orig;
-                    return Err(rc_err(198, "expression list required"));
-                }
-                vec![ExpItem { name: None, kind: Kind::B }]
-            } else {
-                p.exps.clone()
-            };
-            match build_stats(me, &exps, "_sim") {
-                Ok(s) => stats = Some(s),
-                Err(e) => {
-                    me.engine.dataset = orig;
-                    return Err(e);
-                }
-            }
-        }
-        let (s, parsed) = stats.as_ref().unwrap();
-        let vals = eval_stats(me, s, parsed);
-        marks.push(if vals.iter().any(|x| is_missing(*x)) { 'x' } else { '.' });
-        results.push(vals);
+    let mut job = parallel::Job {
+        shell: empty_shell(&orig),
+        base: orig.clone(),
+        command: p.command.clone(),
+        draw: parallel::Draw::Unchanged,
+        stats: std::sync::Arc::new(|_: &AdoInterpreter| Vec::new()),
+        spec: Vec::new(),
+        seed: parallel::base_seed(me),
+    };
+    // the first replication also determines the statistics (e.g. the names in e(b))
+    let rng = me.engine.store.rng.borrow().clone();
+    let first = parallel::run_one(me, &job, 0, noisily);
+    *me.engine.store.rng.borrow_mut() = rng;
+    if first.is_none() {
+        let e = run_cmd(me, &p.command, noisily).err().unwrap_or_else(|| rc_err(198, "simulation failed"));
+        me.engine.dataset = orig;
+        return Err(e);
     }
-    let (s, _) = stats.unwrap();
-    for r in results.iter_mut() {
-        if r.is_empty() {
-            *r = vec![SYSMISS; s.len()];
+    let exps = if p.exps.is_empty() {
+        if me.engine.store.e.matrices.get("b").is_none() {
+            me.engine.dataset = orig;
+            return Err(rc_err(198, "expression list required"));
         }
-    }
+        vec![ExpItem { name: None, kind: Kind::B }]
+    } else {
+        p.exps.clone()
+    };
+    let (s, parsed) = match build_stats(me, &exps, "_sim") {
+        Ok(x) => x,
+        Err(e) => {
+            me.engine.dataset = orig;
+            return Err(e);
+        }
+    };
+    let mut outs = vec![Some(eval_stats(me, &s, &parsed))];
+    job.stats = stats_fn(&s, &parsed);
+    job.spec = spec_of(&s);
+    outs.extend(parallel::run_all(me, &job, 1, reps, noisily));
+    let (results, marks) = collect_reps(outs, s.len());
     me.emit(&format!("\n{}", legend.join("\n")));
     if !nodots {
         me.emit(&format!("\n{}", dots_line("Simulations", reps, &marks)));
@@ -1237,33 +1225,16 @@ fn permute(me: &mut AdoInterpreter, rest: &str) -> Result<(), String> {
     me.emit(&format!("(running {pverb} on estimation sample)"));
     let nobs = me.engine.store.e.get("N").filter(|_| matches!(exps[0].kind, Kind::B)).unwrap_or(orig.n_obs as f64);
     let u = units(&orig, &[], &strata);
-    let col = orig.get_var(&permvar).unwrap().data.clone();
-    let mut results: Vec<Vec<f64>> = Vec::with_capacity(reps);
-    let mut marks = Vec::with_capacity(reps);
-    for _ in 0..reps {
-        let mut perm: Vec<usize> = (0..orig.n_obs).collect();
-        for h in &u.strata {
-            // Fisher-Yates shuffle of the rows of this stratum
-            let rows: Vec<usize> = h.iter().map(|&k| u.rows[k][0]).collect();
-            let mut sh = rows.clone();
-            for i in (1..sh.len()).rev() {
-                let j = ((uniform(me) * (i + 1) as f64) as usize).min(i);
-                sh.swap(i, j);
-            }
-            for (a, b) in rows.iter().zip(&sh) {
-                perm[*a] = *b;
-            }
-        }
-        let mut d = orig.clone();
-        d.get_var_mut(&permvar).unwrap().data = perm.iter().map(|&i| col[i].clone()).collect();
-        me.engine.dataset = d;
-        let vals = match run_cmd(me, &p.command, noisily) {
-            Ok(()) => eval_stats(me, &stats, &parsed),
-            Err(_) => vec![SYSMISS; stats.len()],
-        };
-        marks.push(if vals.iter().any(|x| is_missing(*x)) { 'x' } else { '.' });
-        results.push(vals);
-    }
+    let job = parallel::Job {
+        shell: empty_shell(&orig),
+        base: orig.clone(),
+        command: p.command.clone(),
+        draw: parallel::Draw::Permute { var: permvar.clone(), units: u.rows.clone(), strata: u.strata.clone() },
+        stats: stats_fn(&stats, &parsed),
+        spec: spec_of(&stats),
+        seed: parallel::base_seed(me),
+    };
+    let (results, marks) = collect_reps(parallel::run_all(me, &job, 0, reps, noisily), stats.len());
     me.engine.dataset = orig;
     me.engine.store.data_changed = orig_changed;
     if !nodots {

@@ -266,7 +266,7 @@ impl CommandHandler for Contrast {
         let eq = b.colnames.first().and_then(|c| c.split_once(':')).map(|(e, _)| e.to_string());
         let model = Model { b: &b, levels, means, eq };
         let k = b.cols;
-        let df_r = st.e.get("df_r").filter(|_| matches!(ecmd.as_str(), "regress" | "anova" | "areg" | "xtreg" | "mean") && st.e.macros.get("model").map_or(true, |m| m != "re"));
+        let df_r = st.e.get("df_r").filter(|_| matches!(ecmd.as_str(), "regress" | "anova" | "areg" | "reghdfe" | "xtreg" | "mean") && st.e.macros.get("model").map_or(true, |m| m != "re"));
         let stat = if df_r.is_some() { "F" } else { "chi2" };
 
         // contrasts: (term index, over-cell label, name, label, L row)

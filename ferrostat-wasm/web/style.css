@@ -133,6 +133,8 @@ aside section.grow { flex: 1; overflow: auto; }
 .tk-number { color: var(--tk-number); }
 .graph-box { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 12px; }
 .graph-box svg { max-width: 100%; height: auto; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+.graph-tip { position: fixed; z-index: 20; pointer-events: none; max-width: 360px; padding: 4px 8px; border-radius: 4px; font: 12px/1.4 ui-monospace, monospace; background: var(--panel); color: var(--text); border: 1px solid var(--border); box-shadow: 0 2px 6px rgba(0,0,0,.25); white-space: nowrap; }
+.graph-tip[hidden] { display: none; }
 .empty { color: var(--muted); }
 
 #command-form { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--border); background: var(--panel); }

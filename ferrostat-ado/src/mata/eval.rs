@@ -26,6 +26,13 @@ pub struct MataState {
     pub views: Vec<(Weak<RefCell<Val>>, View)>,
 }
 
+impl MataState {
+    /// No Mata globals or functions defined.
+    pub fn is_empty(&self) -> bool {
+        self.globals.is_empty() && self.funcs.is_empty()
+    }
+}
+
 /// A run-time error: return code, message and the function it arose in.
 #[derive(Debug, Clone)]
 pub struct MErr {

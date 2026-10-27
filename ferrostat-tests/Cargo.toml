@@ -13,3 +13,10 @@ ferrostat-parser = { path = "../ferrostat-parser" }
 ferrostat-engine = { path = "../ferrostat-engine" }
 ferrostat-cmd = { path = "../ferrostat-cmd" }
 ferrostat-ado = { path = "../ferrostat-ado" }
+
+[dev-dependencies]
+# t22_columnar writes "foreign" parquet/arrow files (types the exporter never produces)
+arrow-array = { version = "60", default-features = false }
+arrow-schema = { version = "60", default-features = false }
+arrow-ipc = { version = "60", default-features = false, features = ["lz4", "zstd"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "snap", "zstd"] }

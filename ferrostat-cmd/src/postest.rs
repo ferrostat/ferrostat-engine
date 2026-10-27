@@ -150,6 +150,11 @@ impl CommandHandler for Predict {
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
+        if ecmd == "reghdfe" {
+            if let Some(out) = crate::reghdfe::predict(ds, st, cmd)? {
+                return Ok(out);
+            }
+        }
         let words: Vec<&str> = cmd.main.split_whitespace().collect();
         let (ty, names): (Option<VarType>, Vec<String>) = match words.first().and_then(|w| VarType::from_type_str(w)) {
             Some(t) => (Some(t), words[1..].iter().map(|s| s.to_string()).collect()),
@@ -649,7 +654,7 @@ impl CommandHandler for Lincom {
         let var: f64 = (0..k).map(|a| (0..k).map(|c| row[a] * v[(a, c)] * row[c]).sum::<f64>()).sum();
         let se = var.max(0.0).sqrt();
         let level = util::level(cmd, st)?;
-        let df = st.e.get("df_r").filter(|_| matches!(ecmd.as_str(), "regress" | "anova" | "areg" | "qreg" | "xtreg" | "mean" | "contrast") && st.e.macros.get("model").map_or(true, |m| m != "re"));
+        let df = st.e.get("df_r").filter(|_| matches!(ecmd.as_str(), "regress" | "anova" | "areg" | "reghdfe" | "qreg" | "xtreg" | "mean" | "total" | "proportion" | "contrast") && st.e.macros.get("model").map_or(true, |m| m != "re"));
         let t = est / se;
         let (p, crit) = match df {
             Some(d) => (2.0 * dist::ttail(d, t.abs()), dist::invttail(d, (1.0 - level / 100.0) / 2.0)),

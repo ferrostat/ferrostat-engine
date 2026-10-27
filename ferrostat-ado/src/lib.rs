@@ -12,7 +12,9 @@ pub mod progcmd;
 pub mod putdocx;
 pub mod putexcel;
 pub mod resample;
+pub mod parallel;
 pub mod python;
+pub mod lint;
 pub mod script;
 
 pub use interpreter::AdoInterpreter;

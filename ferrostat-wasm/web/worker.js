@@ -1,31 +1,8 @@
 // Runs the Ferrostat engine off the page's main thread. The page sends
 // {id, op, args} messages and receives {id, ok, value | error}.
+import "./shim.js";
+import "./parallel.js";
 import init, { Ferrostat } from "./pkg/ferrostat_wasm.js";
-
-// --- minimal DOM for the graph library's text measurement --------------
-// Graph labels are laid out by measuring text in a <span>; workers have no
-// DOM, so measure with an OffscreenCanvas using the same font settings.
-const measure = new OffscreenCanvas(1, 1).getContext("2d");
-class FakeElement {
-  constructor() { this.text = ""; this.font = "12px sans-serif"; this.size = 12; }
-  set textContent(v) { this.text = String(v ?? ""); }
-  get textContent() { return this.text; }
-  setAttribute(name, value) {
-    if (name !== "style") return;
-    const get = (k) => (new RegExp(k + "\\s*:\\s*([^;]+)").exec(value) || [])[1];
-    const size = parseFloat(get("font-size") || "12");
-    this.size = size;
-    this.font = `${get("font-style") || "normal"} ${size}px ${get("font-family") || "sans-serif"}`;
-  }
-  get offsetWidth() { measure.font = this.font; return Math.round(measure.measureText(this.text).width); }
-  get offsetHeight() { return Math.round(this.size * 1.15); }
-  remove() {}
-}
-for (const name of ["Window", "HTMLElement"]) {
-  self[name] = class { static [Symbol.hasInstance]() { return true; } };
-}
-self.window = self;
-self.document = { body: { append() {}, appendChild() {} }, createElement: () => new FakeElement() };
 
 // --- engine ----------------------------------------------------------------
 let fs = null;
@@ -62,6 +39,7 @@ const ops = {
   changes: () => changes(),
   dataPage: (start, count) => JSON.parse(fs.data_page(start, count)),
   graphSvg: (w, h) => fs.graph_svg(w, h) ?? null,
+  graphHover: () => fs.graph_hover(),
   writeFile: (path, bytes) => { fs.write_file(path, bytes); },
   // restoring saved files must not report them as changed again
   restoreFiles: (files) => { for (const f of files) fs.write_file(f.path, f.bytes); fs.take_changes(); },

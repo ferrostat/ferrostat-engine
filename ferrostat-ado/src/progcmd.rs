@@ -14,7 +14,7 @@ use crate::interpreter::{err_message, AdoInterpreter};
 use crate::macros::{self, macro_number, unquote};
 
 /// SSC packages whose functionality Ferrostat provides natively.
-pub const NATIVE_PACKAGES: &[&str] = &["outreg2", "xtpmg", "spmap", "shp2dta", "sppack", "spmat", "xtivreg2", "ivreg2", "ranktest", "unique", "frmttable", "outreg"];
+pub const NATIVE_PACKAGES: &[&str] = &["outreg2", "xtpmg", "spmap", "shp2dta", "sppack", "spmat", "xtivreg2", "ivreg2", "ranktest", "unique", "frmttable", "outreg", "reghdfe", "ivreghdfe", "ftools", "distinct", "mdesc", "winsor2"];
 
 /// Community packages whose commands have a different name from the package,
 /// as (package, commands it provides).
@@ -76,6 +76,7 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             String::new()
         }
         "macro" => macro_cmd(me, r)?,
+        "lint" => crate::lint::lint_command(me, r)?,
         "display" => display(me, r)?,
         "scalar" => scalar(me, r)?,
         "program" => program_cmd(me, r)?,
@@ -185,6 +186,8 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             }
         }
         "pwd" => vfs::current_dir(),
+        "notes" | "note" => notes_cmd(me, r)?,
+        "char" => char_cmd(me, r)?,
         // the front ends clear their results window at this marker
         "cls" => crate::interpreter::CLS.to_string(),
         "dir" => dir_listing(r)?,
@@ -236,7 +239,8 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
         }
         "ssc" | "net" | "ado" => packages(me, verb, r)?,
         "cf" => cf(me, r)?,
-        "adopath" | "discard" | "more" | "pause" | "timer" | "set_defaults" | "graph_set" => String::new(),
+        "adopath" | "discard" | "more" | "pause" | "set_defaults" | "graph_set" => String::new(),
+        "timer" => timer(me, r)?,
         "sleep" => {
             let ms: u64 = r.parse().unwrap_or(0);
             // the browser has no blocking sleep
@@ -408,7 +412,7 @@ fn dir_listing(r: &str) -> Result<String, String> {
 
 /// Commands handled by the interpreter itself rather than the engine.
 pub const INTERP_COMMANDS: &[&str] = &[
-    "local", "global", "macro", "display", "cls", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit", "collect", "dtable", "etable",
+    "local", "global", "macro", "display", "cls", "notes", "note", "char", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit", "collect", "dtable", "etable", "lint",
 ];
 
 fn is_interp_command(n: &str) -> bool {
@@ -720,6 +724,375 @@ pub fn display(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
     }
     let _ = newline_end;
     Ok(out)
+}
+
+/// `timer on|off|clear|list [#]`: stopwatches 1–100; `list` reports and
+/// sets r(t#) and r(nt#).
+fn timer(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
+    let now = chrono::Utc::now().timestamp_micros();
+    let mut w = r.split_whitespace();
+    let sub = w.next().unwrap_or("list");
+    let num = match w.next() {
+        Some(n) => Some(n.parse::<u32>().ok().filter(|n| (1..=100).contains(n)).ok_or_else(|| rc_err(198, format!("timer {n} invalid; must be between 1 and 100")))?),
+        None => None,
+    };
+    let t = &mut me.timers;
+    match sub {
+        "on" => {
+            let n = num.ok_or_else(|| rc_err(198, "timer number required"))?;
+            let e = t.entry(n).or_insert((0.0, 0, None));
+            if e.2.is_some() {
+                return Err(rc_err(198, format!("timer {n} already on")));
+            }
+            e.2 = Some(now);
+        }
+        "off" => {
+            let n = num.ok_or_else(|| rc_err(198, "timer number required"))?;
+            let e = t.entry(n).or_insert((0.0, 0, None));
+            let start = e.2.take().ok_or_else(|| rc_err(198, format!("timer {n} not on")))?;
+            e.0 += (now - start) as f64 / 1e6;
+            e.1 += 1;
+        }
+        "clear" => match num {
+            Some(n) => {
+                t.remove(&n);
+            }
+            None => t.clear(),
+        },
+        "list" => {
+            let mut out = Vec::new();
+            let rr = me.engine.store.begin_r();
+            for (n, (total, count, running)) in me.timers.iter().filter(|(n, _)| num.is_none_or(|k| k == **n)) {
+                let total = total + running.map_or(0.0, |s| (now - s) as f64 / 1e6);
+                rr.set(&format!("t{n}"), total);
+                rr.set(&format!("nt{n}"), *count as f64);
+                out.push(format!("{n:>4}: {total:>9.2} /{count:>8} = {:>10.4}", if *count > 0 { total / *count as f64 } else { total }));
+            }
+            return Ok(out.join("\n"));
+        }
+        other => return Err(rc_err(198, format!("timer {other}: invalid subcommand"))),
+    }
+    Ok(String::new())
+}
+
+/// `evarname`: `_dta` or a variable name (abbreviations allowed).
+fn char_owner(me: &AdoInterpreter, name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name == "_dta" {
+        return Ok(name.to_string());
+    }
+    varlist::resolve_name(&me.engine.dataset, name)
+}
+
+/// `notes [evarname]: text`, `notes [list] [evarlist]`, `notes drop evarlist
+/// [in #[/#]]`, `notes replace evarname in #: text`, `notes renumber`.
+/// Notes are characteristics `note1`, `note2`, … with the count in `note0`.
+fn notes_cmd(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
+    let r = r.trim();
+    let first = r.split(|c: char| c.is_whitespace() || c == ':').next().unwrap_or("");
+    let chars = |me: &AdoInterpreter, owner: &str| -> Vec<(usize, String)> {
+        let Some(c) = me.engine.dataset.characteristics.get(owner) else { return Vec::new() };
+        let n: usize = c.get("note0").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        (1..=n).filter_map(|i| c.get(&format!("note{i}")).map(|t| (i, t.clone()))).collect()
+    };
+    // adding: everything up to the first top-level colon names the owner
+    if let Some(colon) = r.find(':').filter(|_| !matches!(first, "list" | "drop" | "replace" | "renumber" | "search" | "_count" | "_fetch")) {
+        let owner = if r[..colon].trim().is_empty() { "_dta".to_string() } else { char_owner(me, &r[..colon])? };
+        let mut text = r[colon + 1..].trim().to_string();
+        if text.contains("TS") {
+            text = text.replace("TS", &chrono::Local::now().format("%e %b %Y %H:%M").to_string().trim().to_string());
+        }
+        let ds = &mut me.engine.dataset;
+        let c = ds.characteristics.entry(owner).or_default();
+        let n: usize = c.get("note0").and_then(|v| v.trim().parse().ok()).unwrap_or(0) + 1;
+        c.insert("note0".into(), n.to_string());
+        c.insert(format!("note{n}"), text);
+        me.engine.store.data_changed = true;
+        return Ok(String::new());
+    }
+    let (sub, rest) = match first {
+        "list" | "drop" | "replace" | "renumber" | "search" => (first, r[first.len()..].trim()),
+        _ => ("list", r),
+    };
+    let owners = |me: &AdoInterpreter, list: &str| -> Result<Vec<String>, String> {
+        if list.trim().is_empty() {
+            let mut v = vec!["_dta".to_string()];
+            v.extend(me.engine.dataset.vars.iter().map(|x| x.name.clone()));
+            return Ok(v);
+        }
+        let mut out = Vec::new();
+        for w in list.split_whitespace() {
+            if w == "_dta" {
+                out.push(w.to_string());
+            } else {
+                out.extend(varlist::expand(&me.engine.dataset, w)?);
+            }
+        }
+        Ok(out)
+    };
+    // `in #[/#]` range of note numbers
+    let (list, range) = match rest.find(" in ").or_else(|| rest.starts_with("in ").then_some(0)) {
+        Some(i) => {
+            let spec = rest[i..].trim_start().trim_start_matches("in").trim();
+            let spec = spec.split(':').next().unwrap_or("").trim();
+            let (a, b) = match spec.split_once('/') {
+                Some((a, b)) => (a.trim().parse().unwrap_or(1), if b.trim() == "l" { usize::MAX } else { b.trim().parse().unwrap_or(usize::MAX) }),
+                None => {
+                    let a = spec.parse().map_err(|_| rc_err(198, "invalid in range"))?;
+                    (a, a)
+                }
+            };
+            (&rest[..i], Some((a, b)))
+        }
+        None => (rest, None),
+    };
+    let in_range = |k: usize| range.is_none_or(|(a, b)| k >= a && k <= b);
+    match sub {
+        "list" => {
+            let mut out = Vec::new();
+            for o in owners(me, list)? {
+                let ns: Vec<(usize, String)> = chars(me, &o).into_iter().filter(|(k, _)| in_range(*k)).collect();
+                if ns.is_empty() {
+                    continue;
+                }
+                out.push(String::new());
+                out.push(format!("{o}:"));
+                for (k, t) in ns {
+                    out.push(format!("{k:>3}.  {t}"));
+                }
+            }
+            Ok(out.join("\n"))
+        }
+        "search" => {
+            let needle = rest.trim().trim_matches('"').to_lowercase();
+            let mut out = Vec::new();
+            for o in owners(me, "")? {
+                for (k, t) in chars(me, &o) {
+                    if t.to_lowercase().contains(&needle) {
+                        out.push(format!("{o}:\n{k:>3}.  {t}"));
+                    }
+                }
+            }
+            Ok(out.join("\n"))
+        }
+        "drop" => {
+            let mut dropped = 0;
+            for o in owners(me, list)? {
+                let keep: Vec<String> = chars(me, &o).into_iter().filter(|(k, _)| !in_range(*k)).map(|(_, t)| t).collect();
+                let before = chars(me, &o).len();
+                dropped += before - keep.len();
+                if let Some(c) = me.engine.dataset.characteristics.get_mut(&o) {
+                    c.retain(|k, _| !k.starts_with("note"));
+                    for (i, t) in keep.iter().enumerate() {
+                        c.insert(format!("note{}", i + 1), t.clone());
+                    }
+                    if !keep.is_empty() {
+                        c.insert("note0".into(), keep.len().to_string());
+                    }
+                }
+            }
+            me.engine.store.data_changed = true;
+            Ok(format!("({dropped} note{} dropped)", if dropped == 1 { "" } else { "s" }))
+        }
+        "replace" => {
+            let colon = rest.find(':').ok_or_else(|| rc_err(198, "notes replace: text required"))?;
+            let owner = char_owner(me, list)?;
+            let (a, _) = range.ok_or_else(|| rc_err(198, "notes replace requires in #"))?;
+            let c = me.engine.dataset.characteristics.entry(owner.clone()).or_default();
+            if !c.contains_key(&format!("note{a}")) {
+                return Err(rc_err(198, format!("note {a} of {owner} not found")));
+            }
+            c.insert(format!("note{a}"), rest[colon + 1..].trim().to_string());
+            me.engine.store.data_changed = true;
+            Ok(String::new())
+        }
+        _ => Ok(String::new()), // renumber: notes are always kept numbered 1..n
+    }
+}
+
+/// `label language [name] [, new copy rename delete]`: several sets of
+/// variable labels and value-label attachments, kept in characteristics
+/// (`_dta[_lang_list]`, `_dta[_lang_c]`, `var[_lang_l_name]`,
+/// `var[_lang_v_name]`) so they are saved with the data.
+pub(crate) fn label_language(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
+    let (name, opts) = match r.split_once(',') {
+        Some((n, o)) => (n.trim(), o.trim().to_lowercase()),
+        None => (r.trim(), String::new()),
+    };
+    let ds = &mut me.engine.dataset;
+    let dta = ds.characteristics.entry("_dta".into()).or_default();
+    let current = dta.get("_lang_c").cloned().unwrap_or_else(|| "default".into());
+    let mut list: Vec<String> = dta.get("_lang_list").map(|l| l.split_whitespace().map(str::to_string).collect()).unwrap_or_else(|| vec![current.clone()]);
+    let write_list = |ds: &mut ferrostat_core::DataSet, list: &[String], cur: &str| {
+        let dta = ds.characteristics.entry("_dta".into()).or_default();
+        if list.len() <= 1 && cur == "default" {
+            dta.remove("_lang_list");
+            dta.remove("_lang_c");
+        } else {
+            dta.insert("_lang_list".into(), list.join(" "));
+            dta.insert("_lang_c".into(), cur.to_string());
+        }
+    };
+    // store the labels in effect under `lang`
+    let save = |ds: &mut ferrostat_core::DataSet, lang: &str| {
+        let dl = ds.datalabel.clone();
+        for v in ds.vars.clone() {
+            let c = ds.characteristics.entry(v.name.clone()).or_default();
+            if v.label.is_empty() { c.remove(&format!("_lang_l_{lang}")) } else { c.insert(format!("_lang_l_{lang}"), v.label.clone()) };
+            if v.value_label_name.is_empty() { c.remove(&format!("_lang_v_{lang}")) } else { c.insert(format!("_lang_v_{lang}"), v.value_label_name.clone()) };
+        }
+        let dta = ds.characteristics.entry("_dta".into()).or_default();
+        if dl.is_empty() { dta.remove(&format!("_lang_l_{lang}")) } else { dta.insert(format!("_lang_l_{lang}"), dl) };
+    };
+    // put the labels stored under `lang` in effect (and drop the stored copy)
+    let load = |ds: &mut ferrostat_core::DataSet, lang: &str| {
+        for i in 0..ds.vars.len() {
+            let name = ds.vars[i].name.clone();
+            let c = ds.characteristics.entry(name.clone()).or_default();
+            let l = c.remove(&format!("_lang_l_{lang}")).unwrap_or_default();
+            let v = c.remove(&format!("_lang_v_{lang}")).unwrap_or_default();
+            if c.is_empty() {
+                ds.characteristics.remove(&name);
+            }
+            ds.vars[i].label = l;
+            ds.vars[i].value_label_name = v;
+        }
+        let dta = ds.characteristics.entry("_dta".into()).or_default();
+        ds.datalabel = dta.remove(&format!("_lang_l_{lang}")).unwrap_or_default();
+    };
+    if name.is_empty() {
+        let mut out = vec![String::new(), "  Language for variable and value labels".into(), String::new()];
+        if list.len() <= 1 {
+            out.push(format!("  In this dataset, value and variable labels have been defined in only one language: {current}"));
+        } else {
+            out.push("  Available languages:".into());
+            for l in &list {
+                out.push(format!("          {l}"));
+            }
+            out.push(String::new());
+            out.push(format!("  Currently active language: {current}"));
+        }
+        return Ok(out.join("\n"));
+    }
+    varlist::check_name(name)?;
+    let opt = |o: &str| opts.split_whitespace().any(|w| w == o);
+    if opt("rename") {
+        if list.iter().any(|l| l == name) {
+            return Err(rc_err(110, format!("language {name} already defined")));
+        }
+        for l in list.iter_mut().filter(|l| **l == current) {
+            *l = name.to_string();
+        }
+        write_list(ds, &list, name);
+        return Ok(format!("(language {current} renamed {name})"));
+    }
+    if opt("delete") {
+        if !list.iter().any(|l| l == name) {
+            return Err(rc_err(111, format!("language {name} not defined")));
+        }
+        if list.len() == 1 {
+            return Err(rc_err(198, "cannot delete the only language"));
+        }
+        list.retain(|l| l != name);
+        if name == current {
+            let next = list[0].clone();
+            load(ds, &next);
+            write_list(ds, &list, &next);
+            return Ok(format!("(language {name} deleted; language {next} now current)"));
+        }
+        // drop its stored labels
+        for c in ds.characteristics.values_mut() {
+            c.remove(&format!("_lang_l_{name}"));
+            c.remove(&format!("_lang_v_{name}"));
+        }
+        write_list(ds, &list, &current);
+        return Ok(format!("(language {name} deleted)"));
+    }
+    if opt("new") || opt("copy") {
+        if list.iter().any(|l| l == name) {
+            return Err(rc_err(110, format!("language {name} already defined")));
+        }
+        save(ds, &current);
+        if opt("new") {
+            ds.datalabel.clear();
+            for v in ds.vars.iter_mut() {
+                v.label.clear();
+                v.value_label_name.clear();
+            }
+        }
+        list.push(name.to_string());
+        write_list(ds, &list, name);
+        me.engine.store.data_changed = true;
+        return Ok(format!("(language {name} now current language)"));
+    }
+    if name == current {
+        return Ok(String::new());
+    }
+    if !list.iter().any(|l| l == name) {
+        return Err(rc_err(111, format!("language {name} not defined")));
+    }
+    save(ds, &current);
+    load(ds, name);
+    write_list(ds, &list, name);
+    me.engine.store.data_changed = true;
+    Ok(String::new())
+}
+
+/// `char [define] evarname[charname] [text]`, `char list [evarname[charname]]`,
+/// `char rename oldvar newvar`.
+fn char_cmd(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
+    let r = r.trim();
+    let target = |s: &str| -> Option<(String, String, String)> {
+        let open = s.find('[')?;
+        let close = open + s[open..].find(']')?;
+        Some((s[..open].trim().to_string(), s[open + 1..close].trim().to_string(), s[close + 1..].trim().to_string()))
+    };
+    if let Some(rest) = r.strip_prefix("list").filter(|x| x.is_empty() || x.starts_with(char::is_whitespace)) {
+        let rest = rest.trim();
+        let mut out = Vec::new();
+        let (only_owner, only_name) = match target(rest) {
+            Some((o, n, _)) => (Some(if o == "_dta" { o } else { char_owner(me, &o)? }), Some(n).filter(|n| !n.is_empty())),
+            None if !rest.is_empty() => (Some(char_owner(me, rest)?), None),
+            None => (None, None),
+        };
+        for (owner, c) in &me.engine.dataset.characteristics {
+            if only_owner.as_ref().is_some_and(|o| o != owner) {
+                continue;
+            }
+            for (name, v) in c {
+                if only_name.as_ref().is_some_and(|n| n != name) {
+                    continue;
+                }
+                out.push(format!("  {:<30}{}", format!("{owner}[{name}]:"), v));
+            }
+        }
+        return Ok(out.join("\n"));
+    }
+    if let Some(rest) = r.strip_prefix("rename ") {
+        let w: Vec<&str> = rest.split(|c: char| c.is_whitespace() || c == ',').filter(|x| !x.is_empty()).collect();
+        if w.len() < 2 {
+            return Err(rc_err(198, "char rename oldvar newvar"));
+        }
+        let (old, new) = (char_owner(me, w[0])?, char_owner(me, w[1])?);
+        let moved = me.engine.dataset.characteristics.remove(&old).unwrap_or_default();
+        me.engine.dataset.characteristics.entry(new).or_default().extend(moved);
+        return Ok(String::new());
+    }
+    let r = r.strip_prefix("define ").unwrap_or(r).trim();
+    let (owner, name, text) = target(r).ok_or_else(|| rc_err(198, "char evarname[charname] text"))?;
+    let owner = char_owner(me, &owner)?;
+    let text = crate::macros::unquote(&text);
+    let c = me.engine.dataset.characteristics.entry(owner.clone()).or_default();
+    if text.is_empty() {
+        c.remove(&name);
+        if c.is_empty() {
+            me.engine.dataset.characteristics.remove(&owner);
+        }
+    } else {
+        c.insert(name, text.to_string());
+    }
+    me.engine.store.data_changed = true;
+    Ok(String::new())
 }
 
 /// Byte offset of the first comma outside quotes and brackets.
@@ -1305,7 +1678,25 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
         if star {
             me.engine.store.set_local("options", leftover.join(" "));
         } else {
-            return Err(rc_err(198, format!("option {} not allowed", leftover[0])));
+            let bad = given.iter().zip(&used).find(|(_, u)| !**u).map(|((n, _), _)| n.clone()).unwrap_or_default();
+            // declared options as written: `Scale(real 1)` -> "scale()", `Detail` -> "detail"
+            let declared: Vec<String> = split_top_level_words(&spec_opts.replace(['[', ']'], " "))
+                .iter()
+                .filter(|o| o.as_str() != "*")
+                .map(|o| match o.split_once('(') {
+                    Some((n, _)) => format!("{}()", n.trim().to_lowercase()),
+                    None => o.trim().to_lowercase(),
+                })
+                .collect();
+            let names: Vec<&str> = declared.iter().map(|d| d.trim_end_matches("()")).collect();
+            let err = rc_err(198, format!("option {} not allowed", leftover[0]));
+            return Err(match ferrostat_engine::suggest::closest(&bad, names.iter().copied()) {
+                Some(s) => {
+                    let shown = declared.iter().find(|d| d.trim_end_matches("()") == s).cloned().unwrap_or(s);
+                    ferrostat_engine::suggest::with_hint(&err, &format!("(did you mean {shown}?)"))
+                }
+                None => err,
+            });
         }
     } else if star {
         me.engine.store.set_local("options", "");

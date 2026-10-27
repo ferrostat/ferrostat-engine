@@ -11,6 +11,37 @@ use wasm_bindgen::prelude::*;
 extern "C" {
     #[wasm_bindgen(js_namespace = console)]
     fn error(msg: &str);
+
+    /// Defined by the engine worker: runs replications on helper workers
+    /// and returns their results, or undefined when it cannot.
+    #[wasm_bindgen(catch, js_name = ferrostatParallel)]
+    fn ferrostat_parallel(job: &str, data: &[u8]) -> Result<JsValue, JsValue>;
+}
+
+fn parallel_hook(job: &str, data: &[u8]) -> Option<String> {
+    ferrostat_parallel(job, data).ok().and_then(|v| v.as_string())
+}
+
+/// Replications of a `bootstrap`/`simulate`/`permute` job, run by a helper
+/// worker with its own engine instance.
+#[wasm_bindgen]
+pub struct ParallelJob {
+    inner: ferrostat_ado::parallel::Prepared,
+}
+
+#[wasm_bindgen]
+impl ParallelJob {
+    #[wasm_bindgen(constructor)]
+    pub fn new(job: &str, data: &[u8]) -> Result<ParallelJob, JsError> {
+        #[cfg(target_arch = "wasm32")]
+        install_panic_hook();
+        ferrostat_ado::parallel::Prepared::new(job, data.to_vec()).map(|inner| ParallelJob { inner }).map_err(|e| JsError::new(&e))
+    }
+
+    /// Statistics of replication `rep`, or undefined if its command failed.
+    pub fn rep(&mut self, rep: usize) -> Option<Vec<f64>> {
+        self.inner.rep(rep)
+    }
 }
 
 /// Report Rust panics on the browser console (a panic stops the module).
@@ -27,6 +58,8 @@ pub struct Ferrostat {
     sent: usize,
     /// `session.clears` already reported to the page
     clears: u64,
+    /// hover side channel of the last graph drawn by `graph_svg`
+    hover: std::cell::RefCell<String>,
 }
 
 impl Default for Ferrostat {
@@ -41,7 +74,8 @@ impl Ferrostat {
     pub fn new() -> Ferrostat {
         #[cfg(target_arch = "wasm32")]
         install_panic_hook();
-        Ferrostat { session: Session::new(), sent: 0, clears: 0 }
+        let _ = ferrostat_ado::parallel::HOOK.set(parallel_hook);
+        Ferrostat { session: Session::new(), sent: 0, clears: 0, hover: Default::default() }
     }
 
     pub fn version() -> String {
@@ -137,8 +171,20 @@ impl Ferrostat {
         self.session.graph_visible()
     }
 
+    /// The graph for display; its hover map is kept for `graph_hover`.
     pub fn graph_svg(&self, width: u32, height: u32) -> Option<String> {
-        self.session.graph_svg(width, height)
+        let (svg, hover) = match self.session.graph_svg_hover(width, height) {
+            Some((s, h)) => (Some(s), h),
+            None => (None, String::new()),
+        };
+        *self.hover.borrow_mut() = hover;
+        svg
+    }
+
+    /// Hover side channel (JSON) of the graph last returned by `graph_svg`:
+    /// screen positions and values of markers, line vertices and bars.
+    pub fn graph_hover(&self) -> String {
+        self.hover.borrow().clone()
     }
 
     // ---- in-memory file system ----

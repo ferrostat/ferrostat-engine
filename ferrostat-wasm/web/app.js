@@ -1,8 +1,19 @@
 import { highlight } from "./highlight.js";
+import { attachHover } from "./graph-hover.js";
 
 // Ferrostat browser interface. The engine runs in a Web Worker (worker.js)
 // so long computations never freeze the page; session files are kept in the
 // browser's IndexedDB so they survive reloads. Nothing leaves the browser.
+
+// Cross-origin isolation (needed for parallel replications) comes from a
+// service worker; the first visit reloads once so it controls the page.
+if (!self.crossOriginIsolated && "serviceWorker" in navigator && self.isSecureContext) {
+  navigator.serviceWorker.register("coi-sw.js").then(() => navigator.serviceWorker.ready).then(() => {
+    let reloaded = false;
+    try { reloaded = sessionStorage.getItem("coi-reload") === "1"; sessionStorage.setItem("coi-reload", "1"); } catch { /* storage unavailable */ }
+    if (!reloaded && navigator.serviceWorker.controller === null) location.reload();
+  }, () => { /* no service workers: replications run one at a time */ });
+}
 
 const $ = (id) => document.getElementById(id);
 const PAGE = 200;
@@ -243,6 +254,9 @@ async function openFile(path) {
   if (ext === "dta") return submit(`use ${q(path)}, clear`);
   if (ext === "csv" || ext === "tsv" || ext === "txt") return submit(`import delimited using ${q(path)}, clear`);
   if (ext === "xlsx") return submit(`import excel using ${q(path)}, firstrow clear`);
+  if (ext === "parquet") return submit(`import parquet using ${q(path)}, clear`);
+  if (ext === "arrow" || ext === "feather") return submit(`import arrow using ${q(path)}, clear`);
+  if (ext === "json" || ext === "jsonl" || ext === "ndjson") return submit(`import json using ${q(path)}, clear`);
   const bytes = await call("readFile", path);
   if (ext === "do" || ext === "ado") {
     $("editor").value = new TextDecoder().decode(bytes);
@@ -266,7 +280,7 @@ async function addFiles(list) {
   });
   const first = list[0];
   const cwd = state.cwd.endsWith("/") ? state.cwd : state.cwd + "/";
-  if (list.length === 1 && /\.(dta|csv|xlsx|do)$/i.test(first.name)) openFile(cwd + first.name);
+  if (list.length === 1 && /\.(dta|csv|xlsx|parquet|arrow|feather|jsonl?|do)$/i.test(first.name)) openFile(cwd + first.name);
 }
 
 function download(name, bytes) {
@@ -317,6 +331,7 @@ async function renderData() {
 async function renderGraph() {
   const svg = await call("graphSvg", GRAPH_W, GRAPH_H);
   $("graph").innerHTML = svg || '<p class="empty">No graph yet.</p>';
+  if (svg) attachHover($("graph"), await call("graphHover"));
   return !!svg;
 }
 

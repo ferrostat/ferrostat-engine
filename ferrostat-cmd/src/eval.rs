@@ -600,7 +600,7 @@ pub fn find_coef(b: &crate::matrix::Matrix, name: &str) -> Option<usize> {
     b.colnames.iter().position(|c| {
         let c = c.rsplit(':').next().unwrap_or(c);
         if let (Some((l1, v1)), Some((l2, v2))) = (c.split_once('.'), bare.split_once('.')) {
-            v1 == v2 && l1.trim_end_matches(['b', 'o', 'n']) == l2
+            v1 == v2 && l1.trim_end_matches(['b', 'o', 'n']) == l2.trim_end_matches(['b', 'o', 'n'])
         } else {
             false
         }
@@ -709,7 +709,8 @@ pub fn c_value(env: &Env, key: &str) -> Val {
         // the first name is kept for existing do-files that query it
         "stata_version" | "version" | "userversion" => Val::Num(18.0),
         "bit" => Val::Num(if cfg!(target_pointer_width = "64") { 64.0 } else { 32.0 }),
-        "processors" | "processors_lic" | "processors_mach" | "processors_max" => Val::Num(processors()),
+        "processors" => Val::Num(env.st.and_then(|st| st.settings.get("processors")).and_then(|v| v.trim().parse::<f64>().ok()).map_or(processors(), |n| n.clamp(1.0, processors()))),
+        "processors_lic" | "processors_mach" | "processors_max" => Val::Num(processors()),
         "mode" | "console" => Val::Str(String::new()),
         "rmsg_time" => Val::Num(0.0),
         "current_date" => Val::Str(now.format("%e %b %Y").to_string().trim().to_string()),

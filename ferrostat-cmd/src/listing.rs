@@ -192,7 +192,7 @@ impl CommandHandler for List {
         let mut out = Vec::new();
         let header: Vec<String> = vars.iter().zip(&widths).zip(&right).map(|((n, w), r)| fmt_cell(n, *w, *r)).collect();
         if clean {
-            out.push(format!("{lead} {}", header.join("   ")));
+            out.push(format!("{lead}  {}", header.join("   ")));
         } else {
             out.push(format!("{lead}  +{}+", "-".repeat(inner)));
             out.push(format!("{lead}  | {} |", header.join("   ")));

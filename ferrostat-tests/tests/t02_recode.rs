@@ -144,3 +144,13 @@ gen age = age(birth,date)",
     );
     assert_eq!(s.nums("age"), vec![9.0, 9.0, 9.0]);
 }
+
+#[test]
+fn rules_without_parentheses() {
+    let mut s = ferrostat_tests::Session::with_fixture();
+    s.run("gen a = cnt");
+    s.run("gen b = cnt");
+    s.run("recode a 0/4=1 5/14=2 15/max=3");
+    s.run("recode b (0/4=1) (5/14=2) (15/max=3)");
+    assert_eq!(s.nums("a"), s.nums("b"));
+}

@@ -51,7 +51,9 @@ Ferrostat runs existing analysis scripts unchanged: it reads and writes `.dta` f
 - Stored results `r()`, `e()`, `c()`, `_b[]`, `_se[]`, scalars and a matrix language (`J()`, `I()`, `diag()`, `inv()`, joins, subscripts, `accum`, `symeigen`, `mkmat`/`svmat`)
 - Command abbreviations (`gen`, `su`, `reg`, `tab`, …), varlist wildcards and ranges, factor variables (`i.`, `ib#.`, `c.`, `#`, `##`) and time-series operators (`L.`, `F.`, `D.`, `S.`)
 - `#delimit ;`, `///` continuation, `//` and `/* */` comments, `do`/`run`/`include`, `log using`, `set rmsg on`, `cls`
-- User-written `egen` functions (`program _gname`)
+- User-written `egen` functions (`program _gname`), `notes`, `char`, `label language`, `timer`
+- Error messages suggest the closest command, variable or option ("did you mean regress?")
+- `ferrostat --check file.do` (and `lint using`) checks do-files without running them: unbalanced blocks, unterminated strings, unknown commands, undefined locals
 
 ### Expressions
 Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with missing yields missing, and logical tests follow the usual rules (`x > 5` is true for missing `x`). Around 200 functions: mathematics, distributions (`normal`, `invnormal`, `t`/`ttail`, `chi2`/`chi2tail`, `F`/`Ftail`, `binomial`, `poisson`, `gammap`, `ibeta`, inverses), random numbers (`runiform`, `rnormal`, … with `set seed`), strings (`substr`, `strpos`, `subinstr`, `regexm`, `ustrregexra`, `word`, `strtrim`, …), dates (`mdy`, `date`, `clock`, `year`, `dofm`, `age`, `datediff`, `birthday`, `%td`/`%tc`/`%tm`/`%tq` formats), programming (`cond`, `inlist`, `inrange`, `missing`, running `sum()`).
@@ -62,13 +64,15 @@ Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with
 ### Statistics
 | Area | Commands |
 |------|----------|
-| Descriptive | `summarize` (incl. `detail`, weights), `tabulate` (one/two-way, `chi2`, `lrchi2`, `exact`, `V`, `gamma`, `taub`, `generate()`), `tab1`, `tab2`, `tabstat`, `table` (current and legacy `contents()` syntax), `dtable`, `correlate`, `pwcorr`, `spearman`, `centile`, `mean`, `total`, `ci`, `codebook`, `misstable` |
+| Descriptive | `summarize` (incl. `detail`, weights), `proportion`, `distinct`, `mdesc`, `winsor2`, `tabulate` (one/two-way, `chi2`, `lrchi2`, `exact`, `V`, `gamma`, `taub`, `generate()`), `tab1`, `tab2`, `tabstat`, `table` (current and legacy `contents()` syntax), `dtable`, `correlate`, `pwcorr`, `spearman`, `centile`, `mean`, `total`, `ci`, `codebook`, `misstable` |
 | Tests | `ttest` (one-sample, paired, by-group, unequal/Welch), `prtest`, `sdtest`, `ranksum`, `signrank`, `signtest`, `kwallis`, `oneway`, `ksmirnov`, `swilk`, `hausman` |
 | Linear models | `regress` (robust, HC2/HC3, cluster, `fw`/`aw`/`pw`/`iw`), `anova`, `areg`, `qreg`, `rreg`, `mvreg`, `manova`/`manovatest`, `ivregress 2sls`/`liml`/`gmm` (`wmatrix()`, `igmm`; `estat firststage`, `estat overid`) |
 | Panel | `xtreg` (`fe`, `re`, `be`, cluster), `xtivreg` (`fe`, `be`, `fd`, `re` with G2SLS or `ec2sls`), `xtivreg2` (`fe`, cluster; Kleibergen–Paap and Cragg–Donald identification tests with Stock–Yogo critical values, Hansen J, C endogeneity test), `xtpmg` (PMG, MG; Pesaran CD test) |
 | Nonlinear | `logit`, `logistic`, `probit`, `cloglog`, `poisson`, `nbreg`, `zip`, `zinb`, `ologit`, `oprobit`, `mlogit`, `tobit`, `glm` (6 families, 7 links) |
 | Multilevel | `melogit`/`meqrlogit` (random intercepts and independent slopes, nested levels, adaptive Gauss–Hermite quadrature) |
-| Resampling | `bootstrap` (and `vce(bootstrap)`, `estat bootstrap` with normal/percentile/BC/BCa intervals), `simulate`, `permute` |
+| Resampling | `bootstrap` (and `vce(bootstrap)`, `estat bootstrap` with normal/percentile/BC/BCa intervals), `simulate`, `permute`; replications run in parallel on all cores (`set processors #`) with results independent of the core count, also in the browser |
+| Treatment effects | `teffects ra`, `ipw`, `aipw` (binary treatment; ATE, ATET, potential-outcome means; robust M-estimation standard errors) |
+| High-dimensional FE | `reghdfe` (multiple absorbed fixed effects, multi-way clustering, singleton dropping, saved FEs) |
 | Post-estimation | `predict` (xb, residuals, stdp/stdf/stdr, leverage, rstandard/rstudent, cooksd, pr, n, ir, mu, u/e/xbu, scores), `test`, `testparm`, `lincom`, `margins` (predictive margins, `dydx()`, `at()` with numlists and statistics, `atmeans`, `over()`, `predict()` outcomes; delta-method SEs), `marginsplot`, `contrast` (r./a./ar./g. operators, `@` groups, joint Wald tests, `effects`, `post`), r(table) after every coefficient table, `estimates store/restore/table/stats`, `estat ic/vce/hettest/ovtest/vif/summarize/firststage/gof` |
 | Spatial | `shp2dta` (ESRI shapefile + dBase import), `spmat contiguity` (queen/rook, row/minmax/spectral normalisation), `spmat lag`, `spmap` (choropleths) |
 | Survival | `stset`, `sts graph`, `strate` (exact Poisson CIs), `ltable` (actuarial life tables, Greenwood SEs) |
@@ -199,7 +203,7 @@ None: graph text uses an embedded copy of the DejaVu Sans font (`assets/fonts`, 
 
 Commands, prefixes and options follow the familiar conventions of do-file syntax, including minimal abbreviations, `[fw=]`/`[aw=]`/`[pw=]`/`[iw=]` weights and `in f/l` ranges. Error messages end with the usual return code (`r(111);`), which `capture` stores in `_rc`; in batch mode the process exit status is the return code of the failing command.
 
-Community packages that Ferrostat implements natively (`estout`/`esttab`/`eststo`, `coefplot`, `outreg2`, `frmttable`, `unique`, `xtivreg2`/`ivreg2`, `xtpmg`, `spmap`, `shp2dta`, `spmat`) are reported by `which` and accepted by `ssc install`, which installs nothing. Other community packages are not downloaded.
+Community packages that Ferrostat implements natively (`estout`/`esttab`/`eststo`, `coefplot`, `outreg2`, `frmttable`, `unique`, `reghdfe`/`ftools`, `distinct`, `mdesc`, `winsor2`, `xtivreg2`/`ivreg2`, `xtpmg`, `spmap`, `shp2dta`, `spmat`) are reported by `which` and accepted by `ssc install`, which installs nothing. Other community packages are not downloaded.
 
 ---
 
@@ -240,6 +244,7 @@ Design matrices are built with factor variables, interactions and time-series op
 
 ### Text and spreadsheets
 
+- `import parquet|arrow|json` / `export parquet|arrow|json` (Parquet, Arrow IPC/Feather, JSON and JSON Lines; `use`/`save` by `.parquet`/`.arrow` extension)
 - `import delimited` / `export delimited` (delimiters, `varnames()`, `case()`, `stringcols()`, locale-aware numbers via `parselocale()`, `decimalseparator()`, `groupseparator()`)
 - `import excel` / `export excel` (`.xlsx`: `sheet()`, `cellrange()`, `firstrow`, `allstring`, dates as `%td`/`%tc`; `export excel` with `sheet(, modify|replace)`)
 - `infile` (free format or with a dictionary) and `infix` (fixed columns, dictionaries in a file or inline in a do-file)

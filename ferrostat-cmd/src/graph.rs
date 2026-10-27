@@ -154,6 +154,8 @@ pub struct Layer {
     pub seg_colors: Vec<(u8, u8, u8)>,
     /// colour key of a surface layer: (range label, colour)
     pub key: Vec<(String, (u8, u8, u8))>,
+    /// observation numbers (1-based) of `points`, when they are observations (hover readouts)
+    pub obs: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -338,6 +340,22 @@ fn xy_points(ds: &DataSet, st: &Store, mask: &[bool], y: &str, x: &str) -> Resul
     Ok((0..ds.n_obs).filter(|&i| mask[i] && !is_missing(yc[i]) && !is_missing(xc[i])).map(|i| (xc[i], yc[i])).collect())
 }
 
+/// Points with their observation numbers (1-based).
+fn xy_points_obs(ds: &DataSet, st: &Store, mask: &[bool], y: &str, x: &str) -> Result<(Vec<(f64, f64)>, Vec<u32>), String> {
+    let yc = plot_col(ds, st, y)?;
+    let xc = plot_col(ds, st, x)?;
+    let rows: Vec<usize> = (0..ds.n_obs).filter(|&i| mask[i] && !is_missing(yc[i]) && !is_missing(xc[i])).collect();
+    Ok((rows.iter().map(|&i| (xc[i], yc[i])).collect(), rows.iter().map(|&i| i as u32 + 1).collect()))
+}
+
+/// Sort points by x (stable), keeping their observation numbers alongside.
+fn sort_by_x(pts: &mut Vec<(f64, f64)>, obs: &mut Vec<u32>) {
+    let mut idx: Vec<usize> = (0..pts.len()).collect();
+    idx.sort_by(|&a, &b| pts[a].0.total_cmp(&pts[b].0));
+    *pts = idx.iter().map(|&i| pts[i]).collect();
+    *obs = idx.iter().map(|&i| obs[i]).collect();
+}
+
 fn layer(kind: LayerKind, points: Vec<(f64, f64)>, label: &str) -> Layer {
     Layer { kind, points, label: label.to_string(), ..Default::default() }
 }
@@ -398,7 +416,8 @@ fn plot_layers(ds: &DataSet, st: &Store, spec: &Command, within: Option<&[bool]>
 /// `within` restricts the sample further (one panel of `by()`).
 fn plot_layers_raw(ds: &DataSet, st: &Store, spec: &Command, within: Option<&[bool]>) -> Result<Vec<Layer>, String> {
     let mut mask = util::touse(ds, st, spec)?;
-    let wts = util::weights(ds, st, spec, &mut mask, "fa")?;
+    // marker sizes: `[weight=]` means analytic weights, which need not be integers
+    let wts = util::weights(ds, st, spec, &mut mask, "af")?;
     if let Some(w) = within {
         for (m, k) in mask.iter_mut().zip(w) {
             *m = *m && *k;
@@ -567,19 +586,19 @@ fn plot_layers_raw(ds: &DataSet, st: &Store, spec: &Command, within: Option<&[bo
     }
     let mut out = Vec::new();
     for y in ys {
-        let mut pts = xy_points(ds, st, &mask, y, &x)?;
+        let (mut pts, mut obs) = xy_points_obs(ds, st, &mask, y, &x)?;
         let kind = match spec.verb.as_str() {
             "scatter" | "sc" => LayerKind::Scatter,
             "line" => {
-                pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+                sort_by_x(&mut pts, &mut obs);
                 LayerKind::Line
             }
             "connected" => {
-                pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+                sort_by_x(&mut pts, &mut obs);
                 LayerKind::Connected
             }
             "area" => {
-                pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+                sort_by_x(&mut pts, &mut obs);
                 LayerKind::Area
             }
             "bar" => LayerKind::Bar,
@@ -587,6 +606,7 @@ fn plot_layers_raw(ds: &DataSet, st: &Store, spec: &Command, within: Option<&[bo
         };
         let label = lab(y);
         let mut l = layer(kind, pts, &label);
+        l.obs = obs;
         if l.kind == LayerKind::Scatter {
             scatter_extras(ds, st, spec, &mask, y, &x, wts.as_ref(), &mut l)?;
         }
@@ -2761,6 +2781,7 @@ where
         let pal = palette(&g.scheme);
         let col = l.color.map(|(r, gg, b)| RGBColor(r, gg, b)).unwrap_or(pal[k % pal.len()]);
         let label = legend_label(g, k);
+        crate::hover::record(&chart, g, k, l);
         match l.kind {
             LayerKind::Scatter => {
                 let sym = if l.symbol.is_empty() && l.hollow { "Oh".to_string() } else { l.symbol.clone() };

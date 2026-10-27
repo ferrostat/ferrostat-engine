@@ -96,7 +96,7 @@ fn equation_qualified_coefficients_after_mlogit() {
     let mut s = Session::with_fixture();
     s.script("label define g 1 one 2 two 3 three\nlabel values group g");
     let out = s.run("mlogit group x, base(1)");
-    assert!(out.contains("two          |") && out.contains("Note: one is the base outcome."), "{out}");
+    assert!(out.contains("two          |") && out.contains("one          |  (base outcome)"), "{out}");
     let two = s.scalar("_b[two:x]");
     let three = s.scalar("_b[three:x]");
     assert_ne!(two, three);

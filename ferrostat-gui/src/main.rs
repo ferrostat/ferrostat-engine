@@ -26,6 +26,8 @@ struct App {
     hl_cache: Option<(u64, bool, egui::text::LayoutJob)>,
     editor_path: Option<std::path::PathBuf>,
     graph_tex: Option<(u64, egui::TextureHandle)>,
+    /// hover readouts of the graph shown (screen positions and values)
+    graph_hover: Option<ferrostat_cmd::hover::HoverMap>,
     scroll_to_end: bool,
 }
 
@@ -50,6 +52,7 @@ impl App {
             hl_cache: None,
             editor_path: None,
             graph_tex: None,
+            graph_hover: None,
             scroll_to_end: true,
         }
     }
@@ -102,6 +105,13 @@ impl App {
                 if ui.button("Import Excel…").clicked() {
                     if let Some(p) = rfd::FileDialog::new().add_filter("Excel", &["xlsx"]).pick_file() {
                         self.run(&format!("import excel using {}, firstrow clear", Self::quoted(&p)));
+                    }
+                }
+                if ui.button("Import Parquet / Arrow / JSON…").clicked() {
+                    if let Some(p) = rfd::FileDialog::new().add_filter("Columnar data", &["parquet", "arrow", "feather", "json", "jsonl"]).pick_file() {
+                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                        let kind = match ext.as_str() { "parquet" => "parquet", "json" | "jsonl" => "json", _ => "arrow" };
+                        self.run(&format!("import {kind} using {}, clear", Self::quoted(&p)));
                     }
                 }
                 if ui.button("Export Excel…").clicked() {
@@ -384,7 +394,9 @@ impl App {
     fn graph_window(&mut self, ctx: &egui::Context) {
         let serial = self.session.graph_serial;
         if self.graph_tex.as_ref().map(|t| t.0) != Some(serial) {
-            self.graph_tex = self.session.graph().and_then(|g| ferrostat_cmd::graph::render_rgb(g, GRAPH_W, GRAPH_H).ok()).map(|rgb| {
+            let drawn = self.session.graph().and_then(|g| ferrostat_cmd::hover::render_rgb_hover(g, GRAPH_W, GRAPH_H).ok());
+            self.graph_hover = drawn.as_ref().map(|(_, m)| m.clone());
+            self.graph_tex = drawn.map(|(rgb, _)| {
                 let img = egui::ColorImage::from_rgb([GRAPH_W as usize, GRAPH_H as usize], &rgb);
                 (serial, ctx.load_texture("graph", img, egui::TextureOptions::LINEAR))
             });
@@ -401,7 +413,14 @@ impl App {
                     });
                     let avail = ui.available_size();
                     let scale = (avail.x / GRAPH_W as f32).min(avail.y / GRAPH_H as f32).max(0.1);
-                    ui.image((tex.id(), egui::vec2(GRAPH_W as f32 * scale, GRAPH_H as f32 * scale)));
+                    let resp = ui.image((tex.id(), egui::vec2(GRAPH_W as f32 * scale, GRAPH_H as f32 * scale))).interact(egui::Sense::hover());
+                    // hover readout: pointer position in graph pixels, hit-tested on the side channel
+                    if let (Some(pos), Some(map)) = (resp.hover_pos(), self.graph_hover.as_ref()) {
+                        let (x, y) = ((pos.x - resp.rect.min.x) / scale, (pos.y - resp.rect.min.y) / scale);
+                        if let Some(text) = map.hit(x.round() as i32, y.round() as i32) {
+                            resp.on_hover_text_at_pointer(RichText::new(text).monospace());
+                        }
+                    }
                 }
                 None => {
                     ui.label("No graph in memory.");

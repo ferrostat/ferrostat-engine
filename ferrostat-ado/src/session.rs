@@ -174,6 +174,12 @@ impl Session {
         self.graph().and_then(|g| ferrostat_cmd::graph::render_svg(g, w, h).ok())
     }
 
+    /// The graph as SVG for display, with its hover side channel (JSON;
+    /// see `ferrostat_cmd::hover`). The SVG itself is the same as `graph_svg`.
+    pub fn graph_svg_hover(&self, w: u32, h: u32) -> Option<(String, String)> {
+        self.graph().and_then(|g| ferrostat_cmd::hover::render_svg_hover(g, w, h).ok()).map(|(svg, map)| (svg, map.to_json()))
+    }
+
     /// Words the language accepts as commands (with abbreviations and aliases).
     pub fn command_words(&self) -> Vec<String> {
         let mut w = self.interp.engine().command_words();

@@ -15,6 +15,20 @@ lazy_static = { workspace = true }
 regex = { workspace = true }
 flate2 = "1"
 chrono = { workspace = true }
+# columnar formats (import/export parquet, arrow, json): pure-Rust codecs only
+# so the browser build compiles; zstd (C library) is added natively below
+arrow-array = { version = "60", default-features = false }
+arrow-buffer = { version = "60", default-features = false }
+arrow-schema = { version = "60", default-features = false }
+arrow-ipc = { version = "60", default-features = false, features = ["lz4"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "snap", "lz4", "flate2", "flate2-rust_backend"] }
+bytes = "1"
+serde = { workspace = true }
+serde_json = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+parquet = { version = "60", default-features = false, features = ["zstd"] }
+arrow-ipc = { version = "60", default-features = false, features = ["zstd"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

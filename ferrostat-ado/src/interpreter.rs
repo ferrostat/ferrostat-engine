@@ -70,6 +70,8 @@ pub struct AdoInterpreter {
     pub(crate) frmt_tables: crate::frmttable::Tables,
     /// Matrix-language globals and functions.
     pub(crate) mata: crate::mata::MataState,
+    /// `timer`: total seconds, number of on/off cycles, start (µs) if running
+    pub(crate) timers: std::collections::BTreeMap<u32, (f64, u64, Option<i64>)>,
 }
 
 impl Default for AdoInterpreter {
@@ -101,6 +103,7 @@ impl AdoInterpreter {
             python: Default::default(),
             frmt_tables: Default::default(),
             mata: Default::default(),
+            timers: Default::default(),
         }
     }
 
@@ -694,11 +697,52 @@ impl AdoInterpreter {
     }
 
     fn dispatch(&mut self, verb: &str, verb_raw: &str, rest: &str, full: &str) -> Result<String, String> {
+        self.dispatch_inner(verb, verb_raw, rest, full).map_err(|e| self.hint(e))
+    }
+
+    /// Add a "did you mean" line to errors about an unknown command or variable.
+    fn hint(&self, err: String) -> String {
+        use ferrostat_engine::suggest::{closest, with_hint};
+        if err.contains("(did you mean ") {
+            return err;
+        }
+        let msg = err_message(&err);
+        let first = msg.lines().next().unwrap_or("");
+        let found = match rc_of(&err) {
+            199 => first.strip_prefix("command ").and_then(|r| r.strip_suffix(" is unrecognized")).and_then(|word| {
+                let mut words = self.engine.command_words();
+                words.extend(crate::progcmd::INTERP_COMMANDS.iter().map(|s| s.to_string()));
+                words.extend(self.engine.store.programs.keys().cloned());
+                // full names only: drop abbreviations of other words
+                let full: Vec<&String> = words.iter().filter(|w| !words.iter().any(|o| o.len() > w.len() && o.starts_with(w.as_str()))).collect();
+                closest(word, full.iter().map(|s| s.as_str()))
+            }),
+            111 => {
+                let word = first.strip_prefix("variable ").unwrap_or(first).strip_suffix(" not found");
+                word.filter(|w| !w.contains(char::is_whitespace)).and_then(|w| closest(w, self.engine.dataset.vars.iter().map(|v| v.name.as_str())))
+            }
+            _ => None,
+        };
+        match found {
+            Some(s) => with_hint(&err, &format!("(did you mean {s}?)")),
+            None => err,
+        }
+    }
+
+    fn dispatch_inner(&mut self, verb: &str, verb_raw: &str, rest: &str, full: &str) -> Result<String, String> {
         if let Some(out) = crate::progcmd::interp_command(self, verb, rest, full)? {
             return Ok(out);
         }
         if self.engine.store.programs.contains_key(verb_raw) {
             return self.run_program(verb_raw, rest.trim());
+        }
+        if verb == "label" && rest.trim_start().starts_with("lang") {
+            return crate::progcmd::label_language(self, rest.trim_start().split_once(char::is_whitespace).map_or("", |x| x.1));
+        }
+        // `clist`: the old name of `list` without the box
+        if verb_raw == "clist" {
+            let line = if crate::interpreter::has_top_level_comma(rest) { format!("list {rest} clean") } else { format!("list {rest}, clean") };
+            return self.dispatch_inner("list", "list", &line[4..], &line);
         }
         if verb == "egen" {
             if let Some((prog, args)) = user_egen(rest, |p| self.engine.store.programs.contains_key(p)) {
@@ -715,6 +759,11 @@ impl AdoInterpreter {
         // a command with a trailing native ado: allow programs with abbreviations disabled
         Err(rc_err(199, format!("command {verb_raw} is unrecognized")))
     }
+}
+
+/// Whether `s` has a comma outside quotes and parentheses.
+pub(crate) fn has_top_level_comma(s: &str) -> bool {
+    ferrostat_parser::parser::find_top_level(s, ',').is_some()
 }
 
 /// `xi:` interaction terms in factor-variable notation: `i.a*i.b` is

@@ -243,6 +243,11 @@ impl Engine {
             ("ci", Box::new(summarize::Ci)),
             ("table", Box::new(ferrostat_cmd::table::Table)),
             ("total", Box::new(ferrostat_cmd::table::Total)),
+            ("proportion", Box::new(ferrostat_cmd::proportion::Proportion)),
+            ("teffects", Box::new(ferrostat_cmd::teffects::Teffects)),
+            ("distinct", Box::new(ferrostat_cmd::community::Distinct)),
+            ("mdesc", Box::new(ferrostat_cmd::community::Mdesc)),
+            ("winsor2", Box::new(ferrostat_cmd::community::Winsor2)),
             ("tabulate", Box::new(tabulate::Tabulate)),
             ("tab1", Box::new(tabulate::Tab1)),
             ("tab2", Box::new(tabulate::Tab2)),
@@ -274,6 +279,8 @@ impl Engine {
             ("anova", Box::new(models::Anova)),
             ("xtreg", Box::new(models::Xtreg)),
             ("areg", Box::new(models::Areg)),
+            ("reghdfe", Box::new(ferrostat_cmd::reghdfe::Reghdfe)),
+            ("ivreghdfe", Box::new(ferrostat_cmd::reghdfe::Ivreghdfe)),
             ("ivregress", Box::new(models::Ivregress)),
             ("xtivreg", Box::new(models::Xtivreg { ivreg2: false })),
             ("xtivreg2", Box::new(models::Xtivreg { ivreg2: true })),
@@ -550,7 +557,7 @@ impl Engine {
             | "locale_ui" | "charset" | "httpproxy" | "update_query" | "timeout1" | "timeout2" | "haverdir" | "odbcmgr" | "notifyuser"
             | "include_bitmap" | "doublebuffer" | "reventries" | "varkeyboard" | "showomitted" | "showemptycells" | "lstretch" | "coeftabresults"
             | "fvwrap" | "fvwrapon" | "collect_label" | "collect_style" | "table_style" | "dots" | "iterlog" | "python_exec" | "rng" | "rngstream"
-            | "sortseed" | "sortmethod" | "matacache" | "matafavor" | "matastrict" | "matalnum" | "mataoptimize" | "matalibs" | "matamofirst" => {
+            | "parallel_transport" | "sortseed" | "sortmethod" | "matacache" | "matafavor" | "matastrict" | "matalnum" | "mataoptimize" | "matalibs" | "matamofirst" => {
                 let v = v.split(',').next().unwrap_or("").trim();
                 if !v.is_empty() {
                     self.store.settings.insert(what.clone(), v.to_string());

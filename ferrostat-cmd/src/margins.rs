@@ -961,7 +961,7 @@ impl CommandHandler for Margins {
         let vm = jac.mul(&v)?.mul(&jac.transpose())?;
 
         // ---- output ---------------------------------------------------------
-        let df = st.e.get("df_r").filter(|_| matches!(ecmd.as_str(), "regress" | "anova"));
+        let df = st.e.get("df_r").filter(|_| matches!(ecmd.as_str(), "regress" | "anova" | "reghdfe"));
         let crit = match df {
             Some(d) => dist::invttail(d, (1.0 - level / 100.0) / 2.0),
             None => dist::invnormal(1.0 - (1.0 - level / 100.0) / 2.0),

@@ -47,6 +47,21 @@ fn main() {
         println!("{}", ferrostat_ado::session::Session::new().command_words().join("\n"));
         return;
     }
+    // Static check: ferrostat --check file.do [more files] [--strict]
+    if let Some(i) = args.iter().position(|a| a == "--check") {
+        let strict = args.iter().any(|a| a == "--strict");
+        let files: Vec<String> = args[i + 1..].iter().filter(|a| !a.starts_with("--")).cloned().collect();
+        if files.is_empty() {
+            eprintln!("usage: ferrostat --check file.do [more files] [--strict]");
+            std::process::exit(198);
+        }
+        let interp = AdoInterpreter::new();
+        let mut words = interp.engine().command_words();
+        words.extend(ferrostat_ado::progcmd::INTERP_COMMANDS.iter().map(|s| s.to_string()));
+        let (report, (errors, warnings, _)) = ferrostat_ado::lint::check_files(&files, words, &[]);
+        println!("{report}");
+        std::process::exit(if errors > 0 || strict && warnings > 0 { 1 } else { 0 });
+    }
     let mut interp = AdoInterpreter::new();
 
     // Batch mode: ferrostat --do file.do [args]  (also: ferrostat -b do file.do)
