@@ -2399,6 +2399,14 @@ type Chart2d<'a, DB> = ChartContext<'a, DB, Cartesian2d<plotters::coord::types::
 fn draw_markers<'a, DB: DrawingBackend + 'a>(chart: &mut Chart2d<'a, DB>, pts: &[(f64, f64)], radius: &dyn Fn(usize) -> i32, sym: &str, col: RGBColor, label: &Option<String>) -> Result<(), DrawingAreaErrorKind<DB::ErrorType>> {
     let (shape, _, _) = symbol_shape(if sym.is_empty() { "O" } else { sym });
     let sym = sym.to_string();
+    // Markers land on whole pixels and are opaque, so a marker at the same
+    // pixel with the same size as an earlier one changes nothing: skip it.
+    // This bounds the output for scatters of millions of points.
+    let mut seen = std::collections::HashSet::new();
+    let keep: Vec<usize> = (0..pts.len()).filter(|&i| seen.insert((chart.backend_coord(&pts[i]), radius(i)))).collect();
+    let pts: Vec<(f64, f64)> = keep.iter().map(|&i| pts[i]).collect();
+    let radius = |i: usize| radius(keep[i]);
+    let pts = &pts[..];
     match shape {
         "circle" | "point" => {
             let st = move |r: i32| match marker_shape(&sym, r, col) { MarkerShape::Circle(rr, s) => (rr, s), _ => (r, col.filled()) };
