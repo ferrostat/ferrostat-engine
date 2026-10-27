@@ -2,7 +2,8 @@
 //!
 //! Implemented from the publicly documented file format:
 //! - releases 117, 118, 119 (tagged XML-like layout), read and write;
-//! - releases 113, 114, 115 (binary layout), read and write (115).
+//! - releases 113, 114, 115 (binary layout), read and write (115);
+//! - releases 102 to 112 (early binary layouts), read only (see `old`).
 //!
 //! Sections of the tagged formats are located through the `<map>` offsets,
 //! never by searching the payload for tag bytes.
@@ -14,6 +15,8 @@ use crate::dataset::DataSet;
 use crate::missing;
 use crate::value_label::ValueLabel;
 use crate::var::{Value, VarType, Variable};
+
+mod old;
 
 /// Root tags of the XML-style .dta formats (117-119); they are part of the
 /// file format and must be written verbatim.
@@ -176,6 +179,8 @@ impl DtaReader {
             read_tagged(&data)
         } else if !data.is_empty() && matches!(data[0], 113 | 114 | 115) {
             read_binary(&data)
+        } else if !data.is_empty() && old::is_old_release(data[0]) {
+            old::read_old(&data)
         } else if data.is_empty() {
             Err(bad("empty file"))
         } else {
@@ -432,10 +437,13 @@ fn read_binary(data: &[u8]) -> Result<DataSet> {
     let timestamp = c.fixed_str(18, false)?;
     let types: Vec<VarType> = (0..k).map(|_| c.u8().and_then(old_type)).collect::<Result<_>>()?;
     let names: Vec<String> = (0..k).map(|_| c.fixed_str(lay.name_w, false)).collect::<Result<_>>()?;
+    // the list ends at the first zero; bytes after it are unused
     let mut sortlist = Vec::new();
+    let mut ended = false;
     for _ in 0..=k {
         let v = c.u16()? as usize;
-        if v != 0 && sortlist.len() < k {
+        ended |= v == 0;
+        if !ended && v <= k && sortlist.len() < k {
             sortlist.push(v);
         }
     }

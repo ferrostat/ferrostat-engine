@@ -152,6 +152,8 @@ pub struct Store {
     pub cur_frame: String,
     /// Values of `set` options kept only for reporting through `c()`.
     pub settings: BTreeMap<String, String>,
+    /// Result collections (`collect`, `table`, `dtable`, `etable`).
+    pub collect: crate::collect::Collections,
 }
 
 impl Default for Store {
@@ -191,6 +193,7 @@ impl Default for Store {
             data_frames: BTreeMap::new(),
             cur_frame: crate::frames::DEFAULT_FRAME.to_string(),
             settings: BTreeMap::new(),
+            collect: Default::default(),
         }
     }
 }

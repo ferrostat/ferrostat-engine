@@ -35,9 +35,9 @@ fn make_dim(ds: &DataSet, var: &str, mask: &[bool]) -> Dim {
 
 /// A statistic: canonical name and its variable (none for frequency/percent).
 #[derive(Clone, Debug)]
-struct Stat {
-    name: String,
-    var: Option<String>,
+pub(crate) struct Stat {
+    pub(crate) name: String,
+    pub(crate) var: Option<String>,
 }
 
 impl Stat {
@@ -46,7 +46,7 @@ impl Stat {
     }
 }
 
-fn canonical_stat(s: &str) -> Result<String, String> {
+pub(crate) fn canonical_stat(s: &str) -> Result<String, String> {
     let s = s.to_lowercase();
     Ok(match s.as_str() {
         "freq" | "frequency" | "fr" | "fre" | "frequ" | "frequen" => "frequency".into(),
@@ -64,7 +64,7 @@ fn canonical_stat(s: &str) -> Result<String, String> {
 }
 
 /// Heading of a statistic in the current layout.
-fn stat_title(s: &str) -> String {
+pub(crate) fn stat_title(s: &str) -> String {
     match s {
         "frequency" => "Frequency".into(),
         "percent" => "Percent".into(),
@@ -114,7 +114,7 @@ fn legacy_title(st: &Stat) -> String {
 }
 
 /// Evaluate one statistic over the observations in `rows`.
-fn eval_stat(ds: &DataSet, stat: &Stat, rows: &[usize], w: Option<&Weights>, grand: f64) -> f64 {
+pub(crate) fn eval_stat(ds: &DataSet, stat: &Stat, rows: &[usize], w: Option<&Weights>, grand: f64) -> f64 {
     let wt = |i: usize| w.map_or(1.0, |w| w.w[i]);
     let freq = || -> f64 {
         match w.map(|w| w.kind) {
@@ -283,7 +283,7 @@ impl Grid {
 
 /// Split the variable specification of `table` into dimension groups:
 /// `a b c`, `(a b) (c)`, `(a b)(c) ()`.
-fn split_specs(s: &str) -> Vec<String> {
+pub(crate) fn split_specs(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut depth = 0;
@@ -352,228 +352,10 @@ impl CommandHandler for Table {
     }
 }
 
-// ---- current syntax -----------------------------------------------------------
+// ---- current syntax: see coltable.rs -------------------------------------------
 
 fn current(ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
-    let specs = split_specs(&cmd.main);
-    if specs.len() > 3 {
-        return Err(rc_err(198, "too many dimensions specified"));
-    }
-    let mut groups: Vec<Vec<String>> = Vec::new();
-    for s in &specs {
-        let words: Vec<&str> = s.split_whitespace().filter(|w| !matches!(*w, "result" | "var")).collect();
-        groups.push(if words.is_empty() { Vec::new() } else { varlist::expand(ds, &words.join(" "))? });
-    }
-    groups.resize(3, Vec::new());
-    let (rowv, colv, tabv) = (groups[0].clone(), groups[1].clone(), groups[2].clone());
-    // statistics
-    let mut stats: Vec<Stat> = Vec::new();
-    let mut nformats: Vec<(Option<String>, String)> = Vec::new();
-    let mut sformats: Vec<(Option<String>, String)> = Vec::new();
-    for (n, a) in &cmd.opts {
-        if opt_matches(n, "statistic", 4) {
-            let a = a.clone().unwrap_or_default();
-            let mut w = a.split_whitespace();
-            let name = canonical_stat(w.next().ok_or_else(|| rc_err(198, "statistic() invalid"))?)?;
-            let rest: Vec<&str> = w.collect();
-            if name == "frequency" || name == "percent" {
-                stats.push(Stat { name, var: None });
-            } else {
-                if rest.is_empty() {
-                    return Err(rc_err(198, format!("statistic {name} requires a varlist")));
-                }
-                for v in varlist::expand(ds, &rest.join(" "))? {
-                    stats.push(Stat { name: name.clone(), var: Some(v) });
-                }
-            }
-        } else if opt_matches(n, "nformat", 2) || opt_matches(n, "sformat", 2) {
-            let a = a.clone().unwrap_or_default();
-            let t = a.trim();
-            let (f, rest) = if t.starts_with('"') || t.starts_with('`') {
-                let end = t[1..].find('"').map(|p| p + 2).unwrap_or(t.len());
-                let end = if t.starts_with('`') { (end + 1).min(t.len()) } else { end };
-                (util::unquote(&t[..end]), t[end..].trim().to_string())
-            } else {
-                let mut sp = t.splitn(2, char::is_whitespace);
-                (sp.next().unwrap_or("").to_string(), sp.next().unwrap_or("").trim().to_string())
-            };
-            let target = if opt_matches(n, "nformat", 2) { &mut nformats } else { &mut sformats };
-            if rest.is_empty() {
-                target.push((None, f));
-            } else {
-                for s in rest.split_whitespace() {
-                    target.push((Some(canonical_stat(s).unwrap_or_else(|_| s.to_string())), f.clone()));
-                }
-            }
-        }
-    }
-    if stats.is_empty() {
-        stats.push(Stat { name: "frequency".into(), var: None });
-    }
-    let missing = cmd.has_opt("missing", 4);
-    let nototals = cmd.has_opt("nototals", 5);
-    let total_vars: Option<Vec<String>> = cmd.opt("totals", 3).map(|t| varlist::expand(ds, t)).transpose()?;
-    let wants_total = |v: &str| !nototals && total_vars.as_ref().map_or(true, |t| t.iter().any(|x| x == v));
-    let mut mask = util::touse(ds, st, cmd)?;
-    let w = util::weights(ds, st, cmd, &mut mask, "faip")?;
-    let all_dims: Vec<String> = rowv.iter().chain(&colv).chain(&tabv).cloned().collect();
-    if !missing {
-        util::markout(ds, &mut mask, &all_dims);
-    }
-    let nformat_for = |s: &str| -> Option<String> {
-        nformats.iter().rev().find(|(k, _)| k.as_deref().map_or(true, |k| k == s)).map(|x| x.1.clone())
-    };
-    let sformat_for = |s: &str| -> Option<String> {
-        sformats.iter().rev().find(|(k, _)| k.as_deref().map_or(true, |k| k == s)).map(|x| x.1.clone())
-    };
-    let dims: Vec<Dim> = all_dims.iter().map(|v| make_dim(ds, v, &mask)).collect();
-    let dref: Vec<&Dim> = dims.iter().collect();
-    let nr = rowv.len();
-    let nc = colv.len();
-    let grand_rows = select(&mask, &[], &[]);
-    let grand = eval_stat(ds, &Stat { name: "frequency".into(), var: None }, &grand_rows, w.as_ref(), 0.0);
-    let results_in_cols = nc == 0;
-    // keys over one block of dimensions (nested, observed combinations only)
-    let nested = |first: usize, count: usize, base: &[Option<usize>]| -> Vec<(Vec<Option<usize>>, Vec<String>, usize)> {
-        // (key over the block, label path, depth)
-        let mut out = Vec::new();
-        fn rec(
-            mask: &[bool],
-            dims: &[&Dim],
-            first: usize,
-            count: usize,
-            d: usize,
-            key: &mut Vec<Option<usize>>,
-            labels: &mut Vec<String>,
-            out: &mut Vec<(Vec<Option<usize>>, Vec<String>, usize)>,
-            total: &dyn Fn(&str) -> bool,
-        ) {
-            if d == count {
-                out.push((key[first..first + count].to_vec(), labels.clone(), d));
-                return;
-            }
-            let dim = dims[first + d];
-            for (l, text) in dim.levels.iter().enumerate() {
-                key[first + d] = Some(l);
-                if select(mask, dims, key).is_empty() {
-                    continue;
-                }
-                labels.push(text.clone());
-                rec(mask, dims, first, count, d + 1, key, labels, out, total);
-                labels.pop();
-            }
-            key[first + d] = None;
-            if total(&dim.var) {
-                labels.push("Total".into());
-                for k in d..count {
-                    key[first + k] = None;
-                }
-                out.push((key[first..first + count].to_vec(), labels.clone(), d + 1));
-                labels.pop();
-            }
-        }
-        let mut key = base.to_vec();
-        let mut labels = Vec::new();
-        rec(&mask, &dref, first, count, 0, &mut key, &mut labels, &mut out, &wants_total);
-        out
-    };
-    let nd = dims.len();
-    let tab_keys: Vec<(Vec<Option<usize>>, Vec<String>, usize)> = if tabv.is_empty() { vec![(Vec::new(), Vec::new(), 0)] } else { nested(nr + nc, tabv.len(), &vec![None; nd]) };
-    let mut out = Vec::new();
-    for (tkey, tlabels, _) in &tab_keys {
-        let mut base = vec![None; nd];
-        base[nr + nc..].clone_from_slice(tkey);
-        if !tabv.is_empty() {
-            let parts: Vec<String> = tabv.iter().zip(tlabels).map(|(v, l)| format!("{} = {}", dims[all_dims.iter().position(|x| x == v).unwrap()].label, l)).collect();
-            out.push(String::new());
-            out.push(parts.join(", "));
-        }
-        let row_keys = if nr == 0 { vec![(Vec::new(), Vec::new(), 0)] } else { nested(0, nr, &base) };
-        let col_keys = if nc == 0 { vec![(Vec::new(), Vec::new(), 0)] } else { nested(nr, nc, &base) };
-        // columns: (col key, stat index or None, heading parts)
-        let multi_var = {
-            let mut vs: Vec<&Option<String>> = stats.iter().map(|s| &s.var).filter(|v| v.is_some()).collect();
-            vs.dedup();
-            vs.len() > 1
-        };
-        let mut columns: Vec<(Vec<Option<usize>>, Option<usize>, Vec<String>)> = Vec::new();
-        for (ck, cl, _) in &col_keys {
-            if results_in_cols {
-                for (si, s) in stats.iter().enumerate() {
-                    let mut h = Vec::new();
-                    if multi_var {
-                        h.push(s.var.as_ref().map(|v| ds.get_var(v).map_or(v.clone(), |x| if x.label.is_empty() { v.clone() } else { x.label.clone() })).unwrap_or_default());
-                    }
-                    h.push(stat_title(&s.name));
-                    columns.push((ck.clone(), Some(si), h));
-                }
-            } else {
-                let mut h = vec![dims[nr].label.clone()];
-                h.extend(cl.iter().cloned());
-                while h.len() < nc + 1 {
-                    h.push(String::new());
-                }
-                columns.push((ck.clone(), if stats.len() == 1 { Some(0) } else { None }, h));
-            }
-        }
-        // rows
-        let mut grid = Grid { stub_head: Vec::new(), col_heads: columns.iter().map(|c| c.2.clone()).collect(), rows: Vec::new(), min_width: 0, sep: 2, stub_min: 0 };
-        let emit = |stub: String, key: &[Option<usize>], stat: Option<usize>, grid: &mut Grid| {
-            let mut cells = Vec::new();
-            for (ck, cs, _) in &columns {
-                let si = stat.or(*cs).unwrap_or(0);
-                let mut k = base.clone();
-                k[..nr].clone_from_slice(key);
-                k[nr..nr + nc].clone_from_slice(ck);
-                let rows = select(&mask, &dref, &k);
-                if rows.is_empty() {
-                    cells.push(String::new());
-                    continue;
-                }
-                let s = &stats[si];
-                let v = eval_stat(ds, s, &rows, w.as_ref(), grand);
-                let mut t = cell_text(v, s.is_count(), nformat_for(&s.name).as_deref());
-                if let Some(f) = sformat_for(&s.name) {
-                    t = f.replacen("%s", &t, 1).replace("%%", "%");
-                }
-                cells.push(t);
-            }
-            grid.rows.push((stub, cells, false));
-        };
-        if nr > 0 {
-            grid.rows.push((dims[0].label.clone(), Vec::new(), false));
-        }
-        let mut last_path: Vec<String> = Vec::new();
-        for (rk, rl, _) in &row_keys {
-            // header lines for outer levels that changed
-            for d in 0..rl.len().saturating_sub(1) {
-                if last_path.len() <= d || last_path[..=d] != rl[..=d] {
-                    grid.rows.push((format!("{}{}", "  ".repeat(d + 1), rl[d]), Vec::new(), false));
-                }
-            }
-            last_path = rl.clone();
-            let indent = "  ".repeat(rl.len());
-            let label = rl.last().cloned().unwrap_or_default();
-            if results_in_cols || stats.len() == 1 {
-                emit(format!("{indent}{label}"), rk, None, &mut grid);
-            } else {
-                if nr > 0 {
-                    grid.rows.push((format!("{indent}{label}"), Vec::new(), false));
-                }
-                for si in 0..stats.len() {
-                    let t = stat_title(&stats[si].name);
-                    let t = if multi_var { format!("{t} {}", stats[si].var.clone().unwrap_or_default()) } else { t };
-                    emit(format!("{indent}  {t}"), rk, Some(si), &mut grid);
-                }
-            }
-        }
-        out.push(grid.render());
-    }
-    let mut text = out.join("\n");
-    if text.starts_with('\n') {
-        text.remove(0);
-    }
-    Ok(text)
+    crate::coltable::run(ds, st, cmd)
 }
 
 // ---- legacy syntax --------------------------------------------------------------

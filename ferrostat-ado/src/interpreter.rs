@@ -602,6 +602,18 @@ impl AdoInterpreter {
             crate::mata::run_block(self, &h, raw)?;
             return Ok(Flow::Next);
         }
+        if ferrostat_cmd::infile::is_dictionary_header(&h) {
+            if self.echo && self.depth == 0 {
+                self.out.push(format!(". {header} {{"));
+                self.out.extend(raw.iter().cloned());
+                self.out.push("}".into());
+            }
+            let cmd: Command = parse_line(&h).map_err(|e| rc_err(198, e.message))?;
+            let eng = &mut self.engine;
+            let out = ferrostat_cmd::infile::inline_dictionary(&mut eng.dataset, &mut eng.store, &cmd, raw)?;
+            self.emit(&out);
+            return Ok(Flow::Next);
+        }
         Err(rc_err(3000, format!("{first} blocks are not supported")))
     }
 

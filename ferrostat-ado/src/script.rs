@@ -256,6 +256,21 @@ fn parse_until(lines: &[String], i: &mut usize, inside: bool) -> Result<Vec<Stmt
             out.push(Stmt { text: line, body: None, raw: Some(raw) });
             continue;
         }
+        if opens_block(t) && ferrostat_cmd::infile::is_dictionary_header(t) {
+            // inline `infix dictionary using file { ... }`: body kept verbatim
+            let header = t[..t.len() - 1].trim_end().to_string();
+            let mut raw = Vec::new();
+            while *i < lines.len() && lines[*i].trim() != "}" {
+                raw.push(lines[*i].clone());
+                *i += 1;
+            }
+            if *i >= lines.len() {
+                return Err("unexpected end of file (missing })\nr(198);".into());
+            }
+            *i += 1;
+            out.push(Stmt { text: header, body: None, raw: Some(raw) });
+            continue;
+        }
         if opens_block(t) {
             let header = t[..t.len() - 1].trim_end().to_string();
             let body = parse_until(lines, i, true)?;

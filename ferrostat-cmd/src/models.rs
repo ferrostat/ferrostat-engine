@@ -408,10 +408,18 @@ impl CommandHandler for BinaryModel {
         let act = d.active();
         let model = IndexModel { d: &d, act: act.clone(), link: self.link, offset: offset.clone() };
         let mut b0 = vec![0.0; act.len()];
-        if is_count && d.has_cons {
+        if d.has_cons {
+            // iteration 0 is the constant-only model
             let my = d.y.iter().zip(&d.w).map(|(y, w)| y * w).sum::<f64>() / d.w.iter().sum::<f64>();
+            let all_zero = offset.iter().all(|&o| o == 0.0);
             if let Some(pos) = act.iter().position(|&j| d.names[j] == "_cons") {
-                b0[pos] = my.max(1e-8).ln();
+                b0[pos] = match self.link {
+                    Link::Poisson => my.max(1e-8).ln(),
+                    _ if !all_zero => 0.0,
+                    Link::Logit => dist::logit(my),
+                    Link::Probit => dist::invnormal(my),
+                    Link::Cloglog => (-(1.0 - my).ln()).ln(),
+                };
             }
         }
         let res = est::maximize(&model, b0, 300)?;
@@ -964,7 +972,19 @@ impl CommandHandler for Mlogit {
         };
         let act = d.active();
         let model = MlogitModel { d: &d, act: act.clone(), yidx: yidx.clone(), ncat, base };
-        let res = est::maximize(&model, vec![0.0; model.k()], 300)?;
+        // iteration 0 is the constant-only model
+        let mut b0 = vec![0.0; model.k()];
+        if let Some(cpos) = act.iter().position(|&j| d.names[j] == "_cons") {
+            let fq = |c: usize| yidx.iter().zip(&d.w).filter(|(j, _)| **j == c).map(|(_, w)| w).sum::<f64>();
+            let fb = fq(base);
+            for (e, c) in (0..ncat).filter(|&c| c != base).enumerate() {
+                let f = fq(c);
+                if f > 0.0 && fb > 0.0 {
+                    b0[e * act.len() + cpos] = (f / fb).ln();
+                }
+            }
+        }
+        let res = est::maximize(&model, b0, 300)?;
         let neff = d.n_eff();
         let (vfull, _) = ml_vce(&res, &vce, cl.as_deref(), neff);
         // null model: constant only
