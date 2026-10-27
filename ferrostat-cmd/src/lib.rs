@@ -28,6 +28,7 @@ pub mod kdensity;
 pub mod labels;
 pub mod listing;
 pub mod manova;
+pub mod melogit;
 pub mod margins;
 pub mod matcmd;
 pub mod matrix;

@@ -294,6 +294,8 @@ impl Engine {
             ("contrast", Box::new(ferrostat_cmd::contrast::Contrast)),
             ("estat", Box::new(postest::Estat)),
             ("separate", Box::new(ferrostat_cmd::separate::Separate)),
+            ("melogit", Box::new(ferrostat_cmd::melogit::Melogit { verb: "melogit" })),
+            ("meqrlogit", Box::new(ferrostat_cmd::melogit::Melogit { verb: "meqrlogit" })),
             ("manova", Box::new(ferrostat_cmd::manova::Manova)),
             ("manovatest", Box::new(ferrostat_cmd::manova::Manovatest)),
             ("mvreg", Box::new(ferrostat_cmd::manova::Mvreg)),

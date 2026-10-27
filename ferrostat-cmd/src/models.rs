@@ -655,8 +655,18 @@ impl CommandHandler for Nbreg {
         omitted.push(false);
         let mut is_base = d.is_base.clone();
         is_base.push(false);
-        out.extend(est::coef_table(&est::TableSpec { depvar: &dep, names: &names, b: &b, v: &v, omitted: &omitted, is_base: &is_base, df: None, level, eform: if cmd.has_opt("irr", 3) { Some("IRR") } else { None }, coef_title: "Coefficient" }));
-        out.push(format!("{:>12} | {:>10}", "alpha", g10(alpha)));
+        let mut tbl = est::coef_table(&est::TableSpec { depvar: &dep, names: &names, b: &b, v: &v, omitted: &omitted, is_base: &is_base, df: None, level, eform: if cmd.has_opt("irr", 3) { Some("IRR") } else { None }, coef_title: "Coefficient" });
+        {
+            // alpha = exp(/lnalpha), delta-method standard error
+            let bar = tbl.pop().unwrap_or_default();
+            let lw = bar.len().saturating_sub(66);
+            let se = v[(k, k)].max(0.0).sqrt();
+            let crit = dist::invnormal(1.0 - (1.0 - level / 100.0) / 2.0);
+            tbl.push(format!("{}+{}", "-".repeat(lw + 1), "-".repeat(64)));
+            tbl.push(format!("{:>lw$} | {:>10}  {:>9}{:21}{:>9}   {:>9}", "alpha", fmt_g(alpha, 8), fmt_g(alpha * se, 8), "", fmt_g((b[k] - crit * se).exp(), 8), fmt_g((b[k] + crit * se).exp(), 8)));
+            tbl.push(bar);
+        }
+        out.extend(tbl);
         // LR test of alpha = 0 (vs Poisson)
         let chibar = (2.0 * (res.ll - pres.ll)).max(0.0);
         out.push(format!("LR test of alpha=0: chibar2(01) = {:.2}{:>20}Prob >= chibar2 = {:.3}", chibar, "", 0.5 * dist::chi2tail(1.0, chibar)));

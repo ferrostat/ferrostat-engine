@@ -138,6 +138,61 @@ pub fn num_derivs(f: &dyn Fn(&[f64]) -> f64, x: &[f64]) -> (f64, Vec<f64>, Vec<V
     (f0, g, h)
 }
 
+/// Newton-Raphson with step halving, made robust for starting values far
+/// from the optimum: a non-concave Hessian is ridged until positive
+/// definite (moving towards steepest ascent).
+pub fn maximize_robust(model: &dyn Likelihood, b0: Vec<f64>, max_iter: usize) -> Result<est::MlResult, String> {
+    let k = model.k();
+    let mut b = b0;
+    let (mut ll, mut g, mut h, _) = model.eval(&b, false);
+    if !ll.is_finite() {
+        return Err(rc_err(430, "initial values not feasible"));
+    }
+    let mut log = vec![ll];
+    let mut converged = false;
+    for _ in 0..max_iter {
+        let scale: f64 = (0..k).map(|i| h[(i, i)].abs()).fold(0.0, f64::max).max(1e-8);
+        let mut ridge = 0.0;
+        let step = loop {
+            let mut hr = h.clone();
+            for i in 0..k {
+                hr[(i, i)] += ridge;
+            }
+            if hr.cholesky().is_ok() || ridge > 1e12 * scale {
+                let (hinv, _) = hr.sym_inverse(1e-14);
+                break (0..k).map(|i| (0..k).map(|j| hinv[(i, j)] * g[j]).sum::<f64>()).collect::<Vec<f64>>();
+            }
+            ridge = if ridge == 0.0 { 1e-6 * scale } else { ridge * 10.0 };
+        };
+        let mut lambda = 1.0;
+        let mut accepted = None;
+        for _ in 0..50 {
+            let nb: Vec<f64> = b.iter().zip(&step).map(|(x, s)| x + lambda * s).collect();
+            let r = model.eval(&nb, false);
+            if r.0.is_finite() && r.0 >= ll - 1e-12 * ll.abs().max(1.0) {
+                accepted = Some((nb, r));
+                break;
+            }
+            lambda /= 2.0;
+        }
+        let Some((nb, r)) = accepted else { break };
+        let change = (r.0 - ll).abs();
+        let bchange = b.iter().zip(&nb).map(|(a, c)| (a - c).abs() / (a.abs() + 1.0)).fold(0.0, f64::max);
+        b = nb;
+        ll = r.0;
+        g = r.1;
+        h = r.2;
+        log.push(ll);
+        let pd = h.cholesky().is_ok();
+        if pd && change < 1e-10 * ll.abs().max(1.0) && bchange < 1e-7 {
+            converged = true;
+            break;
+        }
+    }
+    let (ll, _, info, scores) = model.eval(&b, true);
+    Ok(est::MlResult { b, ll, info, scores, iterations: log, converged })
+}
+
 /// Variance matrix of an ML fit by VCE type.
 pub fn ml_vce(res: &est::MlResult, vce: &Vce, cluster: Option<&[f64]>, n: f64) -> (Matrix, Option<usize>) {
     let (hinv, _) = res.info.sym_inverse(1e-14);
@@ -310,7 +365,7 @@ impl CommandHandler for Zip {
             let m0 = MultiIndex { x: vec![x0, cols2.clone()], naux, w: &d1.w, fweight: fw, f: &f };
             let mut s0 = vec![0.0; m0.k()];
             s0[0] = ybar.max(1e-8).ln();
-            let r0 = est::maximize(&m0, s0, 300)?;
+            let r0 = maximize_robust(&m0, s0, 300)?;
             out.push(String::new());
             out.push("Fitting constant-only model:".into());
             out.push(String::new());
@@ -341,7 +396,7 @@ impl CommandHandler for Zip {
             Some(bc) => b0.extend_from_slice(&bc[1..]),
             None => b0.extend(vec![0.0; cols2.len() + naux]),
         }
-        let res = est::maximize(&model, b0, 300)?;
+        let res = maximize_robust(&model, b0, 300)?;
         out.push(String::new());
         out.push("Fitting full model:".into());
         out.push(String::new());
@@ -440,7 +495,7 @@ impl CommandHandler for Zip {
                 };
                 let mut s = pois.b.clone();
                 s.push(0.0);
-                est::maximize(&mnb, s, 300)?.b
+                maximize_robust(&mnb, s, 300)?.b
             } else {
                 pois.b.clone()
             };
