@@ -3,8 +3,16 @@
 
 use ferrostat_tests::*;
 
+/// The name of a working Python 3 on PATH (`python3` on Unix, usually
+/// only `python` on Windows).
+fn python_name() -> Option<&'static str> {
+    ["python3", "python"].into_iter().find(|p| {
+        std::process::Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success() && (String::from_utf8_lossy(&o.stdout).contains("Python 3") || String::from_utf8_lossy(&o.stderr).contains("Python 3")))
+    })
+}
+
 fn have_python() -> bool {
-    ["python3", "python"].iter().any(|p| std::process::Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success()))
+    python_name().is_some()
 }
 
 macro_rules! need_python {
@@ -132,7 +140,7 @@ fn chosen_executable_is_used() {
     s.run("set python_exec no_such_python_binary_xyz");
     s.fails("python: print(1)");
     assert!(s.run("python query").contains("initialized          no"));
-    s.run("python set exec python3");
+    s.run(&format!("python set exec {}", python_name().unwrap()));
     assert_eq!(s.run("python: print(7)").trim(), "7");
 }
 
