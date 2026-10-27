@@ -227,12 +227,20 @@ pub fn cell_text(ds: &DataSet, var: &Variable, i: usize, labels: bool) -> String
                     return l.to_string();
                 }
             }
-            // floats hold ~7 significant digits: show the shortest decimal that
-            // is the same float, not the digits its double conversion invents
-            let v = if var.var_type == VarType::Float && !is_missing(v) { (v as f32).to_string().parse().unwrap_or(v) } else { v };
+            // floats hold ~7 significant digits: round to that precision rather
+            // than showing the digits their double conversion invents
+            let v = if var.var_type == VarType::Float && !is_missing(v) { float_precision(v) } else { v };
             fmt_cell(v, &var.format)
         }
     }
+}
+
+/// A float-stored value rounded to the 7 significant digits a float holds.
+pub fn float_precision(v: f64) -> f64 {
+    if v.fract() == 0.0 {
+        return v;
+    }
+    format!("{:.6e}", v).parse().unwrap_or(v)
 }
 
 /// Number formatted with a variable's display format, trimmed.

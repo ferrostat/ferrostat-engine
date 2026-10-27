@@ -221,3 +221,16 @@ fn star_macro_and_old_display_colors() {
     assert_eq!(s.run("p x y").trim(), "[x y] 2");
     assert_eq!(s.run("display in red \"x\" in green \"y\"").trim(), "xy");
 }
+
+#[test]
+fn matrix_literal_names() {
+    let mut s = Session::new();
+    s.run("matrix A = (1,2\\3,4)");
+    s.run("local r : rownames A");
+    s.run("local c : colnames A");
+    assert_eq!(s.run("display \"`r' | `c'\"").trim(), "r1 r2 | c1 c2");
+    // joining named matrices keeps their names
+    s.run("matrix B = A \\ A");
+    s.run("local r : rownames B");
+    assert_eq!(s.run("display \"`r'\"").trim(), "r1 r2 r1 r2");
+}

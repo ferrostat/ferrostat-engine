@@ -96,6 +96,31 @@ pub fn expand(text: &str, ds: &DataSet, st: &mut Store) -> Result<String, String
 }
 
 /// Is the `'` at position i the end of a compound quote `"...'?
+/// Byte index of the `"'` closing the compound quote that opens `s`,
+/// honouring nested compound quotes.
+pub fn compound_end(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i + 1 < b.len() {
+        if b[i] == b'`' && b[i + 1] == b'"' {
+            depth += 1;
+            i += 2;
+            continue;
+        }
+        if b[i] == b'"' && b[i + 1] == b'\'' {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(i);
+            }
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    None
+}
+
 fn is_compound_close(chars: &[char], i: usize) -> bool {
     // count compound opens before i
     let mut depth = 0;
@@ -290,7 +315,22 @@ fn list_fn(spec: &str, st: &Store) -> Result<String, String> {
 /// Extended macro functions: `local x : word count ...`.
 pub fn macro_function(spec: &str, ds: &DataSet, st: &mut Store) -> Result<String, String> {
     let w: Vec<String> = spec.split_whitespace().map(String::from).collect();
-    let lw: Vec<String> = w.iter().map(|x| x.to_lowercase()).collect();
+    let mut lw: Vec<String> = w.iter().map(|x| x.to_lowercase()).collect();
+    // expand the documented abbreviations of the function names
+    // (`var l`, `val la`, `ty`, `f`, `lab`, `char`...)
+    let expand = |word: &str, table: &[(&str, usize)]| -> Option<String> {
+        table.iter().find(|(full, min)| word.len() >= *min && full.starts_with(word)).map(|(f, _)| f.to_string())
+    };
+    if let Some(first) = lw.first().cloned() {
+        if let Some(full) = expand(&first, &[("type", 2), ("format", 1), ("value", 3), ("variable", 3), ("label", 2), ("characteristic", 4)]) {
+            lw[0] = if full == "characteristic" { "char".into() } else { full };
+        }
+        if matches!(lw[0].as_str(), "value" | "variable" | "data") && lw.len() > 1 {
+            if let Some(full) = expand(&lw[1], &[("label", 1)]) {
+                lw[1] = full;
+            }
+        }
+    }
     let rest_after = |n: usize| -> String {
         let mut s = spec.trim();
         for _ in 0..n {

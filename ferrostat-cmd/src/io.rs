@@ -324,6 +324,14 @@ fn describe_excel(path: &str) -> Result<String, String> {
 /// `import excel`: read one worksheet into a dataset.
 pub fn import_excel(path: &str, cmd: &Command) -> Result<DataSet, String> {
     use crate::xlsx::Cell;
+    // a name without extension means .xls, then .xlsx
+    let has_ext = std::path::Path::new(path).extension().is_some();
+    let path = if has_ext || ferrostat_core::vfs::exists(path) {
+        path.to_string()
+    } else {
+        [".xls", ".xlsx"].iter().map(|e| format!("{path}{e}")).find(|p| ferrostat_core::vfs::exists(p)).unwrap_or_else(|| path.to_string())
+    };
+    let path = path.as_str();
     let book = read_workbook(path)?;
     let sheet_name = cmd.opt("sheet", 2).map(|s| util::unquote(s));
     let (_, cells) = match &sheet_name {

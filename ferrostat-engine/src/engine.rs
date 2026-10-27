@@ -56,6 +56,8 @@ const ALIASES: &[(&str, &str)] = &[
     ("forv", "forvalues"),
     ("ren", "rename"),
     ("lab", "label"),
+    ("br", "browse"),
+    ("ed", "edit"),
     ("u", "use"),
     ("cou", "count"),
     ("xi", "xi"),
@@ -84,7 +86,7 @@ const ABBREV: &[(&str, usize)] = &[
     ("correlate", 3),
     ("count", 3),
     ("rename", 3),
-    ("label", 3),
+    ("label", 2),
     ("use", 1),
     ("save", 4),
     ("sort", 2),
@@ -153,6 +155,9 @@ const ABBREV: &[(&str, usize)] = &[
     ("confirm", 4),
     ("codebook", 8),
     ("inspect", 4),
+    ("browse", 2),
+    ("edit", 2),
+    ("clonevar", 8),
 ];
 
 /// Commands that run once with group-aware evaluation under `by`.
@@ -191,6 +196,9 @@ impl Engine {
             ("tsset", Box::new(data::Tsset)),
             ("xtset", Box::new(data::Tsset)),
             ("label", Box::new(labels::Label)),
+            ("clonevar", Box::new(ferrostat_cmd::clonevar::Clonevar)),
+            ("browse", Box::new(ferrostat_cmd::clonevar::Browse)),
+            ("edit", Box::new(ferrostat_cmd::clonevar::Browse)),
             ("encode", Box::new(labels::Encode)),
             ("decode", Box::new(labels::Decode)),
             ("destring", Box::new(labels::Destring)),
@@ -205,6 +213,13 @@ impl Engine {
             ("duplicates", Box::new(listing::Duplicates)),
             ("isid", Box::new(listing::Isid)),
             ("levelsof", Box::new(listing::Levelsof)),
+            ("frame", Box::new(ferrostat_cmd::frames::FrameCmd)),
+            ("frames", Box::new(ferrostat_cmd::frames::FrameCmd)),
+            ("cwf", Box::new(ferrostat_cmd::frames::Cwf)),
+            ("pwf", Box::new(ferrostat_cmd::frames::Pwf)),
+            ("frlink", Box::new(ferrostat_cmd::frames::Frlink)),
+            ("frget", Box::new(ferrostat_cmd::frames::Frget)),
+            ("unique", Box::new(ferrostat_cmd::unique::Unique)),
             ("codebook", Box::new(listing::Codebook)),
             ("misstable", Box::new(listing::Misstable)),
             ("expand", Box::new(restructure::Expand)),
@@ -224,6 +239,8 @@ impl Engine {
             ("centile", Box::new(summarize::Centile)),
             ("mean", Box::new(summarize::MeanCmd)),
             ("ci", Box::new(summarize::Ci)),
+            ("table", Box::new(ferrostat_cmd::table::Table)),
+            ("total", Box::new(ferrostat_cmd::table::Total)),
             ("tabulate", Box::new(tabulate::Tabulate)),
             ("tab1", Box::new(tabulate::Tab1)),
             ("tab2", Box::new(tabulate::Tab2)),
@@ -271,6 +288,7 @@ impl Engine {
             ("lincom", Box::new(postest::Lincom)),
             ("estimates", Box::new(postest::Estimates)),
             ("margins", Box::new(postest::Margins)),
+            ("contrast", Box::new(ferrostat_cmd::contrast::Contrast)),
             ("estat", Box::new(postest::Estat)),
             ("matrix", Box::new(matcmd::MatrixCmd)),
             ("mkmat", Box::new(matcmd::Mkmat)),
@@ -316,7 +334,13 @@ impl Engine {
             ("wntestb", Box::new(tsplot::TsPlot)),
             ("tsrline", Box::new(graph::TsLine)),
             ("histogram", Box::new(graph::Histogram)),
+            ("rvfplot", Box::new(ferrostat_cmd::regplot::RegPlot)),
+            ("rvpplot", Box::new(ferrostat_cmd::regplot::RegPlot)),
+            ("avplot", Box::new(ferrostat_cmd::regplot::RegPlot)),
+            ("avplots", Box::new(ferrostat_cmd::regplot::RegPlot)),
+            ("lvr2plot", Box::new(ferrostat_cmd::regplot::RegPlot)),
             ("graph", Box::new(graph::GraphCmd)),
+            ("coefplot", Box::new(ferrostat_cmd::coefplot::Coefplot)),
         ];
         let mut handlers = HashMap::new();
         for (n, h) in list {
@@ -376,6 +400,7 @@ impl Engine {
                         self.store.data_changed = false;
                         self.store.tsset = None;
                         if what == "all" || what == "*" {
+                            ferrostat_cmd::frames::reset(&mut self.store);
                             self.store.matrices.clear();
                             self.store.scalars.clear();
                             self.store.e = Default::default();
@@ -425,6 +450,7 @@ impl Engine {
                     if let Ok(ds) = ferrostat_core::dta::DtaReader::open(&p) {
                         self.dataset = ds;
                         self.store.data_changed = false;
+                        self.store.filename = p;
                         return Ok(String::new());
                     }
                 }
@@ -435,7 +461,16 @@ impl Engine {
             }
             _ => {
                 let h = self.handlers.get(verb.as_str()).ok_or_else(|| rc_err(199, format!("command {} is unrecognized", cmd.verb)))?;
-                h.execute(&mut self.dataset, &mut self.store, &cmd)
+                ferrostat_cmd::est::take_table();
+                let res = h.execute(&mut self.dataset, &mut self.store, &cmd);
+                // commands that display a coefficient table return it in r(table)
+                if let (Ok(_), Some((m, level))) = (&res, ferrostat_cmd::est::take_table()) {
+                    let mut r = ferrostat_cmd::store::Results::new();
+                    r.set_mat("table", m);
+                    r.set("level", level);
+                    self.store.r = r;
+                }
+                res
             }
         }
     }
@@ -501,7 +536,13 @@ impl Engine {
             | "locale_ui" | "charset" | "httpproxy" | "update_query" | "timeout1" | "timeout2" | "haverdir" | "odbcmgr" | "notifyuser"
             | "include_bitmap" | "doublebuffer" | "reventries" | "varkeyboard" | "showomitted" | "showemptycells" | "lstretch" | "coeftabresults"
             | "fvwrap" | "fvwrapon" | "collect_label" | "collect_style" | "table_style" | "dots" | "iterlog" | "python_exec" | "rng" | "rngstream"
-            | "sortseed" | "sortmethod" | "matacache" | "matafavor" | "matastrict" | "matalnum" | "mataoptimize" | "matalibs" | "matamofirst" => Ok(String::new()),
+            | "sortseed" | "sortmethod" | "matacache" | "matafavor" | "matastrict" | "matalnum" | "mataoptimize" | "matalibs" | "matamofirst" => {
+                let v = v.split(',').next().unwrap_or("").trim();
+                if !v.is_empty() {
+                    self.store.settings.insert(what.clone(), v.to_string());
+                }
+                Ok(String::new())
+            }
             "" => Ok(String::new()),
             other => Err(rc_err(198, format!("set {other} not allowed"))),
         }

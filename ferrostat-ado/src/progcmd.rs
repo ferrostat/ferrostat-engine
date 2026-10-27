@@ -14,7 +14,59 @@ use crate::interpreter::{err_message, AdoInterpreter};
 use crate::macros::{self, macro_number, unquote};
 
 /// SSC packages whose functionality Ferrostat provides natively.
-pub const NATIVE_PACKAGES: &[&str] = &["outreg2", "xtpmg", "spmap", "shp2dta", "sppack", "spmat", "xtivreg2", "ivreg2", "ranktest"];
+pub const NATIVE_PACKAGES: &[&str] = &["outreg2", "xtpmg", "spmap", "shp2dta", "sppack", "spmat", "xtivreg2", "ivreg2", "ranktest", "unique", "frmttable", "outreg"];
+
+/// Community packages whose commands have a different name from the package,
+/// as (package, commands it provides).
+const PACKAGE_COMMANDS: &[(&str, &[&str])] = &[
+    ("estout", &["esttab", "eststo", "estout", "estadd", "estpost"]),
+    ("outreg", &["frmttable", "outreg"]),
+    ("tabout", &["tabout"]),
+    ("st0085_2", &["esttab", "eststo"]),
+];
+
+/// Packages accepted without providing commands (helpers whose features are
+/// built in, or toolkits whose commands are not needed natively).
+const NOOP_PACKAGES: &[&str] = &["ietoolkit", "iefieldkit", "ftools", "moremata"];
+
+/// Native commands providing `pkg`, or None when the package is unknown.
+fn package_commands(me: &AdoInterpreter, pkg: &str) -> Option<Vec<String>> {
+    if NOOP_PACKAGES.contains(&pkg) {
+        return Some(Vec::new());
+    }
+    if let Some((_, cmds)) = PACKAGE_COMMANDS.iter().find(|(p, _)| *p == pkg) {
+        let have: Vec<String> = cmds.iter().filter(|c| me.engine.is_command(c) || is_interp_command(c)).map(|c| c.to_string()).collect();
+        return (!have.is_empty()).then_some(have);
+    }
+    (NATIVE_PACKAGES.contains(&pkg) || me.engine.is_command(pkg)).then(|| vec![pkg.to_string()])
+}
+
+/// `ssc`, `net` and `ado`: packages are never downloaded; packages whose
+/// commands are built in are accepted.
+fn packages(me: &AdoInterpreter, verb: &str, r: &str) -> Result<String, String> {
+    let (body, _opts) = split_opts(r);
+    let w: Vec<String> = body.split_whitespace().map(|x| unquote(x).to_lowercase()).collect();
+    let sub = w.first().map(String::as_str).unwrap_or("");
+    let pkg = w.get(1).map(String::as_str).unwrap_or("");
+    let installing = matches!((verb, sub), ("ssc", "install") | ("ssc", "inst") | ("net", "install") | ("net", "get") | ("ssc", "describe") | ("ssc", "d") | ("ssc", "des") | ("net", "describe"));
+    if installing {
+        if pkg.is_empty() {
+            return Err(rc_err(198, "package name required"));
+        }
+        // net install takes a path or URL; the package is its last component
+        let pkg = pkg.rsplit(['/', '\\']).next().unwrap_or(pkg).trim_end_matches(".pkg");
+        return match package_commands(me, pkg) {
+            Some(cmds) if cmds.is_empty() => Ok(format!("package {pkg}: built-in features cover it; nothing to install")),
+            Some(cmds) => Ok(format!("package {pkg}: provided natively ({}); nothing to install", cmds.join(", "))),
+            None => Err(rc_err(601, format!("package {pkg} is not available; community packages are not downloaded"))),
+        };
+    }
+    Ok(match (verb, sub) {
+        ("ado", "dir") | ("ado", "") | ("ado", "describe") => "(no user-installed packages)".into(),
+        ("ssc", "update") | ("ado", "update") => "(all packages up to date)".into(),
+        _ => String::new(),
+    })
+}
 
 pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &str) -> Result<Option<String>, String> {
     let r = rest.trim();
@@ -62,7 +114,7 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             String::new()
         }
         "return" | "ereturn" | "sreturn" => returns(me, verb, r)?,
-        "creturn" => "c(current_date), c(current_time), c(N), c(k), c(pi), c(level) ...".into(),
+        "creturn" => creturn_list(me),
         "marksample" => {
             marksample(me, r)?;
             String::new()
@@ -133,12 +185,7 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             }
         }
         "pwd" => vfs::current_dir(),
-        "dir" => {
-            let pat = if r.is_empty() { "*".to_string() } else { unquote(r) };
-            let mut names: Vec<String> = vfs::list(".").map_err(|e| rc_err(601, e))?.into_iter().map(|e| e.0).filter(|n| macros::glob_match(&pat, n)).collect();
-            names.sort();
-            names.join("\n")
-        }
+        "dir" => dir_listing(r)?,
         "erase" => {
             let p = unquote(r);
             vfs::remove(&p).map_err(|_| rc_err(601, format!("file {p} not found")))?;
@@ -185,20 +232,8 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
                 return Err(rc_err(111, format!("command {name} not found as either built-in or ado-file")));
             }
         }
-        "ssc" | "net" | "ado" => {
-            let w: Vec<&str> = r.split_whitespace().collect();
-            match w.first().copied() {
-                Some("install") => {
-                    let pkg = w.get(1).copied().unwrap_or("");
-                    if NATIVE_PACKAGES.contains(&pkg) || me.engine.is_command(pkg) {
-                        format!("{pkg} is provided natively by Ferrostat; nothing to install")
-                    } else {
-                        return Err(rc_err(631, format!("package {pkg} is not available; Ferrostat does not download community packages")));
-                    }
-                }
-                _ => String::new(),
-            }
-        }
+        "ssc" | "net" | "ado" => packages(me, verb, r)?,
+        "cf" => cf(me, r)?,
         "adopath" | "discard" | "more" | "pause" | "timer" | "set_defaults" | "graph_set" => String::new(),
         "sleep" => {
             let ms: u64 = r.parse().unwrap_or(0);
@@ -217,8 +252,22 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             return Err(rc_err(code, error_text(code)));
         }
         "putexcel" => crate::putexcel::putexcel(me, r)?,
+        "putdocx" => crate::putdocx::putdocx(me, r)?,
+        "putpdf" => crate::putdocx::putpdf(me, r)?,
+        "dyndoc" => crate::dyndoc::dyndoc(me, r)?,
+        "dyntext" => crate::dyndoc::dyntext(me, r)?,
+        "markdown" => crate::dyndoc::markdown(me, r)?,
+        "html2docx" => crate::dyndoc::html2docx(me, r)?,
         "outreg2" | "outreg" => crate::outreg::outreg2(me, r)?,
-        "mata" | "mata:" | "python" | "python:" => return Err(rc_err(3000, "mata/python are not supported by Ferrostat")),
+        "eststo" => crate::estout::eststo(me, r)?,
+        "esttab" => crate::estout::table_cmd(me, r, true)?,
+        "estout" => crate::estout::table_cmd(me, r, false)?,
+        "estpost" => crate::estout::estpost(me, r)?,
+        "estadd" => crate::estout::estadd(me, r)?,
+        "frmttable" => crate::frmttable::frmttable(me, r)?,
+        "mata" | "mata:" => crate::mata::run_line(me, r)?,
+        "python" => crate::python::command(me, r)?,
+        "set" if crate::python::is_set_python(r) => crate::python::set_option(me, r)?,
         _ => {
             let _ = full;
             return Ok(None);
@@ -226,9 +275,136 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
     }))
 }
 
+/// `cf varlist using file [, all verbose]`: compare the data in memory with
+/// a saved dataset; silent when everything matches, error 9 otherwise.
+fn cf(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
+    let (body, opts) = split_opts(r);
+    let has = |n: &str, min: usize| opts.iter().any(|(o, _)| o.len() >= min && n.starts_with(o.as_str()));
+    let (all, verbose) = (has("all", 3), has("verbose", 1));
+    let u = body.find(" using ").map(|i| i + 1).or_else(|| body.starts_with("using ").then_some(0)).ok_or_else(|| rc_err(100, "using required"))?;
+    let list = body[..u].trim();
+    let path = unquote(body[u + 5..].trim());
+    let path = if std::path::Path::new(&path).extension().is_some() { path } else { format!("{path}.dta") };
+    let other = ferrostat_core::dta::DtaReader::open(&path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
+    let ds = &me.engine.dataset;
+    let vars = varlist::expand(ds, if list.is_empty() { "*" } else { list })?;
+    if ds.n_obs != other.n_obs {
+        return Err(rc_err(9, format!("master has {} obs., using {}", ds.n_obs, other.n_obs)));
+    }
+    let mut lines = Vec::new();
+    let mut bad = false;
+    for v in &vars {
+        let a = ds.get_var(v).unwrap();
+        let msg = match other.get_var(v) {
+            None => Some("does not exist in using".to_string()),
+            Some(b) if a.var_type.is_string() != b.var_type.is_string() => Some(format!("{} in master but {} in using", a.var_type.type_str(), b.var_type.type_str())),
+            Some(b) => {
+                let differs: Vec<usize> = (0..ds.n_obs)
+                    .filter(|&i| {
+                        if a.var_type.is_string() {
+                            util::cell_text(ds, a, i, false) != util::cell_text(&other, b, i, false)
+                        } else {
+                            let (x, y) = (a.num(i), b.num(i));
+                            x != y && !(x.is_nan() && y.is_nan())
+                        }
+                    })
+                    .collect();
+                if differs.is_empty() {
+                    None
+                } else {
+                    let mut m = format!("{} mismatch{}", differs.len(), if differs.len() == 1 { "" } else { "es" });
+                    if verbose {
+                        for &i in &differs {
+                            m.push_str(&format!("\n{:>18}obs {:>6}. {} in master; {} in using", "", i + 1, util::cell_text(ds, a, i, false), util::cell_text(&other, b, i, false)));
+                        }
+                    }
+                    Some(m)
+                }
+            }
+        };
+        match msg {
+            Some(m) => {
+                bad = true;
+                lines.push(format!("{v:>16}:  {m}"));
+            }
+            None if all => lines.push(format!("{v:>16}:  match")),
+            None => {}
+        }
+    }
+    if bad {
+        Err(rc_err(9, lines.join("\n")))
+    } else {
+        Ok(lines.join("\n"))
+    }
+}
+
+/// `creturn list`: the `c()` values, grouped.
+fn creturn_list(me: &AdoInterpreter) -> String {
+    use ferrostat_cmd::eval::{c_value, C_GROUPS};
+    let env = ferrostat_cmd::eval::Env::with_store(&me.engine.dataset, &me.engine.store);
+    let bar = "-".repeat(78);
+    let mut out = Vec::new();
+    for (title, keys) in C_GROUPS {
+        out.push(bar.clone());
+        out.push(format!("    {title}"));
+        out.push(bar.clone());
+        let w = keys.iter().map(|k| k.len()).max().unwrap_or(0) + 3;
+        for k in keys.iter() {
+            let v = match c_value(&env, k) {
+                Val::Num(x) => macro_number(x),
+                Val::Str(t) => format!("\"{t}\""),
+            };
+            out.push(format!("    {:>w$} = {v}", format!("c({k})")));
+        }
+    }
+    out.join("\n")
+}
+
+/// `dir [path][pattern] [, wide]`: list files with size and modification time.
+fn dir_listing(r: &str) -> Result<String, String> {
+    let (spec, opts) = split_opts(r);
+    let spec = unquote(&spec);
+    let spec = if spec.is_empty() { "*".to_string() } else { spec.replace('\\', "/") };
+    let (dir, pat) = if vfs::meta(&spec).map_or(false, |m| m.0) {
+        (spec.trim_end_matches('/').to_string(), "*".to_string())
+    } else {
+        match spec.rfind('/') {
+            Some(i) => (spec[..i.max(1)].to_string(), spec[i + 1..].to_string()),
+            None => (".".to_string(), spec.clone()),
+        }
+    };
+    let mut entries: Vec<(String, bool)> = vfs::list(&dir).map_err(|_| rc_err(601, format!("directory {dir} not found")))?.into_iter().filter(|e| macros::glob_match(&pat, &e.0)).collect();
+    entries.sort();
+    if opts.iter().any(|(n, _)| n.starts_with('w')) {
+        return Ok(entries.iter().map(|(n, d)| if *d { format!("{n}/") } else { n.clone() }).collect::<Vec<_>>().join("  "));
+    }
+    let mut out = Vec::new();
+    for (name, is_dir) in entries {
+        let path = if dir == "." { name.clone() } else { format!("{dir}/{name}") };
+        let (_, size, mtime) = vfs::meta(&path).unwrap_or((is_dir, 0, None));
+        let size = if is_dir {
+            "<dir>".to_string()
+        } else if size >= 1 << 20 {
+            format!("{:.1}M", size as f64 / 1048576.0)
+        } else {
+            format!("{:.1}k", size as f64 / 1024.0)
+        };
+        let when = mtime
+            .and_then(|t| chrono::DateTime::from_timestamp(t as i64, 0))
+            .map(|t| {
+                use chrono::{Datelike, Timelike};
+                let t = t.with_timezone(&chrono::Local);
+                format!("{:>8} {:02}:{:02}", format!("{}/{}/{:02}", t.month(), t.day(), t.year() % 100), t.hour(), t.minute())
+            })
+            .unwrap_or_else(|| " ".repeat(14));
+        out.push(format!("{size:>8}  {when}  {name}{}", if is_dir { "/" } else { "" }));
+    }
+    Ok(out.join("\n"))
+}
+
 /// Commands handled by the interpreter itself rather than the engine.
 pub const INTERP_COMMANDS: &[&str] = &[
-    "local", "global", "macro", "display", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "error", "exit",
+    "local", "global", "macro", "display", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit",
 ];
 
 fn is_interp_command(n: &str) -> bool {
@@ -413,7 +589,7 @@ pub fn display(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
         let lower = s.to_lowercase();
         // compound or simple string
         if s.starts_with("`\"") {
-            let end = s.find("\"'").ok_or_else(|| rc_err(198, "unmatched quote"))?;
+            let end = macros::compound_end(&s).ok_or_else(|| rc_err(198, "unmatched quote"))?;
             out.push_str(&smcl_text(&s[2..end]).repeat(dup));
             dup = 1;
             s = s[end + 2..].to_string();

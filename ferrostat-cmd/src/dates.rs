@@ -366,7 +366,9 @@ fn custom_date(td: f64, tc: f64, spec: &str) -> String {
     let mut i = 0;
     while i < c.len() {
         let two = if i + 1 < c.len() { format!("{}{}", c[i], c[i + 1]) } else { String::new() };
+        let four: String = c[i..(i + 4).min(c.len())].iter().collect();
         let (txt, adv) = match two.as_str() {
+            "YY" if four == "YYYY" => (format!("{:04}", y), 4),
             "CC" => (format!("{:02}", y / 100), 2),
             "cc" => (format!("{}", y / 100), 2),
             "YY" => (format!("{:02}", y % 100), 2),
@@ -395,6 +397,181 @@ fn custom_date(td: f64, tc: f64, spec: &str) -> String {
         i += adv;
     }
     out
+}
+
+// ---- durations, birthdays and calendar helpers --------------------------------
+//
+// A person born on 29feb has their birthday on 01mar in nonleap years by
+// default; `feb28 = true` moves it to 28feb instead.
+
+pub fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+fn days_in(y: i64, m: i64) -> i64 {
+    match m {
+        2 => 28 + is_leap(y) as i64,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn td_of(y: i64, m: i64, d: i64) -> f64 {
+    (days_from_civil(y, m, d) - EPOCH_1960) as f64
+}
+
+/// Day `d` of month `m` in year `y`; days past the end of the month roll to
+/// the first of the next month (or stay on the last day with `feb28`).
+fn anniv(y: i64, m: i64, d: i64, feb28: bool) -> f64 {
+    let dim = days_in(y, m);
+    if d <= dim {
+        td_of(y, m, d)
+    } else if feb28 {
+        td_of(y, m, dim)
+    } else {
+        td_of(y, m, dim) + 1.0
+    }
+}
+
+/// `k`-th month anniversary of date `b`.
+fn month_anniv(b: (i64, i64, i64), k: i64, feb28: bool) -> f64 {
+    let t = b.0 * 12 + (b.1 - 1) + k;
+    anniv(t.div_euclid(12), t.rem_euclid(12) + 1, b.2, feb28)
+}
+
+pub fn birthday(b: f64, y: f64, feb28: bool) -> f64 {
+    match ymd(b) {
+        Some((by, bm, bd)) if y.fract() == 0.0 && y as i64 >= by => anniv(y as i64, bm, bd, feb28),
+        _ => SYSMISS,
+    }
+}
+
+/// Whole years completed between birth date `b` and date `s`.
+pub fn age(b: f64, s: f64, feb28: bool) -> f64 {
+    match (ymd(b), ymd(s)) {
+        (Some((by, bm, bd)), Some((sy, _, _))) if s.floor() >= b.floor() => {
+            let a = sy - by;
+            (if anniv(sy, bm, bd, feb28) > s.floor() { a - 1 } else { a }) as f64
+        }
+        _ => SYSMISS,
+    }
+}
+
+/// Age including the elapsed fraction of the current year of life.
+pub fn age_frac(b: f64, s: f64, feb28: bool) -> f64 {
+    let a = age(b, s, feb28);
+    match ymd(b) {
+        Some((by, bm, bd)) if a < SYSMISS => {
+            let p = anniv(by + a as i64, bm, bd, feb28);
+            let n = anniv(by + a as i64 + 1, bm, bd, feb28);
+            a + (s.floor() - p) / (n - p)
+        }
+        _ => SYSMISS,
+    }
+}
+
+/// Last birthday strictly before `s`.
+pub fn previous_birthday(b: f64, s: f64, feb28: bool) -> f64 {
+    match (ymd(b), ymd(s)) {
+        (Some((_, bm, bd)), Some((sy, _, _))) if s.floor() > b.floor() => {
+            let t = anniv(sy, bm, bd, feb28);
+            if t < s.floor() { t } else { anniv(sy - 1, bm, bd, feb28) }
+        }
+        _ => SYSMISS,
+    }
+}
+
+/// First birthday strictly after `s`.
+pub fn next_birthday(b: f64, s: f64, feb28: bool) -> f64 {
+    match (ymd(b), ymd(s)) {
+        (Some((_, bm, bd)), Some((sy, _, _))) if s.floor() >= b.floor() => {
+            let t = anniv(sy, bm, bd, feb28);
+            if t > s.floor() { t } else { anniv(sy + 1, bm, bd, feb28) }
+        }
+        _ => SYSMISS,
+    }
+}
+
+/// Difference `d2 - d1` in whole (`frac = false`) or fractional units of
+/// years (`'y'`), months (`'m'`) or days (`'d'`).
+pub fn datediff(d1: f64, d2: f64, unit: char, feb28: bool, frac: bool) -> f64 {
+    if ymd(d1).is_none() || ymd(d2).is_none() {
+        return SYSMISS;
+    }
+    let (a, b) = (d1.floor(), d2.floor());
+    if b < a {
+        let r = datediff(d2, d1, unit, feb28, frac);
+        return if r < SYSMISS { -r } else { r };
+    }
+    match unit {
+        'd' => b - a,
+        'y' => {
+            if frac { age_frac(a, b, feb28) } else { age(a, b, feb28) }
+        }
+        'm' => {
+            let (p, q) = (ymd(a).unwrap(), ymd(b).unwrap());
+            let mut k = (q.0 - p.0) * 12 + (q.1 - p.1);
+            while k > 0 && month_anniv(p, k, feb28) > b {
+                k -= 1;
+            }
+            while month_anniv(p, k + 1, feb28) <= b {
+                k += 1;
+            }
+            if !frac {
+                return k as f64;
+            }
+            let (lo, hi) = (month_anniv(p, k, feb28), month_anniv(p, k + 1, feb28));
+            k as f64 + (b - lo) / (hi - lo)
+        }
+        _ => SYSMISS,
+    }
+}
+
+pub fn days_in_month(td: f64) -> f64 {
+    ymd(td).map_or(SYSMISS, |(y, m, _)| days_in(y, m) as f64)
+}
+pub fn first_day_of_month(td: f64) -> f64 {
+    ymd(td).map_or(SYSMISS, |(y, m, _)| td_of(y, m, 1))
+}
+pub fn last_day_of_month(td: f64) -> f64 {
+    ymd(td).map_or(SYSMISS, |(y, m, _)| td_of(y, m, days_in(y, m)))
+}
+
+/// Nearest date strictly after (`step = 1`) or before (`step = -1`) `td`
+/// falling on day of week `w` (0 = Sunday).
+pub fn adjacent_dow(td: f64, w: f64, step: i64) -> f64 {
+    if ymd(td).is_none() || !(0.0..=6.0).contains(&w) || w.fract() != 0.0 {
+        return SYSMISS;
+    }
+    let mut t = td.floor() + step as f64;
+    while dow(t) != w {
+        t += step as f64;
+    }
+    t
+}
+
+/// Nearest Monday-Friday date strictly after/before `td`.
+pub fn adjacent_weekday(td: f64, step: i64) -> f64 {
+    if ymd(td).is_none() {
+        return SYSMISS;
+    }
+    let mut t = td.floor() + step as f64;
+    while dow(t) == 0.0 || dow(t) == 6.0 {
+        t += step as f64;
+    }
+    t
+}
+
+/// Nearest leap year strictly after/before year `y`.
+pub fn adjacent_leap_year(y: f64, step: i64) -> f64 {
+    if y >= SYSMISS || y.fract() != 0.0 {
+        return SYSMISS;
+    }
+    let mut k = y as i64 + step;
+    while !is_leap(k) {
+        k += step;
+    }
+    k as f64
 }
 
 #[cfg(test)]

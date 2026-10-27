@@ -418,56 +418,160 @@ impl CommandHandler for MeanCmd {
         let mut mask = util::touse(ds, st, cmd)?;
         let w = util::weights(ds, st, cmd, &mut mask, "fap")?;
         util::markout(ds, &mut mask, &vars);
-        let level = util::level(cmd, st)?;
-        let k = vars.len();
-        let mut b = vec![0.0; k];
-        let mut v = Matrix::zeros(k, k);
-        let rows = util::rows(&mask);
-        let ww: Vec<f64> = rows.iter().map(|&i| w.as_ref().map_or(1.0, |w| w.w[i])).collect();
-        let sw: f64 = ww.iter().sum();
-        let n = match w.as_ref().map(|w| w.kind) {
-            Some(WeightKind::F) => sw,
-            _ => rows.len() as f64,
+        // over(varlist [, nolabel]): one mean per variable and group
+        let (over, over_labels) = match cmd.opt("over", 4) {
+            Some(o) => {
+                let (spec, sub) = o.split_once(',').unwrap_or((o, ""));
+                (varlist::expand(ds, spec)?, !sub.trim().starts_with("nol"))
+            }
+            None => (Vec::new(), true),
         };
-        let cols: Vec<Vec<f64>> = vars.iter().map(|v| rows.iter().map(|&i| ds.get_var(v).unwrap().num(i)).collect()).collect();
-        for j in 0..k {
-            b[j] = cols[j].iter().zip(&ww).map(|(x, w)| x * w).sum::<f64>() / sw;
-        }
-        for a in 0..k {
-            for c in 0..k {
-                let s: f64 = (0..rows.len()).map(|t| ww[t] * (cols[a][t] - b[a]) * (cols[c][t] - b[c])).sum();
-                v[(a, c)] = match w.as_ref().map(|w| w.kind) {
-                    Some(WeightKind::P) => {
-                        let s2: f64 = (0..rows.len()).map(|t| ww[t] * ww[t] * (cols[a][t] - b[a]) * (cols[c][t] - b[c])).sum();
-                        s2 / (sw * sw) * rows.len() as f64 / (rows.len() as f64 - 1.0)
-                    }
-                    Some(WeightKind::F) => s / (sw - 1.0) / sw,
-                    _ => s * n / sw / (n - 1.0) / n,
-                };
+        for o in &over {
+            if ds.get_var(o).is_some_and(|v| v.var_type.is_string()) {
+                return Err(rc_err(109, format!("over(): {o} is a string variable")));
             }
         }
+        util::markout(ds, &mut mask, &over);
+        let level = util::level(cmd, st)?;
+        let rows = util::rows(&mask);
+        if rows.is_empty() {
+            return Err(rc_err(2000, "no observations"));
+        }
+        let ww: Vec<f64> = rows.iter().map(|&i| w.as_ref().map_or(1.0, |w| w.w[i])).collect();
+        let wkind = w.as_ref().map(|w| w.kind);
+        let count = |idx: &[usize]| match wkind {
+            Some(WeightKind::F) => idx.iter().map(|&t| ww[t]).sum::<f64>(),
+            _ => idx.len() as f64,
+        };
+        let cols: Vec<Vec<f64>> = vars.iter().map(|v| rows.iter().map(|&i| ds.get_var(v).unwrap().num(i)).collect()).collect();
+        let ovals: Vec<Vec<f64>> = rows.iter().map(|&i| over.iter().map(|v| ds.get_var(v).unwrap().num(i)).collect()).collect();
+        let mut levels = ovals.clone();
+        levels.sort_by(|a, b| a.iter().zip(b).map(|(x, y)| x.total_cmp(y)).find(|o| o.is_ne()).unwrap_or(std::cmp::Ordering::Equal));
+        levels.dedup();
+        let ng = levels.len();
+        let gid: Vec<usize> = ovals.iter().map(|o| levels.iter().position(|l| l == o).unwrap()).collect();
+        let k = vars.len();
+        let kk = k * ng;
+        let mut b = vec![0.0; kk];
+        let mut v = Matrix::zeros(kk, kk);
+        let mut n_g = vec![0.0; ng];
+        for g in 0..ng {
+            let idx: Vec<usize> = (0..rows.len()).filter(|&t| gid[t] == g).collect();
+            let sw: f64 = idx.iter().map(|&t| ww[t]).sum();
+            let n = count(&idx);
+            let nobs = idx.len() as f64;
+            n_g[g] = n;
+            let at = |j: usize| j * ng + g;
+            for j in 0..k {
+                b[at(j)] = idx.iter().map(|&t| cols[j][t] * ww[t]).sum::<f64>() / sw;
+            }
+            for a in 0..k {
+                for c in 0..k {
+                    let (ma, mc) = (b[at(a)], b[at(c)]);
+                    let s: f64 = idx.iter().map(|&t| ww[t] * (cols[a][t] - ma) * (cols[c][t] - mc)).sum();
+                    v[(at(a), at(c))] = match wkind {
+                        Some(WeightKind::P) => {
+                            let s2: f64 = idx.iter().map(|&t| ww[t] * ww[t] * (cols[a][t] - ma) * (cols[c][t] - mc)).sum();
+                            s2 / (sw * sw) * nobs / (nobs - 1.0)
+                        }
+                        Some(WeightKind::F) => s / (sw - 1.0) / sw,
+                        _ => s * n / sw / (n - 1.0) / n,
+                    };
+                }
+            }
+        }
+        let n = count(&(0..rows.len()).collect::<Vec<_>>());
         let df = n - 1.0;
         let tcrit = dist::invttail(df, (1.0 - level / 100.0) / 2.0);
-        let mut out = vec![
-            format!("Mean estimation{:>40}Number of obs = {:>7}", "", fmt_g(n, 9)),
-            String::new(),
-            "--------------------------------------------------------------".to_string(),
-            format!("             |       Mean   Std. err.     [{}% conf. interval]", fmt_g(level, 4)),
-            "-------------+------------------------------------------------".to_string(),
-        ];
-        for j in 0..k {
+        let fmt_level = |l: f64| fmt_g(l, 12);
+        // coefficient names: c.var@lev.over[#lev.over2]
+        let names: Vec<String> = if over.is_empty() {
+            vars.clone()
+        } else {
+            vars.iter()
+                .flat_map(|x| levels.iter().map(move |l| (x, l)))
+                .map(|(x, l)| format!("c.{x}@{}", l.iter().zip(&over).map(|(lv, o)| format!("{}.{o}", fmt_level(*lv))).collect::<Vec<_>>().join("#")))
+                .collect()
+        };
+        let group_label = |l: &[f64]| -> String {
+            l.iter()
+                .zip(&over)
+                .map(|(lv, o)| {
+                    let var = ds.get_var(o).unwrap();
+                    let lab = if over_labels && !var.value_label_name.is_empty() { ds.value_labels.get(&var.value_label_name).and_then(|vl| vl.lookup(*lv)).map(String::from) } else { None };
+                    lab.unwrap_or_else(|| fmt_level(*lv))
+                })
+                .collect::<Vec<_>>()
+                .join("#")
+        };
+        // before version 16, groups are named by their value labels with the
+        // variable as equation name
+        let legacy = !over.is_empty() && st.settings.get("version").and_then(|v| v.parse::<f64>().ok()).is_some_and(|v| v < 16.0);
+        let legacy_name = |g: usize| {
+            let l = group_label(&levels[g]);
+            if l.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && l.chars().all(|c| c.is_alphanumeric() || c == '_') && l.len() <= 32 {
+                l
+            } else {
+                format!("_subpop_{}", g + 1)
+            }
+        };
+        let names: Vec<String> = if legacy { vars.iter().flat_map(|x| (0..ng).map(move |g| (x, g))).map(|(x, g)| format!("{x}:{}", legacy_name(g))).collect() } else { names };
+        let headers: Vec<String> = vars.iter().map(|x| if legacy { x.clone() } else { format!("c.{x}@{}", over.join("#")) }).collect();
+        let lw = if over.is_empty() {
+            12
+        } else {
+            headers.iter().map(|h| h.chars().count()).chain(levels.iter().map(|l| group_label(l).chars().count() + 1)).max().unwrap_or(12).clamp(12, 32)
+        };
+        let mut out = vec![format!("Mean estimation{:>40}Number of obs = {:>7}", "", fmt_g(n, 9)), String::new()];
+        let bar = "-".repeat(lw + 50);
+        out.push(bar.clone());
+        out.push(format!("{:>lw$} |       Mean   Std. err.     [{}% conf. interval]", if legacy { "Over" } else { "" }, fmt_g(level, 4)));
+        out.push(format!("{}+{}", "-".repeat(lw + 1), "-".repeat(48)));
+        let row = |label: &str, j: usize| {
             let se = v[(j, j)].sqrt();
-            out.push(format!("{:>12} | {:>10} {:>10}  {:>10}  {:>10}", abbrev(&vars[j], 12), g9(b[j]), g9(se), g9(b[j] - tcrit * se), g9(b[j] + tcrit * se)));
+            format!("{:>lw$} | {:>10} {:>10}  {:>10}  {:>10}", abbrev(label, lw), g9(b[j]), g9(se), g9(b[j] - tcrit * se), g9(b[j] + tcrit * se))
+        };
+        if over.is_empty() {
+            for j in 0..k {
+                out.push(row(&vars[j], j));
+            }
+        } else {
+            for (a, h) in headers.iter().enumerate() {
+                out.push(format!("{:<lw$} |", abbrev(h, lw)));
+                for (g, l) in levels.iter().enumerate() {
+                    let label = if legacy { legacy_name(g) } else { format!("{} ", group_label(l)) };
+                    out.push(row(&label, a * ng + g));
+                }
+            }
         }
-        out.push("--------------------------------------------------------------".to_string());
+        out.push(bar);
+        let spec_omit = vec![false; kk];
+        crate::est::stash_table(
+            crate::est::table_matrix(&crate::est::TableSpec { depvar: "", names: &names, b: &b, v: &v, omitted: &spec_omit, is_base: &spec_omit, df: Some(df), level, eform: None, coef_title: "Mean" }),
+            level,
+        );
         let e = st.begin_e();
         e.set("N", n);
         e.set("df_r", df);
         e.set("k_eq", 1.0);
+        e.set("rank", kk as f64);
         e.set_str("cmd", "mean");
+        e.set_str("title", "Mean estimation");
+        e.set_str("varlist", vars.join(" "));
         e.set_str("depvar", vars.join(" "));
-        e.set_mat("b", Matrix::row_vector(&b).with_names(vec!["y1".into()], vars.clone()));
-        e.set_mat("V", v.with_names(vars.clone(), vars.clone()));
+        e.set_str("properties", "b V");
+        e.set_str("vce", "analytic");
+        let mut nm = Matrix::row_vector(&(0..kk).map(|j| if over.is_empty() { n } else { n_g[j % ng] }).collect::<Vec<_>>());
+        nm.colnames = names.clone();
+        if !over.is_empty() {
+            e.set("N_over", ng as f64);
+            e.set_str("over", over.join(" "));
+            e.set_str("over_namelist", levels.iter().map(|l| l.iter().zip(&over).map(|(lv, o)| format!("{}.{o}", fmt_level(*lv))).collect::<Vec<_>>().join("#")).collect::<Vec<_>>().join(" "));
+            e.set_str("over_labels", levels.iter().map(|l| format!("\"{}\"", group_label(l))).collect::<Vec<_>>().join(" "));
+        }
+        e.set_mat("_N", nm);
+        e.set_mat("b", Matrix::row_vector(&b).with_names(vec!["y1".into()], names.clone()));
+        e.set_mat("V", v.with_names(names.clone(), names));
         e.sample = Some(mask);
         Ok(out.join("\n"))
     }

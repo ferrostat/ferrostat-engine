@@ -19,12 +19,66 @@ impl CommandHandler for Describe {
     }
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         if let Some(path) = &cmd.using {
-            let other = ferrostat_core::dta::DtaReader::open(path).map_err(|e| rc_err(601, e))?;
-            return describe(&other, &other.varlist(), cmd, st, Some(path));
+            let path = if std::path::Path::new(path).extension().is_some() { path.clone() } else { format!("{path}.dta") };
+            let other = ferrostat_core::dta::DtaReader::open(&path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
+            let vars = if cmd.main.trim().is_empty() { other.varlist() } else { varlist::expand(&other, &cmd.main)? };
+            if cmd.has_opt("replace", 7) {
+                return describe_replace(ds, &other, &vars, st);
+            }
+            return describe(&other, &vars, cmd, st, Some(&path));
         }
         let vars = if cmd.main.trim().is_empty() { ds.varlist() } else { varlist::expand(ds, &cmd.main)? };
+        if cmd.has_opt("replace", 7) {
+            let src = ds.clone();
+            return describe_replace(ds, &src, &vars, st);
+        }
         describe(ds, &vars, cmd, st, None)
     }
+}
+
+/// `describe, replace`: replace the data with one observation per described
+/// variable (position, name, type, isnumeric, format, vallab, varlab).
+fn describe_replace(ds: &mut DataSet, src: &DataSet, vars: &[String], st: &mut Store) -> Result<String, String> {
+    use ferrostat_core::{VarType, Variable};
+    let mut rows = Vec::new();
+    for v in vars {
+        let k = src.vars.iter().position(|x| &x.name == v).ok_or_else(|| rc_err(111, format!("variable {v} not found")))?;
+        rows.push((k + 1, &src.vars[k]));
+    }
+    let str_col = |name: &str, label: &str, vals: Vec<String>| {
+        let w = vals.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
+        let mut var = Variable::new(name, VarType::Str(w));
+        var.format = format!("%{w}s");
+        var.label = label.to_string();
+        var.data = vals.into_iter().map(Value::Str).collect();
+        var
+    };
+    let mut out = DataSet::new();
+    let mut pos = Variable::new("position", VarType::Int);
+    pos.format = "%8.0g".into();
+    pos.label = "Variable number".into();
+    pos.data = rows.iter().map(|(k, _)| Value::Int(*k as i16)).collect();
+    let mut isnum = Variable::new("isnumeric", VarType::Byte);
+    isnum.format = "%8.0g".into();
+    isnum.label = "Flag for numeric variables".into();
+    isnum.data = rows.iter().map(|(_, v)| Value::Byte(v.var_type.is_numeric() as i8)).collect();
+    let cols = vec![
+        pos,
+        str_col("name", "Variable name", rows.iter().map(|(_, v)| v.name.clone()).collect()),
+        str_col("type", "Storage type", rows.iter().map(|(_, v)| v.var_type.type_str()).collect()),
+        isnum,
+        str_col("format", "Display format", rows.iter().map(|(_, v)| v.format.clone()).collect()),
+        str_col("vallab", "Value label", rows.iter().map(|(_, v)| v.value_label_name.clone()).collect()),
+        str_col("varlab", "Variable label", rows.iter().map(|(_, v)| v.label.clone()).collect()),
+    ];
+    out.n_obs = rows.len();
+    for c in cols {
+        out.add_variable(c)?;
+    }
+    *ds = out;
+    st.data_changed = true;
+    st.filename.clear();
+    Ok(String::new())
 }
 
 fn describe(ds: &DataSet, vars: &[String], cmd: &Command, st: &mut Store, file: Option<&str>) -> Result<String, String> {
@@ -49,19 +103,30 @@ fn describe(ds: &DataSet, vars: &[String], cmd: &Command, st: &mut Store, file: 
     });
     out.push(format!(" Observations:{:>14}{:>20}{}", ds.n_obs, "", ds.datalabel));
     out.push(format!("    Variables:{:>14}{:>20}{}", ds.n_vars(), "", ds.time_stamp));
-    if cmd.has_opt("short", 2) {
+    if cmd.has_opt("short", 1) {
+        if !ds.sort_by.is_empty() {
+            out.push(format!("Sorted by: {}", ds.sort_by.join("  ")));
+        }
         return Ok(out.join("\n"));
     }
-    let bar = "-".repeat(79);
+    // `fullnames` widens the name column instead of abbreviating with `~`;
+    // `numbers` prefixes each row with the variable's position
+    let full = cmd.has_opt("fullnames", 1);
+    let numbers = cmd.has_opt("numbers", 1);
+    let nw = if full { vars.iter().map(|v| v.chars().count()).max().unwrap_or(0).max(15) } else { 15 };
+    let pre = if numbers { "     " } else { "" };
+    let bar = "-".repeat(79 + nw - 15 + pre.len());
     out.push(bar.clone());
-    out.push("Variable      Storage   Display    Value".to_string());
-    out.push("    name         type    format    label      Variable label".to_string());
+    let hw = nw - 1;
+    out.push(format!("{}{:<hw$}Storage   Display    Value", if numbers { "  #  " } else { "" }, "Variable"));
+    out.push(format!("{pre}{:<hw$}   type    format    label      Variable label", "    name"));
     out.push(bar.clone());
     for v in vars {
         let var = ds.get_var(v).ok_or_else(|| rc_err(111, format!("variable {v} not found")))?;
+        let num = if numbers { format!("{:>3}  ", ds.vars.iter().position(|x| &x.name == v).map_or(0, |k| k + 1)) } else { String::new() };
         out.push(format!(
-            "{:<15} {:<7} {:<10} {:<10} {}",
-            if var.name.len() > 15 { format!("{}~", &var.name[..14]) } else { var.name.clone() },
+            "{num}{:<nw$} {:<7} {:<10} {:<10} {}",
+            if !full && var.name.chars().count() > 15 { format!("{}~", var.name.chars().take(14).collect::<String>()) } else { var.name.clone() },
             var.var_type.type_str(),
             var.format,
             var.value_label_name,

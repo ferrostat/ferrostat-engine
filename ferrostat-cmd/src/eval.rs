@@ -413,6 +413,7 @@ impl<'a> Env<'a> {
         // functions taking names rather than values
         match lname.as_str() {
             "r" | "e" | "s" | "c" => return self.stored(&lname, args, row),
+            "frval" => return crate::frames::frval(self, &arg_name(args.first()), &arg_name(args.get(1)), row),
             "scalar" => {
                 let n = arg_name(args.first());
                 let st = self.st.ok_or_else(|| rc_err(111, "scalar not found"))?;
@@ -579,6 +580,13 @@ pub fn find_coef(b: &crate::matrix::Matrix, name: &str) -> Option<usize> {
     if let Some(j) = b.colnames.iter().position(|c| c.rsplit(':').next() == Some(bare)) {
         return Some(j);
     }
+    // `x@1.g` names the coefficient `c.x@1.g` (means over groups, contrasts)
+    if bare.contains('@') && !bare.starts_with("c.") {
+        let full = format!("c.{bare}");
+        if let Some(j) = b.colnames.iter().position(|c| c.rsplit(':').next() == Some(full.as_str())) {
+            return Some(j);
+        }
+    }
     // 1.group vs 1b.group / 1o.group
     b.colnames.iter().position(|c| {
         let c = c.rsplit(':').next().unwrap_or(c);
@@ -590,18 +598,88 @@ pub fn find_coef(b: &crate::matrix::Matrix, name: &str) -> Option<usize> {
     })
 }
 
-fn c_value(env: &Env, key: &str) -> Val {
+/// The `c()` values listed by `creturn list`, grouped as in the listing.
+pub const C_GROUPS: &[(&str, &[&str])] = &[
+    ("System values", &["current_date", "current_time", "rmsg_time", "version", "userversion", "bit", "processors", "processors_lic", "processors_mach", "processors_max", "mode", "console"]),
+    ("Directories and paths", &["sysdir_base", "sysdir_site", "sysdir_plus", "sysdir_personal", "sysdir_oldplace", "tmpdir", "adopath", "pwd", "dirsep"]),
+    ("System limits", &["max_N_theory", "maxvar", "maxstrvarlen", "maxstrlvarlen", "macrolen", "max_macrolen", "max_matdim", "max_cmdlen"]),
+    ("Numerical and string limits", &["maxbyte", "maxint", "maxlong", "maxfloat", "maxdouble", "minbyte", "minint", "minlong", "minfloat", "mindouble", "epsfloat", "epsdouble", "smallestdouble"]),
+    ("Current dataset", &["frame", "N", "k", "width", "changed", "filename", "filedate"]),
+    ("Memory settings", &["memory", "maxvar", "segmentsize", "niceness"]),
+    ("Output settings", &["more", "rmsg", "dp", "linesize", "pagesize", "logtype", "noisily", "charset", "eolchar", "notifyuser", "playsnd", "include_bitmap", "level", "showbaselevels", "showemptycells", "showomitted", "fvlabel", "fvwrap", "fvwrapon", "lstretch", "cformat", "sformat", "pformat", "coeftabresults", "dots"]),
+    ("Interface settings", &["varabbrev", "trace", "tracedepth", "type", "seed", "rngstate", "rng", "rng_current", "rngstream", "sortseed", "maxiter", "matsize", "emptycells", "haverdir", "odbcmgr", "httpproxy", "timeout1", "timeout2"]),
+    ("System environment", &["os", "osdtl", "hostname", "machine_type", "byteorder", "username"]),
+    ("Other system values", &["pi", "e", "alpha", "ALPHA", "Mons", "Months", "Wdays", "Weekdays", "rc"]),
+];
+
+/// Setting stored by `set` (see `Store::settings`), or its default.
+fn setting(env: &Env, key: &str, default: &str) -> String {
+    env.st.and_then(|s| s.settings.get(key).cloned()).unwrap_or_else(|| default.to_string())
+}
+
+fn setting_num(env: &Env, key: &str, default: f64) -> Val {
+    Val::Num(env.st.and_then(|s| s.settings.get(key)).and_then(|v| v.parse().ok()).unwrap_or(default))
+}
+
+fn on_off(b: bool) -> Val {
+    Val::Str(if b { "on" } else { "off" }.into())
+}
+
+fn env_var(names: &[&str]) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    for n in names {
+        if let Ok(v) = std::env::var(n) {
+            return v;
+        }
+    }
+    let _ = names;
+    String::new()
+}
+
+fn hostname() -> String {
+    let h = env_var(&["HOSTNAME", "COMPUTERNAME"]);
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    if h.is_empty() {
+        return std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_default();
+    }
+    h
+}
+
+fn processors() -> f64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::thread::available_parallelism().map_or(1, |n| n.get()) as f64;
+    #[cfg(target_arch = "wasm32")]
+    1.0
+}
+
+/// Directory of user-installed and personal ado-files.
+fn sysdir(sub: &str) -> String {
+    let home = env_var(&["HOME", "USERPROFILE"]);
+    if home.is_empty() {
+        return String::new();
+    }
+    let sep = std::path::MAIN_SEPARATOR;
+    format!("{home}{sep}ado{sep}{sub}{sep}")
+}
+
+pub fn c_value(env: &Env, key: &str) -> Val {
     let now = chrono::Local::now();
+    let st = env.st;
     match key {
         "N" => Val::Num(env.ds.n_obs as f64),
         "k" => Val::Num(env.ds.n_vars() as f64),
+        "width" => Val::Num(env.ds.vars.iter().map(|v| v.var_type.storage_width()).sum::<usize>() as f64),
+        "memory" => Val::Num((env.ds.vars.iter().map(|v| v.var_type.storage_width()).sum::<usize>() * env.ds.n_obs) as f64),
+        "frame" => Val::Str(st.map_or(crate::frames::DEFAULT_FRAME.to_string(), |s| s.cur_frame.clone())),
+        "filedate" => Val::Str(env.ds.time_stamp.clone()),
         "pi" => Val::Num(std::f64::consts::PI),
         "e" => Val::Num(std::f64::consts::E),
-        "level" => Val::Num(env.st.map_or(95.0, |s| s.level)),
-        "rc" => Val::Num(env.st.map_or(0, |s| s.rc) as f64),
+        "level" => Val::Num(st.map_or(95.0, |s| s.level)),
+        "rc" => Val::Num(st.map_or(0, |s| s.rc) as f64),
         "maxdouble" => Val::Num(8.988465674311579e307),
         "mindouble" => Val::Num(-8.988465674311579e307),
         "epsdouble" => Val::Num(f64::EPSILON),
+        "epsfloat" => Val::Num(f32::EPSILON as f64),
         "smallestdouble" => Val::Num(f64::MIN_POSITIVE),
         "maxbyte" => Val::Num(100.0),
         "minbyte" => Val::Num(-127.0),
@@ -610,25 +688,83 @@ fn c_value(env: &Env, key: &str) -> Val {
         "maxlong" => Val::Num(2147483620.0),
         "minlong" => Val::Num(-2147483647.0),
         "maxfloat" => Val::Num(1.70141173319e38),
+        "minfloat" => Val::Num(-1.70141173319e38),
         "maxstrvarlen" => Val::Num(2045.0),
-        "maxvar" => Val::Num(120000.0),
+        "maxstrlvarlen" => Val::Num(2000000000.0),
+        "maxvar" => setting_num(env, "maxvar", 120000.0),
+        "max_N_theory" => Val::Num(2147483620.0),
+        "macrolen" | "max_macrolen" => Val::Num(4227143.0),
+        "max_matdim" => Val::Num(65534.0),
+        "max_cmdlen" => Val::Num(4227159.0),
+        "matsize" => setting_num(env, "matsize", 400.0),
         // the first name is kept for existing do-files that query it
-        "stata_version" | "version" => Val::Num(18.0),
+        "stata_version" | "version" | "userversion" => Val::Num(18.0),
+        "bit" => Val::Num(if cfg!(target_pointer_width = "64") { 64.0 } else { 32.0 }),
+        "processors" | "processors_lic" | "processors_mach" | "processors_max" => Val::Num(processors()),
+        "mode" | "console" => Val::Str(String::new()),
+        "rmsg_time" => Val::Num(0.0),
         "current_date" => Val::Str(now.format("%e %b %Y").to_string().trim().to_string()),
         "current_time" => Val::Str(now.format("%H:%M:%S").to_string()),
         "os" => Val::Str(if cfg!(windows) { "Windows" } else if cfg!(target_os = "macos") { "MacOSX" } else { "Unix" }.into()),
-        "dirsep" => Val::Str(std::path::MAIN_SEPARATOR.to_string()),
+        "osdtl" => Val::Str(std::env::consts::OS.into()),
+        "machine_type" => Val::Str(match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => "Macintosh (Apple Silicon)".into(),
+            ("macos", _) => "Macintosh (Intel 64-bit)".into(),
+            (_, "x86_64") => "PC (64-bit x86-64)".into(),
+            (_, "aarch64") => "PC (64-bit ARM)".into(),
+            (os, arch) => format!("{os} ({arch})"),
+        }),
+        "byteorder" => Val::Str(if cfg!(target_endian = "little") { "lohi" } else { "hilo" }.into()),
+        "hostname" => Val::Str(hostname()),
+        "dirsep" => Val::Str("/".into()),
         "pwd" => Val::Str(ferrostat_core::vfs::current_dir()),
-        "username" => Val::Str(std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default()),
-        "filename" => Val::Str(env.st.map(|s| s.filename.clone()).unwrap_or_default()),
-        "changed" => Val::Num(bool_f(env.st.map_or(false, |s| s.data_changed))),
-        "seed" => Val::Num(env.st.map_or(0, |s| s.rng.borrow().seed) as f64),
-        "rngstate" => Val::Str(env.st.map(|s| s.rng.borrow().state()).unwrap_or_default()),
+        "tmpdir" => Val::Str(ferrostat_core::vfs::temp_path("")),
+        "sysdir_base" | "sysdir_site" => Val::Str(String::new()),
+        "sysdir_plus" => Val::Str(sysdir("plus")),
+        "sysdir_personal" => Val::Str(sysdir("personal")),
+        "sysdir_oldplace" => Val::Str(sysdir("").replace(&format!("{0}{0}", std::path::MAIN_SEPARATOR), &std::path::MAIN_SEPARATOR.to_string())),
+        "adopath" => Val::Str("BASE;SITE;.;PERSONAL;PLUS;OLDPLACE".into()),
+        "username" => Val::Str(env_var(&["USER", "USERNAME", "LOGNAME"])),
+        "filename" => Val::Str(st.map(|s| s.filename.clone()).unwrap_or_default()),
+        "changed" => Val::Num(bool_f(st.map_or(false, |s| s.data_changed))),
+        "seed" => Val::Num(st.map_or(0, |s| s.rng.borrow().seed) as f64),
+        "rngstate" => Val::Str(st.map(|s| s.rng.borrow().state()).unwrap_or_default()),
+        "rng" | "rng_current" => Val::Str(setting(env, "rng", "default")),
+        "rngstream" => setting_num(env, "rngstream", 1.0),
+        "sortseed" => setting_num(env, "sortseed", 1001.0),
+        "type" => Val::Str(st.map_or(ferrostat_core::VarType::Float, |s| s.default_type).type_str()),
+        "varabbrev" => on_off(st.map_or(true, |s| s.varabbrev)),
+        "rmsg" => on_off(st.map_or(false, |s| s.rmsg)),
+        "more" => Val::Str(setting(env, "more", "off")),
+        "trace" => Val::Str(setting(env, "trace", "off")),
+        "tracedepth" => setting_num(env, "tracedepth", 32000.0),
+        "linesize" => setting_num(env, "linesize", 80.0),
+        "pagesize" => setting_num(env, "pagesize", 23.0),
+        "maxiter" => setting_num(env, "maxiter", 300.0),
+        "segmentsize" => Val::Str(setting(env, "segmentsize", "32m")),
+        "niceness" => setting_num(env, "niceness", 5.0),
+        "timeout1" => setting_num(env, "timeout1", 30.0),
+        "timeout2" => setting_num(env, "timeout2", 180.0),
+        "dp" => Val::Str(setting(env, "dp", "period")),
+        "emptycells" => Val::Str(setting(env, "emptycells", "keep")),
+        "logtype" => Val::Str(setting(env, "logtype", "smcl")),
+        "charset" => Val::Str(setting(env, "charset", "latin1")),
+        "eolchar" => Val::Str(if cfg!(windows) { "windows" } else { "unix" }.into()),
+        "noisily" => Val::Num(1.0),
+        "cformat" | "sformat" | "pformat" | "haverdir" | "odbcmgr" => Val::Str(setting(env, key, "")),
+        "httpproxy" | "notifyuser" | "playsnd" | "include_bitmap" | "showomitted" | "showemptycells" | "fvlabel" | "lstretch" | "coeftabresults" | "dots" => {
+            let default = if matches!(key, "httpproxy" | "playsnd" | "lstretch") { "off" } else { "on" };
+            Val::Str(setting(env, key, default))
+        }
+        "showbaselevels" => Val::Str(setting(env, key, "")),
+        "fvwrap" => setting_num(env, key, 1.0),
+        "fvwrapon" => Val::Str(setting(env, key, "word")),
         "alpha" => Val::Str("a b c d e f g h i j k l m n o p q r s t u v w x y z".into()),
         "ALPHA" => Val::Str("A B C D E F G H I J K L M N O P Q R S T U V W X Y Z".into()),
         "Mons" => Val::Str("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".into()),
         "Months" => Val::Str("January February March April May June July August September October November December".into()),
         "Wdays" => Val::Str("Sun Mon Tue Wed Thu Fri Sat".into()),
+        "Weekdays" => Val::Str("Sunday Monday Tuesday Wednesday Thursday Friday Saturday".into()),
         _ => Val::Num(SYSMISS),
     }
 }
@@ -1255,6 +1391,49 @@ fn call_function(env: &Env, name: &str, v: &[Val]) -> Result<Val, String> {
         "hh" => num1(v, dates::hh),
         "mm" => num1(v, dates::mm),
         "ss" => num1(v, dates::ss),
+        // ---- durations and birthdays; optional last argument "01mar"/"28feb"
+        // places 29feb birthdays in nonleap years
+        "age" | "age_frac" | "birthday" | "previousbirthday" | "nextbirthday" | "datediff" | "datediff_frac" => {
+            let nl = if name.starts_with("datediff") { 3 } else { 2 };
+            let feb28 = match v.get(nl) {
+                None => false,
+                Some(x) => match x.str()?.trim().to_lowercase().as_str() {
+                    "01mar" | "1mar" | "mar01" => false,
+                    "28feb" | "feb28" => true,
+                    o => return Err(rc_err(198, format!("{name}(): invalid nonleap-year birthday \"{o}\""))),
+                },
+            };
+            let (a, b) = (n(v, 0)?, n(v, 1)?);
+            if is_missing(a) || is_missing(b) {
+                return num(SYSMISS);
+            }
+            num(match name {
+                "age" => dates::age(a, b, feb28),
+                "age_frac" => dates::age_frac(a, b, feb28),
+                "birthday" => dates::birthday(a, b, feb28),
+                "previousbirthday" => dates::previous_birthday(a, b, feb28),
+                "nextbirthday" => dates::next_birthday(a, b, feb28),
+                _ => {
+                    let unit = match s(v, 2)?.trim().to_lowercase().as_str() {
+                        "d" | "day" | "days" => 'd',
+                        "m" | "month" | "months" => 'm',
+                        "y" | "year" | "years" => 'y',
+                        o => return Err(rc_err(198, format!("{name}(): invalid unit \"{o}\""))),
+                    };
+                    dates::datediff(a, b, unit, feb28, name == "datediff_frac")
+                }
+            })
+        }
+        "isleapyear" => num1(v, |y| if y.fract() == 0.0 { bool_f(dates::is_leap(y as i64)) } else { SYSMISS }),
+        "daysinmonth" => num1(v, dates::days_in_month),
+        "firstdayofmonth" => num1(v, dates::first_day_of_month),
+        "lastdayofmonth" => num1(v, dates::last_day_of_month),
+        "previousdow" => num2(v, |d, w| dates::adjacent_dow(d, w, -1)),
+        "nextdow" => num2(v, |d, w| dates::adjacent_dow(d, w, 1)),
+        "previousweekday" => num1(v, |d| dates::adjacent_weekday(d, -1)),
+        "nextweekday" => num1(v, |d| dates::adjacent_weekday(d, 1)),
+        "previousleapyear" => num1(v, |y| dates::adjacent_leap_year(y, -1)),
+        "nextleapyear" => num1(v, |y| dates::adjacent_leap_year(y, 1)),
         "today" => {
             let now = chrono::Local::now();
             use chrono::Datelike;

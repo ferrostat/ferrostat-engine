@@ -373,8 +373,18 @@ fn vjoin(a: &Matrix, b: &Matrix) -> Result<Matrix, String> {
     let mut m = Matrix::zeros(a.rows + b.rows, a.cols);
     m.data = a.data.iter().chain(&b.data).cloned().collect();
     m.colnames = a.colnames.clone();
-    m.rownames = a.rownames.iter().chain(&b.rownames).cloned().collect();
+    m.rownames = renumber(a.rownames.iter().chain(&b.rownames).cloned().collect(), "r");
     Ok(m)
+}
+
+/// Rows (columns) built from single elements, as in `(1,2\3,4)`, all carry
+/// the name `r1` (`c1`) and are renumbered; joined names are otherwise kept.
+fn renumber(names: Vec<String>, prefix: &str) -> Vec<String> {
+    let first = format!("{prefix}1");
+    if names.len() > 1 && names.iter().all(|n| *n == first) {
+        return (1..=names.len()).map(|i| format!("{prefix}{i}")).collect();
+    }
+    names
 }
 
 fn hjoin(a: &Matrix, b: &Matrix) -> Result<Matrix, String> {
@@ -394,7 +404,7 @@ fn hjoin(a: &Matrix, b: &Matrix) -> Result<Matrix, String> {
         }
     }
     m.rownames = a.rownames.clone();
-    m.colnames = a.colnames.iter().chain(&b.colnames).cloned().collect();
+    m.colnames = renumber(a.colnames.iter().chain(&b.colnames).cloned().collect(), "c");
     Ok(m)
 }
 

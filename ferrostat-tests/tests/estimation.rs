@@ -498,3 +498,13 @@ fn xtivreg_be_fd_re_match_reference() {
     // xtivreg2 remains fixed-effects only
     s.fails("xtivreg2 y (x = z1 z2), re");
 }
+
+#[test]
+fn hc2_hc3_only_where_computed() {
+    let mut s = Session::with_fixture();
+    s.run("quietly regress y x, vce(hc3)");
+    assert_eq!(s.run("display e(vcetype)").trim(), "Robust HC3");
+    // estimators without a leverage-adjusted variance reject the request
+    s.fails("logit d x, vce(hc3)");
+    s.fails("logit d x, vce(hc2)");
+}

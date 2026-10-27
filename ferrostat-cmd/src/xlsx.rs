@@ -249,6 +249,10 @@ pub enum Cell {
 pub struct Workbook {
     /// (sheet name, cells keyed by (row, col), 1-based)
     pub sheets: Vec<(String, BTreeMap<(u32, u32), Cell>)>,
+    /// cell formats by sheet name, cells keyed by (row, col)
+    pub styles: BTreeMap<String, BTreeMap<(u32, u32), crate::xlsx_style::CellStyle>>,
+    /// merged ranges ("A1:C1") by sheet name
+    pub merges: BTreeMap<String, Vec<String>>,
 }
 
 /// "B12" -> (12, 2)
@@ -374,6 +378,7 @@ impl Workbook {
                 }
             }
         }
+        let xfs = text("xl/styles.xml").map(|s| crate::xlsx_style::parse_styles(&s)).unwrap_or_default();
         let mut book = Workbook::default();
         for e in xml_events(&wb) {
             if let XmlEvent::Start(n, a, _) = e {
@@ -381,7 +386,16 @@ impl Workbook {
                     let name = attr(&a, "name").unwrap_or("Sheet").to_string();
                     let path = attr(&a, "id").and_then(|id| rels.get(id)).cloned().unwrap_or_else(|| format!("xl/worksheets/sheet{}.xml", book.sheets.len() + 1));
                     let cells = match text(&path) {
-                        Some(x) => parse_sheet(&x, &shared, &date_styles),
+                        Some(x) => {
+                            let (st, mg) = crate::xlsx_style::parse_sheet_styles(&x, &xfs);
+                            if !st.is_empty() {
+                                book.styles.insert(name.clone(), st);
+                            }
+                            if !mg.is_empty() {
+                                book.merges.insert(name.clone(), mg);
+                            }
+                            parse_sheet(&x, &shared, &date_styles)
+                        }
                         None => BTreeMap::new(),
                     };
                     book.sheets.push((name, cells));
@@ -400,8 +414,17 @@ impl Workbook {
         ct.push_str("</Types>");
         files.push(("[Content_Types].xml".to_string(), ct.into_bytes()));
         files.push(("_rels/.rels".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#.as_bytes().to_vec()));
-        // style 0 = general, style 1 = date (numFmtId 14)
-        files.push(("xl/styles.xml".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs></styleSheet>"#.as_bytes().to_vec()));
+        // style 0 = general, style 1 = date (numFmtId 14), then cell formats
+        let date_style = crate::xlsx_style::CellStyle { num_fmt: Some("m/d/yyyy".into()), ..Default::default() };
+        let dated: Vec<crate::xlsx_style::CellStyle> = self
+            .styles
+            .iter()
+            .flat_map(|(sh, m)| m.iter().map(move |(p, st)| (sh, p, st)))
+            .filter(|(sh, p, st)| st.num_fmt.is_none() && self.sheets.iter().any(|(n, c)| n == *sh && matches!(c.get(p), Some(Cell::Date(_)))))
+            .map(|(_, _, st)| crate::xlsx_style::CellStyle { num_fmt: date_style.num_fmt.clone(), ..st.clone() })
+            .collect();
+        let (styles_xml, style_index) = crate::xlsx_style::build_styles(self.styles.values().flat_map(|m| m.values()).chain(dated.iter()));
+        files.push(("xl/styles.xml".into(), styles_xml.into_bytes()));
         let mut wb = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>"#);
         let mut rels = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
         for (i, (name, cells)) in self.sheets.iter().enumerate() {
@@ -409,7 +432,15 @@ impl Workbook {
             rels.push_str(&format!(r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{}.xml"/>"#, i + 1, i + 1));
             let mut sx = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"#);
             let mut cur_row = 0;
-            for ((r, c), v) in cells {
+            let fmts = self.styles.get(name);
+            // cells holding only a format are written as empty styled cells
+            let mut all: BTreeMap<(u32, u32), Option<&Cell>> = cells.iter().map(|(p, v)| (*p, Some(v))).collect();
+            if let Some(f) = fmts {
+                for p in f.keys() {
+                    all.entry(*p).or_insert(None);
+                }
+            }
+            for ((r, c), v) in &all {
                 if *r != cur_row {
                     if cur_row != 0 {
                         sx.push_str("</row>");
@@ -418,17 +449,34 @@ impl Workbook {
                     cur_row = *r;
                 }
                 let refn = format!("{}{}", col_letters(*c), r);
+                let fmt = fmts.and_then(|f| f.get(&(*r, *c)));
+                let s_idx = match (fmt, v) {
+                    (Some(st), Some(Cell::Date(_))) if st.num_fmt.is_none() => style_index.get(&crate::xlsx_style::CellStyle { num_fmt: date_style.num_fmt.clone(), ..st.clone() }).copied().unwrap_or(1),
+                    (Some(st), _) => style_index.get(st).copied().unwrap_or(0),
+                    (None, Some(Cell::Date(_))) => 1,
+                    _ => 0,
+                };
+                let sa = if s_idx == 0 { String::new() } else { format!(r#" s="{s_idx}""#) };
                 match v {
-                    Cell::Num(x) => sx.push_str(&format!(r#"<c r="{refn}"><v>{}</v></c>"#, x)),
-                    Cell::Date(x) => sx.push_str(&format!(r#"<c r="{refn}" s="1"><v>{}</v></c>"#, x)),
-                    Cell::Bool(b) => sx.push_str(&format!(r#"<c r="{refn}" t="b"><v>{}</v></c>"#, *b as u8)),
-                    Cell::Str(s) => sx.push_str(&format!(r#"<c r="{refn}" t="inlineStr"><is><t xml:space="preserve">{}</t></is></c>"#, escape(s))),
+                    Some(Cell::Num(x)) => sx.push_str(&format!(r#"<c r="{refn}"{sa}><v>{}</v></c>"#, x)),
+                    Some(Cell::Date(x)) => sx.push_str(&format!(r#"<c r="{refn}"{sa}><v>{}</v></c>"#, x)),
+                    Some(Cell::Bool(b)) => sx.push_str(&format!(r#"<c r="{refn}"{sa} t="b"><v>{}</v></c>"#, *b as u8)),
+                    Some(Cell::Str(s)) => sx.push_str(&format!(r#"<c r="{refn}"{sa} t="inlineStr"><is><t xml:space="preserve">{}</t></is></c>"#, escape(s))),
+                    None => sx.push_str(&format!(r#"<c r="{refn}"{sa}/>"#)),
                 }
             }
             if cur_row != 0 {
                 sx.push_str("</row>");
             }
-            sx.push_str("</sheetData></worksheet>");
+            sx.push_str("</sheetData>");
+            if let Some(m) = self.merges.get(name).filter(|m| !m.is_empty()) {
+                sx.push_str(&format!(r#"<mergeCells count="{}">"#, m.len()));
+                for r in m {
+                    sx.push_str(&format!(r#"<mergeCell ref="{}"/>"#, escape(r)));
+                }
+                sx.push_str("</mergeCells>");
+            }
+            sx.push_str("</worksheet>");
             files.push((format!("xl/worksheets/sheet{}.xml", i + 1), sx.into_bytes()));
         }
         wb.push_str("</sheets></workbook>");

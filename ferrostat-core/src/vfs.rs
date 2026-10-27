@@ -49,6 +49,12 @@ mod imp {
     pub fn temp_path(name: &str) -> String {
         std::env::temp_dir().join(name).display().to_string()
     }
+    /// (is_dir, size in bytes, modification time in seconds since 1970).
+    pub fn meta(path: &str) -> Option<(bool, u64, Option<u64>)> {
+        let m = std::fs::metadata(path).ok()?;
+        let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
+        Some((m.is_dir(), m.len(), t))
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -186,6 +192,14 @@ mod imp {
     }
     pub fn temp_path(name: &str) -> String {
         format!("/tmp/{name}")
+    }
+    /// (is_dir, size in bytes, modification time); times are not tracked.
+    pub fn meta(path: &str) -> Option<(bool, u64, Option<u64>)> {
+        let p = norm(path);
+        if let Some(n) = FILES.with(|f| f.borrow().get(&p).map(|v| v.len() as u64)) {
+            return Some((false, n, None));
+        }
+        DIRS.with(|d| d.borrow().contains(&p)).then_some((true, 0, None))
     }
 
     /// All files in the in-memory file system (for the host page).

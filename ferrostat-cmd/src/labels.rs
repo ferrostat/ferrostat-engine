@@ -53,7 +53,7 @@ impl CommandHandler for Label {
                 ds.get_var_mut(&v).unwrap().label = text.chars().take(80).collect();
                 Ok(String::new())
             }
-            "data" => {
+            "da" | "dat" | "data" => {
                 ds.datalabel = rest.first().map(|s| unquote(s)).unwrap_or_default().chars().take(80).collect();
                 Ok(String::new())
             }
@@ -443,19 +443,22 @@ enum Lhs {
 
 struct Rule {
     lhs: Vec<Lhs>,
-    to: f64,
+    /// target value; `None` for `copy` (keep the original value)
+    to: Option<f64>,
     label: Option<String>,
 }
 
 fn parse_rule(text: &str) -> Result<Rule, String> {
-    let (l, r) = text.split_once('=').ok_or_else(|| rc_err(198, format!("({text}): invalid rule")))?;
-    let mut rhs = r.trim().to_string();
-    let mut label = None;
-    if let Some(q) = rhs.find('"') {
-        label = Some(unquote(&rhs[q..]));
-        rhs = rhs[..q].trim().to_string();
-    }
-    let to = parse_num(&rhs).ok_or_else(|| rc_err(198, format!("({text}): invalid rule")))?;
+    let bad = || rc_err(198, format!("({text}): invalid rule"));
+    let (l, r) = text.split_once('=').ok_or_else(bad)?;
+    // right side: `#` or `copy`, optionally followed by a (quoted or bare) label
+    let r = r.trim();
+    let (head, rest) = match r.find(|c: char| c.is_whitespace() || c == '"' || c == '`') {
+        Some(i) => (&r[..i], r[i..].trim()),
+        None => (r, ""),
+    };
+    let to = if head.eq_ignore_ascii_case("copy") { None } else { Some(parse_num(head).ok_or_else(bad)?) };
+    let label = if rest.is_empty() { None } else { Some(unquote(rest)) };
     let mut lhs = Vec::new();
     for tok in l.split_whitespace() {
         let t = tok.to_lowercase();
@@ -463,13 +466,16 @@ fn parse_rule(text: &str) -> Result<Rule, String> {
             "missing" => Lhs::Missing,
             "nonmissing" => Lhs::NonMissing,
             "else" | "*" => Lhs::Else,
+            "min" => Lhs::Range(f64::NEG_INFINITY, f64::NEG_INFINITY),
+            "max" => Lhs::Range(f64::INFINITY, f64::INFINITY),
             _ => {
                 if let Some((a, b)) = t.split_once('/') {
-                    let a = if a == "min" { f64::NEG_INFINITY } else { parse_num(a).ok_or_else(|| rc_err(198, "invalid rule"))? };
-                    let b = if b == "max" { f64::INFINITY } else { parse_num(b).ok_or_else(|| rc_err(198, "invalid rule"))? };
-                    Lhs::Range(a, b)
-                } else if t == "min" || t == "max" {
-                    return Err(rc_err(198, "invalid rule"));
+                    let bound = |s: &str| match s {
+                        "min" => Some(f64::NEG_INFINITY),
+                        "max" => Some(f64::INFINITY),
+                        _ => parse_num(s),
+                    };
+                    Lhs::Range(bound(a).ok_or_else(bad)?, bound(b).ok_or_else(bad)?)
                 } else {
                     Lhs::Value(parse_num(&t).ok_or_else(|| rc_err(198, format!("{tok} invalid")))?)
                 }
@@ -491,15 +497,25 @@ impl CommandHandler for Recode {
         let vars = varlist::expand(ds, &main[..first_paren])?;
         let mut rules = Vec::new();
         for w in split_top_level_words(&main[first_paren..]) {
-            let inner = w.trim().trim_start_matches('(').trim_end_matches(')');
+            let w = w.trim();
+            let inner = w.strip_prefix('(').and_then(|x| x.strip_suffix(')')).ok_or_else(|| rc_err(198, format!("{w}: rules must be in parentheses")))?;
             rules.push(parse_rule(inner)?);
         }
         let mask = util::touse(ds, st, cmd)?;
         let newnames: Option<Vec<String>> = if let Some(p) = cmd.opt("prefix", 3) {
-            Some(vars.iter().map(|v| format!("{}{v}", p.trim())).collect())
+            let names: Vec<String> = vars.iter().map(|v| format!("{}{v}", p.trim())).collect();
+            for n in &names {
+                varlist::check_name(n)?;
+                if ds.var_index.contains_key(n) {
+                    return Err(rc_err(110, format!("variable {n} already defined")));
+                }
+            }
+            Some(names)
         } else {
             opt_newnames(ds, cmd, &vars)?
         };
+        let copyrest = cmd.has_opt("copyrest", 4);
+        let lname = cmd.opt("label", 1).map(|s| s.trim().to_string());
         let mut out = Vec::new();
         for (k, v) in vars.iter().enumerate() {
             let var = ds.get_var(v).unwrap();
@@ -511,13 +527,19 @@ impl CommandHandler for Recode {
                 .map(|i| {
                     let x = var.num(i);
                     if !mask[i] {
-                        return if newnames.is_some() { SYSMISS } else { x };
+                        return if newnames.is_some() && !copyrest { SYSMISS } else { x };
                     }
                     for r in &rules {
                         let hit = r.lhs.iter().any(|l| match l {
                             Lhs::Value(a) => x == *a,
                             Lhs::Range(a, b) => {
                                 let (lo, hi) = if a <= b { (*a, *b) } else { (*b, *a) };
+                                // a bare `min`/`max` matches the observed extreme
+                                let (lo, hi) = match (lo, hi) {
+                                    (f64::NEG_INFINITY, f64::NEG_INFINITY) => (var_min(var), var_min(var)),
+                                    (f64::INFINITY, f64::INFINITY) => (var_max(var), var_max(var)),
+                                    p => p,
+                                };
                                 !is_missing(x) && x >= lo && x <= hi
                             }
                             Lhs::Missing => is_missing(x),
@@ -525,10 +547,11 @@ impl CommandHandler for Recode {
                             Lhs::Else => true,
                         });
                         if hit {
-                            if r.to != x {
+                            let to = r.to.unwrap_or(x);
+                            if to != x {
                                 changes += 1;
                             }
-                            return r.to;
+                            return to;
                         }
                     }
                     x
@@ -537,14 +560,18 @@ impl CommandHandler for Recode {
             let ty = util::promote(if newnames.is_some() { VarType::Byte } else { var.var_type }, best_numeric_type(&vals));
             let mut nv = Variable::new(v, ty);
             nv.data = vals.iter().map(|&x| util::typed_value(ty, x)).collect();
-            nv.value_label_name = var.value_label_name.clone();
-            let lname = cmd.opt("label", 3).map(|s| s.trim().to_string());
+            if newnames.is_some() {
+                nv.label = if var.label.is_empty() { format!("RECODE of {v}") } else { format!("RECODE of {v} ({})", var.label) };
+            } else {
+                nv.value_label_name = var.value_label_name.clone();
+                nv.format = var.format.clone();
+            }
             if rules.iter().any(|r| r.label.is_some()) {
                 let name = lname.clone().unwrap_or_else(|| newnames.as_ref().map(|n| n[k].clone()).unwrap_or_else(|| v.clone()));
                 let mut vl = ValueLabel::new(&name);
                 for r in &rules {
-                    if let Some(l) = &r.label {
-                        vl.add(r.to, l.clone());
+                    if let (Some(l), Some(to)) = (&r.label, r.to) {
+                        vl.add(to, l.clone());
                     }
                 }
                 ds.value_labels.insert(name.clone(), vl);
@@ -552,9 +579,54 @@ impl CommandHandler for Recode {
             }
             let nn = newnames.as_ref().map(|n| n[k].clone());
             replace_or_add(ds, v, nn.as_deref(), nv)?;
-            out.push(format!("({v}: {} changes made)", changes));
+            match &nn {
+                Some(n) => {
+                    let d = (0..ds.n_obs).filter(|&i| mask[i] && vals[i] != ds.get_var(v).unwrap().num(i)).count();
+                    out.push(format!("({d} difference{} between {v} and {n})", if d == 1 { "" } else { "s" }));
+                }
+                None => out.push(format!("({v}: {changes} change{} made)", if changes == 1 { "" } else { "s" })),
+            }
         }
         Ok(out.join("\n"))
+    }
+}
+
+fn var_min(v: &Variable) -> f64 {
+    (0..v.data.len()).map(|i| v.num(i)).filter(|x| !is_missing(*x)).fold(f64::INFINITY, f64::min)
+}
+
+fn var_max(v: &Variable) -> f64 {
+    (0..v.data.len()).map(|i| v.num(i)).filter(|x| !is_missing(*x)).fold(f64::NEG_INFINITY, f64::max)
+}
+
+/// Split an `mv()` specification into its `\`-separated rules.
+fn mv_rules(spec: &str) -> Vec<&str> {
+    spec.split('\\').map(str::trim).filter(|s| !s.is_empty()).collect()
+}
+
+/// Expand a numeric list of values or `a/b` ranges (integers stepped by 1).
+fn mv_values(list: &str) -> Result<Vec<(f64, f64)>, String> {
+    let mut out = Vec::new();
+    for tok in list.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()) {
+        if let Some((a, b)) = tok.split_once('/').filter(|(a, _)| !a.is_empty()) {
+            let a = parse_num(a).ok_or_else(|| rc_err(121, format!("{tok}: invalid numlist")))?;
+            let b = parse_num(b).ok_or_else(|| rc_err(121, format!("{tok}: invalid numlist")))?;
+            out.push((a.min(b), a.max(b)));
+        } else {
+            let x = parse_num(tok).ok_or_else(|| rc_err(121, format!("{tok}: invalid numlist")))?;
+            out.push((x, x));
+        }
+    }
+    Ok(out)
+}
+
+/// Widen a numeric variable so that `x` can be stored exactly.
+fn widen_for(var: &mut Variable, x: f64) {
+    let ty = util::promote(var.var_type, best_numeric_type(&[x]));
+    if ty != var.var_type {
+        let vals: Vec<f64> = (0..var.data.len()).map(|i| var.num(i)).collect();
+        var.data = vals.into_iter().map(|v| util::typed_value(ty, v)).collect();
+        var.var_type = ty;
     }
 }
 
@@ -565,38 +637,64 @@ impl CommandHandler for Mvencode {
         "mvencode"
     }
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
-        let vars = varlist::expand(ds, &cmd.main)?;
+        let vars = if cmd.main.trim().is_empty() { ds.varlist() } else { varlist::expand(ds, &cmd.main)? };
         let spec = cmd.opt("mv", 2).ok_or_else(|| rc_err(198, "option mv() required"))?;
+        let override_ = cmd.has_opt("override", 1);
         let mask = util::touse(ds, st, cmd)?;
-        // forms: `#` or `.a=1 .b=2 else=9`
+        // forms: `#` or `.a=1 \ .b=2 \ else=9`; `None` stands for "every other missing"
         let mut map: Vec<(Option<f64>, f64)> = Vec::new();
-        for part in spec.split_whitespace() {
-            if let Some((a, b)) = part.split_once('=') {
-                let to = parse_num(b).ok_or_else(|| rc_err(198, "invalid mv()"))?;
-                if a == "else" { map.push((None, to)) } else { map.push((parse_num(a), to)) }
-            } else {
-                map.push((None, parse_num(part).ok_or_else(|| rc_err(198, "invalid mv()"))?));
+        for rule in mv_rules(spec) {
+            let bad = || rc_err(198, format!("mv({spec}): invalid"));
+            match rule.split_once('=') {
+                Some((a, b)) => {
+                    let to = parse_num(b).filter(|x| !is_missing(*x)).ok_or_else(bad)?;
+                    let a = a.trim();
+                    if a == "else" || a == "_all" {
+                        map.push((None, to));
+                    } else {
+                        for t in a.split_whitespace() {
+                            map.push((Some(parse_num(t).filter(|x| is_missing(*x)).ok_or_else(bad)?), to));
+                        }
+                    }
+                }
+                None => map.push((None, parse_num(rule).filter(|x| !is_missing(*x)).ok_or_else(bad)?)),
             }
         }
         let mut out = Vec::new();
         for v in vars {
             let i = ds.var_index[&v];
+            if ds.vars[i].var_type.is_string() {
+                continue;
+            }
+            let target = |x: f64| map.iter().find(|(k, _)| *k == Some(x)).or_else(|| map.iter().find(|(k, _)| k.is_none())).map(|x| x.1);
+            if !override_ {
+                let used: Vec<f64> = map.iter().map(|m| m.1).filter(|&to| (0..ds.n_obs).any(|r| mask[r] && ds.vars[i].num(r) == to)).collect();
+                if let Some(to) = used.first() {
+                    return Err(rc_err(9, format!("{v}: {} already used as a nonmissing value; nothing changed\n(use option override to recode anyway)", fmt_g(*to))));
+                }
+            }
             let mut n = 0;
             for r in 0..ds.n_obs {
                 let x = ds.vars[i].num(r);
                 if mask[r] && is_missing(x) {
-                    let to = map.iter().find(|(k, _)| *k == Some(x)).or_else(|| map.iter().find(|(k, _)| k.is_none())).map(|x| x.1);
-                    if let Some(to) = to {
+                    if let Some(to) = target(x) {
+                        widen_for(&mut ds.vars[i], to);
                         let ty = ds.vars[i].var_type;
                         ds.vars[i].data[r] = crate::data::store_num(ty, to);
                         n += 1;
                     }
                 }
             }
-            out.push(format!("{:>12}: {} missing values recoded", v, n));
+            if n > 0 {
+                out.push(format!("{:>12}: {} missing value{} recoded", v, n, if n == 1 { "" } else { "s" }));
+            }
         }
         Ok(out.join("\n"))
     }
+}
+
+fn fmt_g(x: f64) -> String {
+    if x.fract() == 0.0 && x.abs() < 1e15 { format!("{}", x as i64) } else { format!("{x}") }
 }
 
 pub struct Mvdecode;
@@ -606,31 +704,40 @@ impl CommandHandler for Mvdecode {
         "mvdecode"
     }
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
-        let vars = varlist::expand(ds, &cmd.main)?;
+        let vars = if cmd.main.trim().is_empty() { ds.varlist() } else { varlist::expand(ds, &cmd.main)? };
         let spec = cmd.opt("mv", 2).ok_or_else(|| rc_err(198, "option mv() required"))?;
         let mask = util::touse(ds, st, cmd)?;
-        let mut map: Vec<(f64, f64)> = Vec::new();
-        for part in spec.split_whitespace() {
-            if let Some((a, b)) = part.split_once('=') {
-                map.push((parse_num(a).ok_or_else(|| rc_err(198, "invalid mv()"))?, parse_num(b).ok_or_else(|| rc_err(198, "invalid mv()"))?));
-            } else {
-                map.push((parse_num(part).ok_or_else(|| rc_err(198, "invalid mv()"))?, SYSMISS));
+        // forms: `numlist` (-> .) or `numlist = .a \ numlist = .b ...`
+        let mut map: Vec<((f64, f64), f64)> = Vec::new();
+        for rule in mv_rules(spec) {
+            let (list, to) = match rule.split_once('=') {
+                Some((a, b)) => (a, parse_num(b).filter(|x| is_missing(*x)).ok_or_else(|| rc_err(198, format!("mv({spec}): invalid")))?),
+                None => (rule, SYSMISS),
+            };
+            for range in mv_values(list)? {
+                map.push((range, to));
             }
         }
         let mut out = Vec::new();
         for v in vars {
             let i = ds.var_index[&v];
+            if ds.vars[i].var_type.is_string() {
+                continue;
+            }
             let mut n = 0;
             for r in 0..ds.n_obs {
                 let x = ds.vars[i].num(r);
-                if mask[r] {
-                    if let Some(&(_, to)) = map.iter().find(|(k, _)| *k == x) {
-                        ds.vars[i].data[r] = Value::Double(to);
+                if mask[r] && !is_missing(x) {
+                    if let Some(&(_, to)) = map.iter().find(|((a, b), _)| x >= *a && x <= *b) {
+                        let ty = ds.vars[i].var_type;
+                        ds.vars[i].data[r] = crate::data::store_num(ty, to);
                         n += 1;
                     }
                 }
             }
-            out.push(format!("{:>12}: {} missing values generated", v, n));
+            if n > 0 {
+                out.push(format!("{:>12}: {} missing value{} generated", v, n, if n == 1 { "" } else { "s" }));
+            }
         }
         Ok(out.join("\n"))
     }

@@ -48,7 +48,7 @@ impl Results {
         let mut out = Vec::new();
         if !self.scalars.is_empty() {
             out.push("scalars:".to_string());
-            for (k, v) in &self.scalars {
+            for (k, v) in scalar_order(&self.scalars) {
                 out.push(format!("{:>20} =  {}", format!("{prefix}({k})"), crate::format::fmt_g(*v, 17)));
             }
         }
@@ -70,6 +70,21 @@ impl Results {
         }
         out.join("\n")
     }
+}
+
+/// Scalars in listing order: alphabetical, except for the summary-statistics
+/// set, which is listed in the order it is computed (N, sum_w, mean, ...).
+fn scalar_order(sc: &BTreeMap<String, f64>) -> Vec<(&String, &f64)> {
+    const PLAIN: [&str; 8] = ["N", "sum_w", "mean", "Var", "sd", "min", "max", "sum"];
+    const DETAIL: [&str; 19] = ["N", "sum_w", "mean", "Var", "sd", "skewness", "kurtosis", "sum", "min", "max", "p1", "p5", "p10", "p25", "p50", "p75", "p90", "p95", "p99"];
+    let mut v: Vec<(&String, &f64)> = sc.iter().collect();
+    for order in [&PLAIN[..], &DETAIL[..]] {
+        if sc.contains_key("sum_w") && sc.keys().all(|k| order.contains(&k.as_str())) {
+            v.sort_by_key(|(k, _)| order.iter().position(|o| o == k));
+            break;
+        }
+    }
+    v
 }
 
 /// A user-defined program.
@@ -97,6 +112,8 @@ pub struct Store {
     pub rng: std::cell::RefCell<Rng>,
     pub preserved: Vec<DataSet>,
     pub estimates: BTreeMap<String, Results>,
+    /// Names of stored estimates in the order they were stored.
+    pub estimates_order: Vec<String>,
     /// Confidence level for estimation output (`set level`).
     pub level: f64,
     pub varabbrev: bool,
@@ -129,6 +146,12 @@ pub struct Store {
     pub graphs: BTreeMap<String, crate::graph::Graph>,
     /// Working directory set by `cd` (None = process directory).
     pub cwd: Option<std::path::PathBuf>,
+    /// Data frames other than the current one, by name.
+    pub data_frames: BTreeMap<String, crate::frames::Frame>,
+    /// Name of the current data frame.
+    pub cur_frame: String,
+    /// Values of `set` options kept only for reporting through `c()`.
+    pub settings: BTreeMap<String, String>,
 }
 
 impl Default for Store {
@@ -146,6 +169,7 @@ impl Default for Store {
             rng: std::cell::RefCell::new(Rng::new(123456789)),
             preserved: Vec::new(),
             estimates: BTreeMap::new(),
+            estimates_order: Vec::new(),
             level: 95.0,
             varabbrev: true,
             rmsg: false,
@@ -164,6 +188,9 @@ impl Default for Store {
             graph: None,
             graphs: BTreeMap::new(),
             cwd: None,
+            data_frames: BTreeMap::new(),
+            cur_frame: crate::frames::DEFAULT_FRAME.to_string(),
+            settings: BTreeMap::new(),
         }
     }
 }

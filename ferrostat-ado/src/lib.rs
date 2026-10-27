@@ -1,8 +1,16 @@
+pub mod docx;
+pub mod dyndoc;
+pub mod estout;
 pub mod interpreter;
 pub mod macros;
+pub mod mata;
+pub mod frmttable;
 pub mod outreg;
+pub mod pdf;
 pub mod progcmd;
+pub mod putdocx;
 pub mod putexcel;
+pub mod python;
 pub mod script;
 
 pub use interpreter::AdoInterpreter;

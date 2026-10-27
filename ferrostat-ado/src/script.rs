@@ -84,8 +84,15 @@ pub fn logical_lines(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut delimit = false;
+    // inside a python block lines are kept verbatim (indentation matters)
+    let mut python = false;
     for raw in text.split('\n') {
         let trimmed = raw.trim();
+        if python {
+            python = !trimmed.eq_ignore_ascii_case("end");
+            out.push(if python { raw.trim_end().to_string() } else { "end".to_string() });
+            continue;
+        }
         if cur.is_empty() && trimmed.starts_with('*') {
             continue;
         }
@@ -121,6 +128,7 @@ pub fn logical_lines(text: &str) -> Vec<String> {
         if line.is_empty() {
             continue;
         }
+        python = matches!(line.as_str(), "python" | "python:");
         out.extend(split_braces(&line));
     }
     if !cur.trim().is_empty() {

@@ -138,6 +138,8 @@ pub struct Layer {
     pub hollow: bool,
     /// fill opacity (confidence bands are translucent); 0 means opaque
     pub alpha: f64,
+    /// bars and areas drawn as outlines only (fcolor(none))
+    pub nofill: bool,
     /// box plots: draw the median as a marker (medtype(marker))
     pub median_marker: bool,
     /// msymbol() and lpattern() names, and an explicit colour (mcolor/lcolor/fcolor/color)
@@ -172,8 +174,9 @@ pub struct Graph {
     pub guides: Vec<f64>,
     /// legend(order(# "text" ...)): layer numbers (1-based) and labels shown
     pub legend_order: Vec<(usize, String)>,
-    /// pie charts: slices in drawing order
+    /// pie charts: slices in drawing order, and the angle of the first edge (degrees)
     pub pie: Vec<PieSlice>,
+    pub pie_angle0: Option<f64>,
     /// colour key of surfaces: (range label, colour)
     pub color_legend: Vec<(String, (u8, u8, u8))>,
     /// text drawn in the middle of an otherwise empty plot (graph matrix diagonal)
@@ -248,6 +251,23 @@ pub(crate) fn finish(graph: &mut Graph, cmd: &Command, st: &mut Store) -> Result
             }
             graph.legend_order = order;
             graph.legend = true;
+        }
+        // label(# "text" ...): rename the legend key of plot #
+        for (name, arg) in ferrostat_parser::parser::split_options(l) {
+            let (Some(arg), true) = (arg, name.len() >= 3 && "label".starts_with(name.to_lowercase().as_str())) else { continue };
+            let words = split_top_level_words(&arg);
+            let Some(k) = words.first().and_then(|w| w.parse::<usize>().ok()) else { continue };
+            let text = words[1..].iter().map(|w| util::unquote(w)).collect::<Vec<_>>().join(" ");
+            let mut relabel = |g: &mut Graph| {
+                if let Some(layer) = g.layers.get_mut(k.wrapping_sub(1)) {
+                    layer.label = text.clone();
+                }
+                if let Some(o) = g.legend_order.iter_mut().find(|o| o.0 == k) {
+                    o.1 = text.clone();
+                }
+            };
+            relabel(graph);
+            graph.children.iter_mut().for_each(&mut relabel);
         }
     }
     let nums = |s: &str| -> Vec<f64> { s.split(',').next().unwrap_or("").split_whitespace().filter_map(|x| x.parse().ok()).collect() };
@@ -329,22 +349,37 @@ fn plot_layers(ds: &DataSet, st: &Store, spec: &Command, within: Option<&[bool]>
     let list = |name: &str, min: usize| -> Vec<String> { spec.opt(name, min).map(|s| split_top_level_words(&s).into_iter().map(|w| util::unquote(&w)).collect()).unwrap_or_default() };
     let symbols = list("msymbol", 2);
     let patterns = list("lpattern", 3);
-    let mut colours = list("color", 3);
-    for name in ["mcolor", "lcolor", "fcolor"] {
-        if colours.is_empty() {
-            colours = list(name, 3);
-        }
-    }
     // "255 0 0" arrives as three words: regroup RGB triplets
-    let mut grouped: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < colours.len() {
-        if i + 2 < colours.len() && colours[i..i + 3].iter().all(|w| w.parse::<u8>().is_ok()) {
-            grouped.push(colours[i..i + 3].join(" "));
-            i += 3;
-        } else {
-            grouped.push(colours[i].clone());
-            i += 1;
+    let grouped = |colours: Vec<String>| -> Vec<String> {
+        let mut grouped: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < colours.len() {
+            if i + 2 < colours.len() && colours[i..i + 3].iter().all(|w| w.parse::<u8>().is_ok()) {
+                grouped.push(colours[i..i + 3].join(" "));
+                i += 3;
+            } else {
+                grouped.push(colours[i].clone());
+                i += 1;
+            }
+        }
+        grouped
+    };
+    // colour(), then the marker, line and fill colours; `none` fills nothing
+    let lists: Vec<Vec<String>> = ["color", "mcolor", "lcolor", "fcolor"].iter().map(|n| grouped(list(n, 3))).collect();
+    let pick = |v: &Vec<String>, k: usize| v.get(k).or(v.last()).cloned();
+    for (k, l) in layers.iter_mut().enumerate() {
+        let filled = matches!(l.kind, LayerKind::Area | LayerKind::Bar | LayerKind::Range(RangeStyle::Bar) | LayerKind::Range(RangeStyle::Area));
+        l.nofill = filled && [&lists[0], &lists[3]].iter().any(|v| pick(v, k).is_some_and(|c| c.eq_ignore_ascii_case("none")));
+        if let Some(c) = lists.iter().filter_map(|v| pick(v, k)).find(|c| !c.eq_ignore_ascii_case("none")) {
+            // fills take `colour%NN` as opacity; other plots get a lighter colour
+            match c.split_once('%').filter(|_| filled) {
+                Some((base, pct)) => {
+                    l.color = Some(crate::colors::parse(base).ok_or_else(|| rc_err(198, format!("{c}: invalid color")))?);
+                    let a: f64 = pct.trim().parse().map_err(|_| rc_err(198, format!("{c}: invalid color")))?;
+                    l.alpha = (a / 100.0).clamp(0.01, 1.0);
+                }
+                None => l.color = Some(crate::colors::parse(&c).ok_or_else(|| rc_err(198, format!("{c}: invalid color")))?),
+            }
         }
     }
     for (k, l) in layers.iter_mut().enumerate() {
@@ -354,9 +389,6 @@ fn plot_layers(ds: &DataSet, st: &Store, spec: &Command, within: Option<&[bool]>
         }
         if let Some(p) = patterns.get(k).or(patterns.last()) {
             l.pattern = p.clone();
-        }
-        if let Some(c) = grouped.get(k).or(grouped.last()) {
-            l.color = Some(crate::colors::parse(c).ok_or_else(|| rc_err(198, format!("{c}: invalid color")))?);
         }
     }
     Ok(layers)
@@ -895,6 +927,8 @@ impl CommandHandler for Twoway {
     }
 
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
+        // if/in written after all the plots apply to every plot
+        let mut common = String::new();
         let specs: Vec<String> = if cmd.verb == "twoway" || cmd.verb == "tw" {
             let main = cmd.raw.trim();
             let body = main.split_once(char::is_whitespace).map(|x| x.1).unwrap_or("");
@@ -904,17 +938,68 @@ impl CommandHandler for Twoway {
                     Some(i) => (&body[..i], &body[i..]),
                     None => (body, ""),
                 };
-                split_top_level_words(plots).into_iter().map(|p| p.trim().trim_start_matches('(').trim_end_matches(')').to_string()).collect()
+                let (list, rest) = split_paren_plots(plots);
+                common = rest;
+                list
             } else {
-                // a final `|| , options` segment holds graph-wide options only
-                body.split("||").map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && !s.starts_with(',')).collect()
+                // a final `|| , options` segment holds graph-wide options only,
+                // a final `|| if exp in range` segment restricts every plot
+                let mut list: Vec<String> = body.split("||").map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && !s.starts_with(',')).collect();
+                if list.last().is_some_and(|l| l.starts_with("if ") || l.starts_with("in ")) {
+                    let last = list.pop().unwrap();
+                    common = match ferrostat_parser::parser::find_top_level(&last, ',') {
+                        Some(i) => last[..i].to_string(),
+                        None => last,
+                    };
+                }
+                list
             }
         } else {
             vec![cmd.raw.clone()]
         };
-        let specs: Vec<Command> = specs.iter().map(|s| parse_line(s).map_err(|e| rc_err(198, e))).collect::<Result<Vec<_>, _>>()?.into_iter().filter(|c| !c.verb.is_empty()).collect();
+        let mut specs: Vec<Command> = specs.iter().map(|s| parse_line(s).map_err(|e| rc_err(198, e))).collect::<Result<Vec<_>, _>>()?.into_iter().filter(|c| !c.verb.is_empty()).collect();
+        for c in specs.iter_mut() {
+            if let Some(v) = plot_type(&c.verb) {
+                c.verb = v.to_string();
+            }
+        }
+        let common_mask = if common.trim().is_empty() {
+            None
+        } else {
+            let c = parse_line(&format!("twoway {}", common.trim())).map_err(|e| rc_err(198, e))?;
+            if !c.main.trim().is_empty() {
+                return Err(rc_err(198, format!("{}: invalid plot specification", c.main.trim())));
+            }
+            Some(util::touse(ds, st, &c)?)
+        };
+        let both = |w: &[bool]| -> Vec<bool> {
+            match &common_mask {
+                Some(m) => m.iter().zip(w).map(|(a, b)| *a && *b).collect(),
+                None => w.to_vec(),
+            }
+        };
+        // graph-wide options may also be written inside a plot: legend()
+        // contents are merged, the others apply unless given after the comma
+        let mut merged = cmd.clone();
+        for spec in specs.iter().filter(|_| cmd.verb == "twoway" || cmd.verb == "tw") {
+            for (name, arg) in &spec.opts {
+                let n = name.to_lowercase();
+                let is = |full: &str, min: usize| n.len() >= min && full.starts_with(n.as_str());
+                if is("legend", 3) {
+                    let extra = arg.clone().unwrap_or_default();
+                    match merged.opts.iter_mut().find(|(m, _)| { let m = m.to_lowercase(); m.len() >= 3 && "legend".starts_with(m.as_str()) }) {
+                        Some((_, Some(a))) => *a = format!("{a} {extra}"),
+                        Some(_) => {}
+                        None => merged.opts.push((name.clone(), Some(extra))),
+                    }
+                } else if (is("title", 1) && n.len() >= 2 || is("xtitle", 2) || is("ytitle", 2) || is("yline", 5) || is("xline", 5) || is("name", 4) || is("scheme", 3)) && !merged.opts.iter().any(|(m, _)| m.eq_ignore_ascii_case(name)) {
+                    merged.opts.push((name.clone(), arg.clone()));
+                }
+            }
+        }
+        let cmd = &merged;
         let Some(by) = cmd.opt("by", 2) else {
-            let mut graph = twoway_graph(ds, st, &specs, None)?;
+            let mut graph = twoway_graph(ds, st, &specs, common_mask.as_deref())?;
             return finish(&mut graph, cmd, st);
         };
         // by(var [, total rows(#) cols(#)]): one panel per group
@@ -935,13 +1020,17 @@ impl CommandHandler for Twoway {
         levels.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut children = Vec::new();
         for (val, row) in &levels {
-            let within: Vec<bool> = col.iter().map(|c| c == val).collect();
+            let within: Vec<bool> = both(&col.iter().map(|c| c == val).collect::<Vec<_>>());
+            // groups left without observations by if/in get no panel
+            if common_mask.is_some() && !within.iter().any(|b| *b) {
+                continue;
+            }
             let mut g = twoway_graph(ds, st, &specs, Some(&within))?;
             g.title = util::cell_text(ds, v, *row, true);
             children.push(g);
         }
         if byopt.has_opt("total", 3) {
-            let mut g = twoway_graph(ds, st, &specs, None)?;
+            let mut g = twoway_graph(ds, st, &specs, common_mask.as_deref())?;
             g.title = "Total".into();
             children.push(g);
         }
@@ -956,6 +1045,51 @@ impl CommandHandler for Twoway {
         let mut graph = Graph { children, cols: cols.max(1), ..Default::default() };
         finish(&mut graph, cmd, st)
     }
+}
+
+/// Split `(plot) (plot) ... [if exp] [in range]` into the plots and the
+/// trailing text after the last parenthesized plot.
+fn split_paren_plots(s: &str) -> (Vec<String>, String) {
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    let mut plots = Vec::new();
+    let mut k = 0;
+    while k < chars.len() {
+        let (i, c) = chars[k];
+        if c.is_whitespace() {
+            k += 1;
+            continue;
+        }
+        if c != '(' {
+            return (plots, s[i..].to_string());
+        }
+        let (mut depth, mut quote) = (0usize, false);
+        let mut end = s.len();
+        while k < chars.len() {
+            let (j, ch) = chars[k];
+            k += 1;
+            match ch {
+                '"' => quote = !quote,
+                '(' if !quote => depth += 1,
+                ')' if !quote => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = j;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        plots.push(s[i + 1..end].trim().to_string());
+    }
+    (plots, String::new())
+}
+
+/// Full plot-type name for an abbreviation used inside twoway
+/// (`sc`, `scat`, `li`, `conn`, `hist`, `kdens`, ...).
+fn plot_type(v: &str) -> Option<&'static str> {
+    const TYPES: [(&str, usize); 6] = [("scatter", 2), ("line", 2), ("connected", 4), ("histogram", 4), ("kdensity", 5), ("lowess", 4)];
+    TYPES.iter().find(|(n, min)| v.len() >= *min && n.starts_with(v)).map(|(n, _)| *n)
 }
 
 /// One twoway graph from its plot specifications.
@@ -1276,7 +1410,7 @@ impl CommandHandler for GraphCmd {
                     }
                 }
                 let lower = file.to_lowercase();
-                let kind = if lower.ends_with(".svg") { "SVG" } else if lower.ends_with(".pdf") { "PDF" } else if lower.ends_with(".gph") { "gph" } else { "PNG" };
+                let kind = if lower.ends_with(".svg") { "SVG" } else if lower.ends_with(".pdf") { "PDF" } else if lower.ends_with(".gph") { "gph" } else if (lower.ends_with(".eps") || lower.ends_with(".ps")) && cfg!(not(target_arch = "wasm32")) { "EPS" } else { "PNG" };
                 Ok(format!("file {file} written in {kind} format"))
             }
             "twoway" | "tw" => {
@@ -1474,16 +1608,32 @@ impl CommandHandler for GraphCmd {
 }
 
 /// Groups of `over(var)` (label, membership mask), or one unnamed group.
+/// A second over() nests the first within its groups (labels "inner\nouter").
 fn over_groups(ds: &DataSet, c: &Command, mask: &[bool]) -> Result<Vec<(String, Vec<bool>)>, String> {
-    let over = c.opt("over", 2).map(|o| varlist::resolve_name(ds, o.split(',').next().unwrap().trim())).transpose()?;
-    Ok(match &over {
-        Some(o) => {
-            let (ids, reps) = util::group_ids(ds, &[o.clone()], mask);
-            let var = ds.get_var(o).unwrap();
-            reps.iter().enumerate().map(|(g, &r)| (util::cell_text(ds, var, r, true), (0..ds.n_obs).map(|i| ids[i] == g).collect())).collect()
+    let mut overs: Vec<String> = Vec::new();
+    for (name, arg) in &c.opts {
+        let n = name.to_lowercase();
+        if n.len() >= 2 && "over".starts_with(n.as_str()) {
+            if let Some(a) = arg {
+                overs.push(varlist::resolve_name(ds, a.split(',').next().unwrap().trim())?);
+            }
         }
-        None => vec![(String::new(), mask.to_vec())],
-    })
+    }
+    if overs.is_empty() {
+        return Ok(vec![(String::new(), mask.to_vec())]);
+    }
+    // outermost first for grouping
+    overs.reverse();
+    let (ids, reps) = util::group_ids(ds, &overs, mask);
+    let vars: Vec<_> = overs.iter().map(|o| ds.get_var(o).unwrap()).collect();
+    Ok(reps
+        .iter()
+        .enumerate()
+        .map(|(g, &r)| {
+            let label = vars.iter().rev().map(|v| util::cell_text(ds, v, r, true)).collect::<Vec<_>>().join("\n");
+            (label, (0..ds.n_obs).map(|i| ids[i] == g).collect())
+        })
+        .collect())
 }
 
 /// graph bar, graph hbar and graph dot: a statistic (default mean) of each
@@ -1531,7 +1681,7 @@ fn graph_bar(ds: &DataSet, st: &mut Store, kind: &str, rest: &str) -> Result<Str
             let pts: Vec<(f64, f64)> = groups.iter().enumerate().map(|(g, (_, m))| (value(v, m), pos(g))).collect();
             graph.layers.push(layer(LayerKind::Scatter, pts, &format!("{stat} of {v}")));
         }
-        graph.ylabels = groups.iter().enumerate().map(|(g, (n, _))| (pos(g), n.clone())).collect();
+        graph.ylabels = groups.iter().enumerate().map(|(g, (n, _))| (pos(g), n.replace('\n', ", "))).collect();
         graph.guides = (0..ng).map(pos).collect();
     } else {
         let horizontal = kind == "hbar";
@@ -1562,9 +1712,22 @@ fn graph_bar(ds: &DataSet, st: &mut Store, kind: &str, rest: &str) -> Result<Str
             graph.layers.push(l);
         }
         if horizontal {
-            graph.ylabels = labels.iter().map(|(p, n)| (ng as f64 - p, n.clone())).collect();
+            graph.ylabels = labels.iter().map(|(p, n)| (ng as f64 - p, n.replace('\n', ", "))).collect();
         } else {
-            graph.xlabels = labels;
+            // nested over(): inner labels under the bars, each outer label once below its block
+            let mut outer: Vec<(f64, f64, String)> = Vec::new();
+            for (p, n) in &labels {
+                let Some((inner, o)) = n.split_once('\n') else {
+                    graph.xlabels.push((*p, n.clone()));
+                    continue;
+                };
+                graph.xlabels.push((*p, inner.to_string()));
+                match outer.last_mut() {
+                    Some(last) if last.2 == o => last.1 = *p,
+                    _ => outer.push((*p, *p, o.to_string())),
+                }
+            }
+            graph.xlabels.extend(outer.into_iter().map(|(a, b, o)| ((a + b) / 2.0, format!("\n{o}"))));
         }
     }
     graph.legend = vars.len() > 1;
@@ -1580,11 +1743,32 @@ fn graph_pie(ds: &DataSet, st: &mut Store, rest: &str) -> Result<String, String>
     let vars = varlist::expand(ds, &c.main)?;
     let sum = |v: &str, m: &[bool]| -> f64 { util::rows(m).iter().map(|&i| ds.get_var(v).unwrap().num(i)).filter(|x| !is_missing(*x)).sum() };
     let mut slices: Vec<PieSlice> = if c.opt("over", 2).is_some() {
-        let v = vars.first().ok_or_else(|| rc_err(102, "too few variables specified"))?;
-        over_groups(ds, &c, &mask)?.into_iter().map(|(label, m)| PieSlice { label, value: sum(v, &m), explode: false, text: String::new() }).collect()
+        // no variable: slices count the observations in each group
+        over_groups(ds, &c, &mask)?
+            .into_iter()
+            .map(|(label, m)| {
+                let label = label.replace('\n', ", ");
+                let value = match vars.first() {
+                    Some(v) => sum(v, &m),
+                    None => m.iter().filter(|b| **b).count() as f64,
+                };
+                PieSlice { label, value, explode: false, text: String::new() }
+            })
+            .collect()
     } else {
-        vars.iter().map(|v| PieSlice { label: v.clone(), value: sum(v, &mask), explode: false, text: String::new() }).collect()
+        if vars.is_empty() {
+            return Err(rc_err(102, "too few variables specified"));
+        }
+        let lab = |v: &str| ds.get_var(v).map(|x| if x.label.is_empty() { v.to_string() } else { x.label.clone() }).unwrap_or_else(|| v.to_string());
+        vars.iter().map(|v| PieSlice { label: lab(v), value: sum(v, &mask), explode: false, text: String::new() }).collect()
     };
+    // sort: slices from smallest to largest (descending reverses)
+    if c.has_opt("sort", 4) {
+        slices.sort_by(|a, b| a.value.total_cmp(&b.value));
+        if c.has_opt("descending", 4) {
+            slices.reverse();
+        }
+    }
     let total: f64 = slices.iter().map(|s| s.value).sum();
     for (name, arg) in &c.opts {
         let arg = arg.clone().unwrap_or_default();
@@ -1607,7 +1791,8 @@ fn graph_pie(ds: &DataSet, st: &mut Store, rest: &str) -> Result<String, String>
             }
         }
     }
-    let mut graph = Graph { pie: std::mem::take(&mut slices), legend: true, ..Default::default() };
+    let angle0 = util::opt_num(&c, "angle0", 6)?;
+    let mut graph = Graph { pie: std::mem::take(&mut slices), legend: true, pie_angle0: angle0, ..Default::default() };
     finish(&mut graph, &c, st)
 }
 
@@ -1623,7 +1808,8 @@ where
     let (cx, cy) = ((w as i32 - legend_w) as f64 / 2.0, h as f64 / 2.0);
     let total: f64 = g.pie.iter().map(|s| s.value.max(0.0)).sum();
     let pal = palette(&g.scheme);
-    let mut a0 = 0.0f64; // radians clockwise from 12 o'clock
+    // radians clockwise from 12 o'clock; angle0() is counter-clockwise from 3 o'clock
+    let mut a0 = (90.0 - g.pie_angle0.unwrap_or(90.0)).to_radians();
     for (k, s) in g.pie.iter().enumerate() {
         let frac = if total > 0.0 { s.value.max(0.0) / total } else { 0.0 };
         let a1 = a0 + frac * std::f64::consts::TAU;
@@ -1726,7 +1912,7 @@ fn graph_box(ds: &DataSet, st: &mut Store, rest: &str) -> Result<String, String>
         }
         graph.layers.push(l);
     }
-    let labels: Vec<(f64, String)> = groups.iter().enumerate().map(|(g, (n, _))| (if horizontal { ng as f64 - g as f64 - 0.5 } else { g as f64 + 0.5 }, n.clone())).collect();
+    let labels: Vec<(f64, String)> = groups.iter().enumerate().map(|(g, (n, _))| (if horizontal { ng as f64 - g as f64 - 0.5 } else { g as f64 + 0.5 }, n.replace('\n', ", "))).collect();
     if horizontal {
         graph.ylabels = labels;
     } else {
@@ -1783,8 +1969,33 @@ pub fn render_with(g: &Graph, path: &str, w: u32, h: u32, printcolor: &str) -> R
     } else if lower.ends_with(".gph") {
         save_gph(g, path)
     } else {
+        #[cfg(not(target_arch = "wasm32"))]
+        if lower.ends_with(".eps") || lower.ends_with(".ps") {
+            let mut rgb = render_rgb(g, w, h)?;
+            apply_printcolor(&mut rgb, printcolor);
+            return ferrostat_core::vfs::write(path, &eps_with_image(&rgb, w, h)).map_err(|e| rc_err(603, e));
+        }
         render_raster(g, path, w, h, lower.ends_with(".pdf"), printcolor)
     }
+}
+
+/// Encapsulated PostScript holding an RGB image (hex-encoded, 0.6 pt per pixel).
+pub fn eps_with_image(rgb: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let (pw, ph) = ((w as f64 * 0.6).round(), (h as f64 * 0.6).round());
+    let mut s = format!(
+        "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 {pw} {ph}\n%%Pages: 1\n%%EndComments\ngsave\n{pw} {ph} scale\n/DeviceRGB setcolorspace\n<< /ImageType 1 /Width {w} /Height {h} /BitsPerComponent 8 /Decode [0 1 0 1 0 1] /ImageMatrix [{w} 0 0 -{h} 0 {h}] /DataSource currentfile /ASCIIHexDecode filter >> image\n"
+    );
+    s.reserve(rgb.len() * 2 + rgb.len() / 39 + 64);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for chunk in rgb.chunks(39) {
+        for b in chunk {
+            s.push(HEX[(b >> 4) as usize] as char);
+            s.push(HEX[(b & 15) as usize] as char);
+        }
+        s.push('\n');
+    }
+    s.push_str(">\ngrestore\nshowpage\n%%EOF\n");
+    s.into_bytes()
 }
 
 /// The graph as an SVG document.
@@ -1926,7 +2137,8 @@ pub fn save_gph(g: &Graph, path: &str) -> Result<(), String> {
     s.push_str(&format!("title\t{}\nxtitle\t{}\nytitle\t{}\nlegend\t{}\nxformat\t{}\nyformat\t{}\n", g.title, g.xtitle, g.ytitle, g.legend, g.xformat, g.yformat));
     s.push_str(&format!("ylines\t{}\nxlines\t{}\nscheme\t{}\nname\t{}\ncommand\t{}\ncreated\t{}\n", join(&g.ylines), join(&g.xlines), g.scheme, g.name, g.command.replace(['\t', '\n'], " "), g.created));
     for (x, l) in &g.xlabels {
-        s.push_str(&format!("xlabel\t{x}\t{l}\n"));
+        // second-row labels start with a newline, kept as an escape
+        s.push_str(&format!("xlabel\t{x}\t{}\n", l.replace('\n', "\\n")));
     }
     for (y, l) in &g.ylabels {
         s.push_str(&format!("ylabel\t{y}\t{l}\n"));
@@ -1948,7 +2160,7 @@ pub fn save_gph(g: &Graph, path: &str) -> Result<(), String> {
     }
     for l in &g.layers {
         let colour = l.color.map(|(r, g, b)| format!("{r} {g} {b}")).unwrap_or_default();
-        s.push_str(&format!("layer\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", l.kind, l.width, l.label, l.horizontal, l.hollow, l.alpha, l.median_marker, l.symbol, l.pattern, colour));
+        s.push_str(&format!("layer\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", l.kind, l.width, l.label, l.horizontal, l.hollow, l.alpha, l.median_marker, l.symbol, l.pattern, colour, l.nofill));
         if !l.sizes.is_empty() {
             s.push_str(&format!("s\t{}\n", join(&l.sizes)));
         }
@@ -2001,7 +2213,7 @@ pub fn load_gph(path: &str) -> Result<Graph, String> {
             "legend" => g.legend = f.get(1) == Some(&"true"),
             "ylines" => g.ylines = nums(f.get(1).unwrap_or(&"")),
             "xlines" => g.xlines = nums(f.get(1).unwrap_or(&"")),
-            "xlabel" => g.xlabels.push((f[1].parse().unwrap_or(0.0), f.get(2).unwrap_or(&"").to_string())),
+            "xlabel" => g.xlabels.push((f[1].parse().unwrap_or(0.0), f.get(2).unwrap_or(&"").replace("\\n", "\n"))),
             "ylabel" => g.ylabels.push((f[1].parse().unwrap_or(0.0), f.get(2).unwrap_or(&"").to_string())),
             "guides" => g.guides = nums(f.get(1).unwrap_or(&"")),
             "ckey" => g.color_legend.push((f.get(1).unwrap_or(&"").to_string(), f.get(2).and_then(|c| crate::colors::parse(c)).unwrap_or((0, 0, 0)))),
@@ -2041,6 +2253,7 @@ pub fn load_gph(path: &str) -> Result<Graph, String> {
                     symbol: f.get(8).unwrap_or(&"").to_string(),
                     pattern: f.get(9).unwrap_or(&"").to_string(),
                     color: f.get(10).and_then(|c| crate::colors::parse(c)),
+                    nofill: f.get(11) == Some(&"true"),
                     ..Default::default()
                 });
             }
@@ -2331,9 +2544,10 @@ fn range_half_width(l: &Layer, style: RangeStyle) -> f64 {
     match style {
         RangeStyle::Bar => l.width / 2.0,
         RangeStyle::Cap | RangeStyle::PointCap => {
-            // a quarter of the smallest gap between x values
+            // a quarter of the smallest gap between x values; a width below 1 caps it (coefplot)
             let gap = l.ranges.windows(2).map(|w| w[1].0 - w[0].0).filter(|d| *d > 0.0).fold(f64::INFINITY, f64::min);
-            if gap.is_finite() { gap / 4.0 } else { 0.25 }
+            let hw = if gap.is_finite() { gap / 4.0 } else { 0.25 };
+            if l.width > 0.0 && l.width < 1.0 { hw.min(l.width / 2.0) } else { hw }
         }
         _ => 0.0,
     }
@@ -2515,7 +2729,12 @@ where
         let (bx, by) = root.get_base_pixel();
         for (x, s) in &g.xlabels {
             let (px, py) = chart.backend_coord(&(*x, yr.start));
-            root.draw(&Text::new(s.clone(), (px - bx, py - by + 8), font.clone().pos(Pos::new(HPos::Center, VPos::Top)))).map_err(e)?;
+            // a leading newline puts the label on a second row (nested categories)
+            let (s, dy) = match s.strip_prefix('\n') {
+                Some(t) => (t.to_string(), 26),
+                None => (s.clone(), 8),
+            };
+            root.draw(&Text::new(s, (px - bx, py - by + dy), font.clone().pos(Pos::new(HPos::Center, VPos::Top)))).map_err(e)?;
         }
         for (y, s) in &g.ylabels {
             let (px, py) = chart.backend_coord(&(xr.start, *y));
@@ -2552,7 +2771,8 @@ where
             }
             LayerKind::Area => {
                 // opaque fills drawn in order: later series cover earlier ones
-                chart.draw_series(AreaSeries::new(l.points.clone(), 0.0, col.filled()).border_style(col)).map_err(e)?.legend_if(&label, move |(x, y)| Rectangle::new([(x, y - 5), (x + 20, y + 5)], col.filled()));
+                let fill = if l.nofill { col.mix(0.0).filled() } else if l.alpha > 0.0 { col.mix(l.alpha).filled() } else { col.filled() };
+                chart.draw_series(AreaSeries::new(l.points.clone(), 0.0, fill).border_style(col)).map_err(e)?.legend_if(&label, move |(x, y)| Rectangle::new([(x, y - 5), (x + 20, y + 5)], col.filled()));
             }
             LayerKind::Bar => {
                 let hw = l.width / 2.0 * 0.95;
@@ -2564,8 +2784,11 @@ where
                 let fill = if l.alpha > 0.0 { col.mix(l.alpha).filled() } else { col.filled() };
                 let rect_legend = move |(x, y): (i32, i32)| Rectangle::new([(x, y - 5), (x + 20, y + 5)], fill);
                 match style {
+                    RangeStyle::Bar if l.nofill => {
+                        chart.draw_series(l.ranges.iter().map(|&(x, y1, y2)| Rectangle::new([p(x - hw, y1), p(x + hw, y2)], col.stroke_width(1)))).map_err(e)?.legend_if(&label, move |(x, y)| Rectangle::new([(x, y - 5), (x + 20, y + 5)], col.stroke_width(1)));
+                    }
                     RangeStyle::Bar => {
-                        chart.draw_series(l.ranges.iter().map(|&(x, y1, y2)| Rectangle::new([p(x - hw, y1), p(x + hw, y2)], col.filled()))).map_err(e)?.legend_if(&label, rect_legend);
+                        chart.draw_series(l.ranges.iter().map(|&(x, y1, y2)| Rectangle::new([p(x - hw, y1), p(x + hw, y2)], fill))).map_err(e)?.legend_if(&label, rect_legend);
                         // thin outline keeps adjacent bars apart
                         chart.draw_series(l.ranges.iter().map(|&(x, y1, y2)| Rectangle::new([p(x - hw, y1), p(x + hw, y2)], WHITE.stroke_width(1)))).map_err(e)?;
                         // blabel(): the value at the end of each bar

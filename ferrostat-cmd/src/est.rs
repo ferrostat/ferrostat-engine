@@ -444,10 +444,21 @@ pub enum Vce {
 }
 
 pub fn parse_vce(cmd: &Command, default: Vce) -> Result<Vce, String> {
+    parse_vce_with(cmd, default, false)
+}
+
+/// `parse_vce` for estimators that also compute `vce(hc2)` / `vce(hc3)`
+/// (see `hc_power`); everywhere else those are rejected.
+pub fn parse_vce_hc(cmd: &Command, default: Vce) -> Result<Vce, String> {
+    parse_vce_with(cmd, default, true)
+}
+
+fn parse_vce_with(cmd: &Command, default: Vce, hc: bool) -> Result<Vce, String> {
     if let Some(v) = cmd.opt("vce", 3) {
         let w: Vec<&str> = v.split_whitespace().collect();
         return match w.first().map(|s| s.to_lowercase()).as_deref() {
             Some("robust") | Some("r") | Some("hc1") => Ok(Vce::Robust),
+            Some("hc2") | Some("hc3") if hc => Ok(Vce::Robust),
             Some("cluster") | Some("cl") => Ok(Vce::Cluster(w.get(1).ok_or_else(|| rc_err(198, "vce(cluster clustvar) requires a variable"))?.to_string())),
             Some("ols") => Ok(Vce::Ols),
             Some("oim") | Some("opg") => Ok(Vce::Oim),
@@ -462,6 +473,55 @@ pub fn parse_vce(cmd: &Command, default: Vce) -> Result<Vce, String> {
         return Ok(Vce::Cluster(c.trim().to_string()));
     }
     Ok(default)
+}
+
+/// `vce(hc2)` / `vce(hc3)`: the leverage power of the requested
+/// heteroskedasticity-consistent estimator (1 or 2), None otherwise.
+pub fn hc_power(cmd: &Command) -> Option<i32> {
+    match cmd.opt("vce", 3)?.split_whitespace().next()?.to_lowercase().as_str() {
+        "hc2" => Some(1),
+        "hc3" => Some(2),
+        _ => None,
+    }
+}
+
+/// HC2/HC3 variance of an OLS fit: squared residuals scaled by
+/// 1/(1-h)^power, where h is the leverage of the observation.
+pub fn hc_vce(d: &Design, fit: &OlsFit, power: i32) -> Matrix {
+    let act = d.active();
+    let ka = act.len();
+    let mut a = Matrix::zeros(ka, ka);
+    for (p, &i) in act.iter().enumerate() {
+        for (q, &j) in act.iter().enumerate() {
+            a[(p, q)] = fit.xtx_inv[(i, j)];
+        }
+    }
+    let mut meat = Matrix::zeros(ka, ka);
+    let mut x = vec![0.0; ka];
+    for t in 0..d.n() {
+        for (p, &j) in act.iter().enumerate() {
+            x[p] = d.cols[j][t];
+        }
+        let mut h = 0.0;
+        for p in 0..ka {
+            for q in 0..ka {
+                h += x[p] * a[(p, q)] * x[q];
+            }
+        }
+        h *= d.w[t];
+        let u = d.w[t] * fit.resid[t];
+        let f = u * u / (1.0 - h).max(1e-300).powi(power);
+        for p in 0..ka {
+            if x[p] == 0.0 {
+                continue;
+            }
+            for q in 0..ka {
+                meat[(p, q)] += f * x[p] * x[q];
+            }
+        }
+    }
+    let v = a.mul(&meat).unwrap().mul(&a).unwrap();
+    expand_v(&v, &act, d.k())
 }
 
 /// Sandwich estimator: V = A (sum over clusters of s_g s_g') A * scale.
@@ -692,8 +752,89 @@ fn cell(v: f64) -> String {
     fmt_g(v, 8)
 }
 
+thread_local! {
+    /// Last coefficient table displayed by a command, picked up by the
+    /// engine and returned as r(table) together with r(level).
+    static LAST_TABLE: std::cell::RefCell<Option<(Matrix, f64)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Remember a results table to be returned in r(table).
+pub fn stash_table(m: Matrix, level: f64) {
+    LAST_TABLE.with(|t| *t.borrow_mut() = Some((m, level)));
+}
+
+/// Take the table stashed by the last display (clears it).
+pub fn take_table() -> Option<(Matrix, f64)> {
+    LAST_TABLE.with(|t| t.borrow_mut().take())
+}
+
+/// The r(table) matrix of a coefficient table: rows b, se, t|z, pvalue, ll,
+/// ul, df, crit, eform; one column per coefficient (base levels included).
+pub fn table_matrix(s: &TableSpec) -> Matrix {
+    let k = s.names.len();
+    let mut m = Matrix::zeros(9, k);
+    let crit = match s.df {
+        Some(df) => dist::invttail(df, (1.0 - s.level / 100.0) / 2.0),
+        None => dist::invnormal(1.0 - (1.0 - s.level / 100.0) / 2.0),
+    };
+    for j in 0..k {
+        let b = s.b[j];
+        let se = s.v[(j, j)].max(0.0).sqrt();
+        let fixed = s.is_base[j] || s.omitted[j] || se == 0.0 || !se.is_finite();
+        let col = if fixed {
+            let b0 = if s.eform.is_some() { 1.0 } else { 0.0 };
+            [if s.is_base[j] || s.omitted[j] { b0 } else if s.eform.is_some() { b.exp() } else { b }, SYSMISS, SYSMISS, SYSMISS, SYSMISS, SYSMISS]
+        } else {
+            let t = b / se;
+            let p = match s.df {
+                Some(df) => 2.0 * dist::ttail(df, t.abs()),
+                None => 2.0 * dist::normal(-t.abs()),
+            };
+            if s.eform.is_some() {
+                [b.exp(), b.exp() * se, t, p, (b - crit * se).exp(), (b + crit * se).exp()]
+            } else {
+                [b, se, t, p, b - crit * se, b + crit * se]
+            }
+        };
+        for (r, x) in col.iter().enumerate() {
+            m[(r, j)] = *x;
+        }
+        m[(6, j)] = s.df.unwrap_or(SYSMISS);
+        m[(7, j)] = crit;
+        m[(8, j)] = if s.eform.is_some() { 1.0 } else { 0.0 };
+    }
+    let stat = if s.df.is_some() { "t" } else { "z" };
+    let rows = ["b", "se", stat, "pvalue", "ll", "ul", "df", "crit", "eform"].iter().map(|x| x.to_string()).collect();
+    m.with_names(rows, s.names.to_vec())
+}
+
+/// Stash r(table) for stored estimates being replayed (from e(b) and e(V)).
+pub fn stash_table_from_e(e: &Results, level: f64) {
+    let (Some(b), Some(v)) = (e.matrices.get("b"), e.matrices.get("V")) else { return };
+    let k = b.cols;
+    let is_base: Vec<bool> = b.colnames.iter().map(|c| c.rsplit(':').next().unwrap_or(c).split('#').all(|p| p.split_once('.').is_some_and(|(l, _)| l.ends_with('b') && l.trim_end_matches('b').parse::<f64>().is_ok()))).collect();
+    let omitted: Vec<bool> = b.colnames.iter().map(|c| c.rsplit(':').next().unwrap_or(c).split('#').any(|p| p.starts_with("o.") || p.split_once('.').is_some_and(|(l, _)| l.ends_with('o') && l.trim_end_matches(['o', 'b']).parse::<f64>().is_ok()))).collect();
+    let cmd = e.macros.get("cmd").map(String::as_str).unwrap_or("");
+    let normal = matches!(cmd, "logit" | "logistic" | "probit" | "poisson" | "nbreg" | "mlogit" | "ologit" | "oprobit" | "tobit" | "glm" | "cloglog" | "ivregress" | "xtivreg")
+        || e.macros.get("model").is_some_and(|m| m == "re");
+    let spec = TableSpec {
+        depvar: "",
+        names: &b.colnames,
+        b: &b.data[..k],
+        v,
+        omitted: &omitted,
+        is_base: &is_base,
+        df: if normal { None } else { e.get("df_r") },
+        level,
+        eform: None,
+        coef_title: "Coefficient",
+    };
+    stash_table(table_matrix(&spec), level);
+}
+
 /// Coefficient table.
 pub fn coef_table(s: &TableSpec) -> Vec<String> {
+    stash_table(table_matrix(s), s.level);
     let stat = if s.df.is_some() { "t" } else { "z" };
     // label column: at least 12, widened for long names (max 32)
     let mut lw = 12usize.max(s.depvar.chars().count().min(32));
@@ -789,7 +930,7 @@ pub fn coef_table(s: &TableSpec) -> Vec<String> {
 
 /// Row label and optional group header for a coefficient name:
 /// "2.g" -> ("2", "g"); "L.x" -> ("L1.", "x"); "2.g#c.x" -> ("2#c.x", "g#c.x").
-fn display_name(n: &str) -> (String, Option<String>) {
+pub(crate) fn display_name(n: &str) -> (String, Option<String>) {
     let clean = |s: &str| s.trim_end_matches(['b', 'o', 'n']).to_string();
     let n = n.strip_prefix("o.").unwrap_or(n);
     if n.contains('#') {

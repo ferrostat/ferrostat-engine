@@ -49,6 +49,7 @@ pub fn replay(st: &Store, cmd: &str) -> Result<String, String> {
     if e.macros.get("cmd").map(String::as_str) != Some(cmd) {
         return Err(rc_err(301, "last estimates not found"));
     }
+    est::stash_table_from_e(e, st.level);
     Ok(e.macros.get("_output").cloned().unwrap_or_default())
 }
 
@@ -69,7 +70,7 @@ impl CommandHandler for Regress {
         }
         let (dep, indep) = split_dep(&cmd.main)?;
         let dep = resolve_dep(ds, &dep)?;
-        let vce = est::parse_vce(cmd, Vce::Ols)?;
+        let vce = est::parse_vce_hc(cmd, Vce::Ols)?;
         let mut extra = Vec::new();
         if let Vce::Cluster(c) = &vce {
             extra.push(c.clone());
@@ -78,7 +79,11 @@ impl CommandHandler for Regress {
         let vce = if d.wkind == Some(WeightKind::P) && vce == Vce::Ols { Vce::Robust } else { vce };
         let cl = est::cluster_values(ds, &d, &vce)?;
         d.cluster = cl.clone();
-        let fit = est::ols(&d, &vce, cl.as_deref())?;
+        let mut fit = est::ols(&d, &vce, cl.as_deref())?;
+        let hc = if cl.is_none() { est::hc_power(cmd) } else { None };
+        if let Some(pw) = hc {
+            fit.v = est::hc_vce(&d, &fit, pw);
+        }
         let level = util::level(cmd, st)?;
         let n = d.n_eff();
         let r2 = 1.0 - fit.rss / fit.tss;
@@ -108,11 +113,13 @@ impl CommandHandler for Regress {
             }
         } else {
             out.push(format!("      Source |       SS           df       MS      Number of obs   = {:>9}", g10(n)));
-            out.push(format!("-------------+----------------------------------   F({}, {}){} = {:>9}", fit.df_m, fit.df_r, " ".repeat(8usize.saturating_sub(format!("{}{}", fit.df_m, fit.df_r).len())), f2(f)));
-            out.push(format!("       Model | {:>11} {:>9} {:>11}   Prob > F        = {:>9}", g10(mss), fit.df_m, g10(mss / fit.df_m), f4(pf)));
-            out.push(format!("    Residual | {:>11} {:>9} {:>11}   R-squared       = {:>9}", g10(fit.rss), fit.df_r, g10(fit.rss / fit.df_r), f4(r2)));
+            out.push(format!("-------------+----------------------------------   {:<16}= {:>9}", format!("F({}, {})", fit.df_m, fit.df_r), f2(f)));
+            // sums of squares and mean squares get ten characters (`%10.0g`)
+            let ss = |v: f64| fmt_g(v, 10);
+            out.push(format!("       Model | {:>11} {:>9} {:>11}   Prob > F        = {:>9}", ss(mss), fit.df_m, ss(mss / fit.df_m), f4(pf)));
+            out.push(format!("    Residual | {:>11} {:>9} {:>11}   R-squared       = {:>9}", ss(fit.rss), fit.df_r, ss(fit.rss / fit.df_r), f4(r2)));
             out.push(format!("-------------+----------------------------------   Adj R-squared   = {:>9}", f4(adj)));
-            out.push(format!("       Total | {:>11} {:>9} {:>11}   Root MSE        = {:>9}", g10(fit.tss), n - 1.0, g10(fit.tss / (n - 1.0)), g10(rmse)));
+            out.push(format!("       Total | {:>11} {:>9} {:>11}   Root MSE        = {:>9}", ss(fit.tss), n - 1.0, ss(fit.tss / (n - 1.0)), rmse4(rmse)));
         }
         out.push(String::new());
         out.extend(est::coef_table(&est::TableSpec {
@@ -152,6 +159,10 @@ impl CommandHandler for Regress {
             e.set_str("vce", if robust { vcetype } else { "ols" });
             if !vcelabel.is_empty() {
                 e.set_str("vcetype", vcelabel);
+            }
+            if let Some(pw) = hc {
+                e.set_str("vce", format!("hc{}", pw + 1));
+                e.set_str("vcetype", format!("Robust HC{}", pw + 1));
             }
             if let Vce::Cluster(c) = &vce {
                 e.set_str("clustvar", c.clone());

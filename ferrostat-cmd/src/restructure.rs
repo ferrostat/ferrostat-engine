@@ -358,28 +358,202 @@ impl CommandHandler for Reshape {
     }
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         let mut w = cmd.main.split_whitespace();
-        let dir = w.next().ok_or_else(|| rc_err(198, "long or wide required"))?.to_lowercase();
-        let stubs: Vec<String> = w.map(String::from).collect();
-        let i_vars = varlist::expand(ds, cmd.opt("i", 1).ok_or_else(|| rc_err(198, "option i() required"))?)?;
-        let jspec = cmd.opt("j", 1).map(|s| s.trim().to_string()).unwrap_or_else(|| "_j".into());
-        let mut jparts = jspec.split_whitespace();
-        let jname = jparts.next().unwrap().to_string();
-        let jvalues: Vec<String> = jparts.map(String::from).collect();
-        let is_string = cmd.has_opt("string", 3);
-        let out = match dir.as_str() {
-            "long" => reshape_long(ds, &stubs, &i_vars, &jname, &jvalues, is_string)?,
-            "wide" => reshape_wide(ds, &stubs, &i_vars, &jname)?,
-            _ => return Err(rc_err(198, format!("reshape {dir} invalid"))),
+        let Some(dir) = w.next().map(|s| s.to_lowercase()) else {
+            return Ok(reshape_query(ds));
         };
+        match dir.as_str() {
+            "long" | "wide" => {}
+            "clear" => {
+                if let Some(c) = ds.characteristics.get_mut("_dta") {
+                    c.retain(|k, _| !k.starts_with("ReS_"));
+                }
+                return Ok(String::new());
+            }
+            "query" => return Ok(reshape_query(ds)),
+            "error" => return reshape_error(ds),
+            _ => return Err(rc_err(198, format!("reshape {dir} invalid"))),
+        }
+        let mut stubs: Vec<String> = w.map(String::from).collect();
+        // Settings not given on the command line come from the ones the last
+        // reshape stored with the data.
+        let mem = |k: &str| ds.characteristics.get("_dta").and_then(|c| c.get(k)).cloned().unwrap_or_default();
+        let from_mem = stubs.is_empty();
+        if from_mem {
+            stubs = mem("ReS_Xij").split_whitespace().map(String::from).collect();
+            if stubs.is_empty() {
+                return Err(rc_err(198, "no xij variables specified and none remembered from a previous reshape"));
+            }
+        }
+        let ispec = match cmd.opt("i", 1) {
+            Some(s) => s.to_string(),
+            None if !mem("ReS_i").is_empty() => mem("ReS_i"),
+            None => return Err(rc_err(198, "option i() required")),
+        };
+        let i_vars = varlist::expand(ds, &ispec)?;
+        let jspec = match cmd.opt("j", 1) {
+            Some(s) => s.trim().to_string(),
+            None if from_mem && !mem("ReS_j").is_empty() => mem("ReS_j"),
+            None => "_j".into(),
+        };
+        let mut jparts = jspec.split_whitespace();
+        let jname = jparts.next().unwrap_or("_j").to_string();
+        let mut jvalues: Vec<String> = jparts.map(String::from).collect();
+        if from_mem && cmd.opt("j", 1).is_none() && dir == "long" {
+            jvalues = mem("ReS_jv").split_whitespace().map(String::from).collect();
+        }
+        let is_string = cmd.has_opt("string", 3) || (from_mem && mem("ReS_str") == "1");
+        // remember the settings before converting, so `reshape error` can
+        // inspect a failed attempt
+        {
+            let c = ds.characteristics.entry("_dta".into()).or_default();
+            c.insert("ReS_ver".into(), "v.2".into());
+            c.insert("ReS_i".into(), i_vars.join(" "));
+            c.insert("ReS_j".into(), jname.clone());
+            c.insert("ReS_Xij".into(), stubs.join(" "));
+            c.insert("ReS_str".into(), if is_string { "1" } else { "0" }.into());
+            c.insert("ReS_try".into(), dir.clone());
+        }
         let before = (ds.n_obs, ds.n_vars());
+        let (mut out, js) = match dir.as_str() {
+            "long" => reshape_long(ds, &stubs, &i_vars, &jname, &jvalues, is_string)?,
+            _ => reshape_wide(ds, &stubs, &i_vars, &jname)?,
+        };
+        // wide-form names of each stub, for the summary
+        let xij: Vec<(String, Vec<String>)> = stubs
+            .iter()
+            .map(|s| {
+                let src = if dir == "long" { &*ds } else { &out };
+                let names = js.iter().map(|j| stub_var(s, &j.replace(['-', '.'], "_"))).filter(|n| src.get_var(n).is_some()).collect();
+                (stub_name(s), names)
+            })
+            .collect();
+        out.characteristics = ds.characteristics.clone();
+        out.characteristics.retain(|k, _| k == "_dta" || out.var_index.contains_key(k));
+        {
+            let c = out.characteristics.entry("_dta".into()).or_default();
+            c.insert("ReS_jv".into(), js.join(" "));
+            c.insert("ReS_cur".into(), dir.clone());
+            c.remove("ReS_try");
+        }
         *ds = out;
         st.data_changed = true;
-        Ok(format!(
-            "(j = {})\n\nData                               {:>8}   ->   {}\n{}\nNumber of observations     {:>16}   ->   {}\nNumber of variables        {:>16}   ->   {}",
-            jname, if dir == "long" { "Wide" } else { "Long" }, if dir == "long" { "Long" } else { "Wide" },
-            "-".repeat(70), before.0, ds.n_obs, before.1, ds.n_vars()
-        ))
+        let row = |label: &str, a: &str, b: &str| format!("{label:<27}{a:>12}   ->   {b}");
+        let abbrev = |v: &[String], max: usize| {
+            let all = v.join(" ");
+            if all.len() > max && v.len() > 3 { format!("{} {} ... {}", v[0], v[1], v[v.len() - 1]) } else { all }
+        };
+        let mut s = format!("(j = {})\n\n", js.join(" "));
+        s += &format!("{:<35}{:<7}->   {}\n", "Data", if dir == "long" { "Wide" } else { "Long" }, if dir == "long" { "Long" } else { "Wide" });
+        s += &"-".repeat(77);
+        s += "\n";
+        s += &row("Number of observations", &util::commas(before.0), &util::commas(ds.n_obs));
+        s += "\n";
+        s += &row("Number of variables", &util::commas(before.1), &util::commas(ds.n_vars()));
+        s += "\n";
+        let jl = format!("j variable ({} values)", js.len());
+        if dir == "long" {
+            s += &row(&jl, "", &jname);
+        } else {
+            s += &row(&jl, &jname, "(dropped)");
+        }
+        s += "\nxij variables:\n";
+        for (long, wide) in &xij {
+            if dir == "long" {
+                s += &format!("{:>39}   ->   {long}\n", abbrev(wide, 36));
+            } else {
+                s += &format!("{long:>39}   ->   {}\n", abbrev(wide, 30));
+            }
+        }
+        s += &"-".repeat(77);
+        Ok(s.lines().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n"))
     }
+}
+
+/// `reshape` without arguments: describe the remembered settings.
+fn reshape_query(ds: &DataSet) -> String {
+    let c = ds.characteristics.get("_dta");
+    let get = |k: &str| c.and_then(|c| c.get(k)).cloned().unwrap_or_default();
+    if get("ReS_Xij").is_empty() {
+        return "(no reshape settings are stored with the data)\n\n\
+                If the data are wide, type\n    reshape long stubs, i(ivars) j(jvar)\n\
+                If the data are long, type\n    reshape wide stubs, i(ivars) j(jvar)"
+            .into();
+    }
+    let cur = get("ReS_cur");
+    let mut s = String::new();
+    if !cur.is_empty() {
+        s += &format!("  (data are {cur})\n\n");
+    }
+    s += &format!("  i variable(s):   {}\n", get("ReS_i"));
+    let jv = get("ReS_jv");
+    s += &format!("  j variable:      {}{}{}\n", get("ReS_j"), if jv.is_empty() { "" } else { "   values: " }, jv);
+    s += &format!("  xij variables:   {}", get("ReS_Xij"));
+    if get("ReS_str") == "1" {
+        s += "\n  (j is string)";
+    }
+    if !cur.is_empty() {
+        let other = if cur == "long" { "wide" } else { "long" };
+        s += &format!("\n\nType `reshape {other}' to convert the data back to {other} form.");
+    }
+    s
+}
+
+/// `reshape error`: list the observations that made the last attempt fail.
+fn reshape_error(ds: &DataSet) -> Result<String, String> {
+    let c = ds.characteristics.get("_dta");
+    let get = |k: &str| c.and_then(|c| c.get(k)).cloned().unwrap_or_default();
+    if get("ReS_Xij").is_empty() {
+        return Err(rc_err(198, "no reshape settings are stored with the data"));
+    }
+    let i_vars: Vec<String> = get("ReS_i").split_whitespace().map(String::from).collect();
+    for v in &i_vars {
+        if ds.get_var(v).is_none() {
+            return Err(rc_err(111, format!("variable {v} not found")));
+        }
+    }
+    let jname = get("ReS_j");
+    let to_wide = get("ReS_try") == "wide" || (get("ReS_try").is_empty() && ds.get_var(&jname).is_some());
+    let mut key_vars = i_vars.clone();
+    if to_wide {
+        if ds.get_var(&jname).is_none() {
+            return Err(rc_err(111, format!("variable {jname} not found")));
+        }
+        key_vars.push(jname.clone());
+    }
+    let key = |r: usize| -> Vec<String> { key_vars.iter().map(|v| val_key(&ds.get_var(v).unwrap().data[r])).collect() };
+    let mut counts: HashMap<Vec<String>, usize> = HashMap::new();
+    for r in 0..ds.n_obs {
+        *counts.entry(key(r)).or_default() += 1;
+    }
+    let bad: Vec<usize> = (0..ds.n_obs).filter(|&r| counts[&key(r)] > 1).collect();
+    let what = if to_wide { format!("{} {jname}", i_vars.join(" ")) } else { i_vars.join(" ") };
+    if bad.is_empty() {
+        return Ok(format!("{what} uniquely identify the observations; there is no error to report"));
+    }
+    let mut s = format!(
+        "({} of {} observations have duplicate {} values)\n\n{:>8}",
+        util::commas(bad.len()),
+        util::commas(ds.n_obs),
+        if to_wide { "i-j" } else { "i" },
+        "obs"
+    );
+    for v in &key_vars {
+        s += &format!("  {v:>12}");
+    }
+    let mut bad = bad;
+    bad.sort_by_key(|&r| key(r));
+    for r in bad {
+        s += &format!("\n{:>8}", r + 1);
+        for v in &key_vars {
+            let x = &ds.get_var(v).unwrap().data[r];
+            let t = match x {
+                Value::Str(t) => t.clone(),
+                x => crate::format::display_number(x.num()),
+            };
+            s += &format!("  {t:>12}");
+        }
+    }
+    Ok(s)
 }
 
 fn stub_parts(stub: &str, name: &str) -> Option<String> {
@@ -402,7 +576,7 @@ fn stub_var(stub: &str, j: &str) -> String {
     if stub.contains('@') { stub.replace('@', j) } else { format!("{stub}{j}") }
 }
 
-fn reshape_long(ds: &DataSet, stubs: &[String], i_vars: &[String], jname: &str, jvals: &[String], is_string: bool) -> Result<DataSet, String> {
+fn reshape_long(ds: &DataSet, stubs: &[String], i_vars: &[String], jname: &str, jvals: &[String], is_string: bool) -> Result<(DataSet, Vec<String>), String> {
     // collect j values
     let mut js: Vec<String> = Vec::new();
     let mut stub_cols: Vec<String> = Vec::new();
@@ -531,10 +705,10 @@ fn reshape_long(ds: &DataSet, stubs: &[String], i_vars: &[String], jname: &str, 
     let mut sb = i_vars.to_vec();
     sb.push(jname.to_string());
     out.sort_by = sb;
-    Ok(out)
+    Ok((out, js))
 }
 
-fn reshape_wide(ds: &DataSet, stubs: &[String], i_vars: &[String], jname: &str) -> Result<DataSet, String> {
+fn reshape_wide(ds: &DataSet, stubs: &[String], i_vars: &[String], jname: &str) -> Result<(DataSet, Vec<String>), String> {
     let jv = ds.get_var(jname).ok_or_else(|| rc_err(111, format!("variable {jname} not found")))?;
     let is_string = jv.var_type.is_string();
     let jtext = |r: usize| -> String {
@@ -593,7 +767,7 @@ fn reshape_wide(ds: &DataSet, stubs: &[String], i_vars: &[String], jname: &str) 
     }
     let _ = is_string;
     out.sort_by = i_vars.to_vec();
-    Ok(out)
+    Ok((out, js.into_iter().map(|(_, t)| t).collect()))
 }
 
 // ---- append / merge -------------------------------------------------------------

@@ -53,24 +53,27 @@ Ferrostat runs existing analysis scripts unchanged: it reads and writes `.dta` f
 - `#delimit ;`, `///` continuation, `//` and `/* */` comments, `do`/`run`/`include`, `log using`, `set rmsg on`
 
 ### Expressions
-Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with missing yields missing, and logical tests follow the usual rules (`x > 5` is true for missing `x`). Around 200 functions: mathematics, distributions (`normal`, `invnormal`, `t`/`ttail`, `chi2`/`chi2tail`, `F`/`Ftail`, `binomial`, `poisson`, `gammap`, `ibeta`, inverses), random numbers (`runiform`, `rnormal`, … with `set seed`), strings (`substr`, `strpos`, `subinstr`, `regexm`, `ustrregexra`, `word`, `strtrim`, …), dates (`mdy`, `date`, `clock`, `year`, `dofm`, `%td`/`%tc`/`%tm`/`%tq` formats), programming (`cond`, `inlist`, `inrange`, `missing`, running `sum()`).
+Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with missing yields missing, and logical tests follow the usual rules (`x > 5` is true for missing `x`). Around 200 functions: mathematics, distributions (`normal`, `invnormal`, `t`/`ttail`, `chi2`/`chi2tail`, `F`/`Ftail`, `binomial`, `poisson`, `gammap`, `ibeta`, inverses), random numbers (`runiform`, `rnormal`, … with `set seed`), strings (`substr`, `strpos`, `subinstr`, `regexm`, `ustrregexra`, `word`, `strtrim`, …), dates (`mdy`, `date`, `clock`, `year`, `dofm`, `age`, `datediff`, `birthday`, `%td`/`%tc`/`%tm`/`%tq` formats), programming (`cond`, `inlist`, `inrange`, `missing`, running `sum()`).
 
 ### Data management
-`generate`/`replace` (storage types, sequential evaluation), `egen` (~35 functions), `drop`/`keep`, `rename` (groups, wildcards, `lower`/`upper`), `order`, `sort`/`gsort`, `label` (define/values/variable/data/list), `encode`/`decode`, `destring`/`tostring`, `recode`, `mvencode`/`mvdecode`, `split`, `format`, `compress`, `recast`, `collapse` (all statistics), `contract`, `expand`, `fillin`, `reshape long|wide` (numeric and string `j`), `merge 1:1|m:1|1:m|m:m` (with `keep()`, `keepusing()`, `update`, `replace`, `assert()`), `append`, `joinby`, `cross`, `xpose`, `sample`, `duplicates`, `isid`, `levelsof`, `preserve`/`restore`, `input`, `set obs`, `tsset`/`xtset`.
+`generate`/`replace` (storage types, sequential evaluation), `egen` (~35 functions), `drop`/`keep`, `rename` (groups, wildcards, `lower`/`upper`), `clonevar`, `browse`/`edit` (no-ops in batch mode), `order`, `sort`/`gsort`, `label` (define/values/variable/data/list), `encode`/`decode`, `destring`/`tostring`, `recode`, `mvencode`/`mvdecode`, `split`, `format`, `compress`, `recast`, `collapse` (all statistics), `contract`, `expand`, `fillin`, `reshape long|wide` (numeric and string `j`), `merge 1:1|m:1|1:m|m:m` (with `keep()`, `keepusing()`, `update`, `replace`, `assert()`), `append`, `joinby`, `cross`, `xpose`, `sample`, `duplicates`, `isid`, `levelsof`, `preserve`/`restore`, `input`, `set obs`, `tsset`/`xtset`; frames: `frame create|change|copy|put|drop|rename|dir|reset`, `frame name: cmd`, `cwf`/`pwf`, `frlink`, `frget`, `frval()`.
 
 ### Statistics
 | Area | Commands |
 |------|----------|
-| Descriptive | `summarize` (incl. `detail`, weights), `tabulate` (one/two-way, `chi2`, `lrchi2`, `exact`, `V`, `gamma`, `taub`, `generate()`), `tab1`, `tab2`, `tabstat`, `correlate`, `pwcorr`, `spearman`, `centile`, `mean`, `ci`, `codebook`, `misstable` |
+| Descriptive | `summarize` (incl. `detail`, weights), `tabulate` (one/two-way, `chi2`, `lrchi2`, `exact`, `V`, `gamma`, `taub`, `generate()`), `tab1`, `tab2`, `tabstat`, `table` (current and legacy `contents()` syntax), `correlate`, `pwcorr`, `spearman`, `centile`, `mean`, `total`, `ci`, `codebook`, `misstable` |
 | Tests | `ttest` (one-sample, paired, by-group, unequal/Welch), `prtest`, `sdtest`, `ranksum`, `signrank`, `signtest`, `kwallis`, `oneway`, `ksmirnov`, `swilk`, `hausman` |
 | Linear models | `regress` (robust, cluster, `fw`/`aw`/`pw`/`iw`), `anova`, `areg`, `qreg`, `ivregress 2sls`/`liml`/`gmm` (`wmatrix()`, `igmm`; `estat firststage`, `estat overid`) |
 | Panel | `xtreg` (`fe`, `re`, `be`, cluster), `xtivreg` (`fe`, `be`, `fd`, `re` with G2SLS or `ec2sls`), `xtivreg2` (`fe`, cluster; Kleibergen–Paap and Cragg–Donald identification tests with Stock–Yogo critical values, Hansen J, C endogeneity test), `xtpmg` (PMG, MG; Pesaran CD test) |
 | Nonlinear | `logit`, `logistic`, `probit`, `cloglog`, `poisson`, `nbreg`, `ologit`, `oprobit`, `mlogit`, `tobit`, `glm` (6 families, 7 links) |
-| Post-estimation | `predict` (xb, residuals, stdp/stdf/stdr, leverage, rstandard/rstudent, cooksd, pr, n, ir, mu, u/e/xbu, scores), `test`, `testparm`, `lincom`, `margins` (predictive margins, `dydx()`, `at()`, `atmeans`; delta-method SEs), `estimates store/restore/table/stats`, `estat ic/vce/hettest/ovtest/vif/summarize/firststage` |
+| Post-estimation | `predict` (xb, residuals, stdp/stdf/stdr, leverage, rstandard/rstudent, cooksd, pr, n, ir, mu, u/e/xbu, scores), `test`, `testparm`, `lincom`, `margins` (predictive margins, `dydx()`, `at()`, `atmeans`; delta-method SEs), `contrast` (r./a./ar./g. operators, `@` groups, joint Wald tests, `effects`, `post`), r(table) after every coefficient table, `estimates store/restore/table/stats`, `estat ic/vce/hettest/ovtest/vif/summarize/firststage` |
 | Spatial | `shp2dta` (ESRI shapefile + dBase import), `spmat contiguity` (queen/rook, row/minmax/spectral normalisation), `spmat lag`, `spmap` (choropleths) |
 | Survival | `stset`, `sts graph`, `strate` (exact Poisson CIs), `ltable` (actuarial life tables, Greenwood SEs) |
 | ROC | `roctab` (DeLong SE, Lorenz/Gini/Pietra), `roccomp`, `rocgold` (DeLong comparisons), `rocfit` (binormal ML) |
-| Other | `kdensity` (8 kernels), `outreg2`-style regression tables, `putexcel` (.xlsx) |
+| Mata | `mata`/`mata:` … `end` blocks and `mata:` one-liners (real/string matrices, operators incl. colon ops, subscripts and ranges, typed functions, loops, pointers), `mata describe/drop/clear`, `clear mata`; library (J, I, select, sort, cross, invsym, colsum, mean, tokens, sprintf/printf, …), `st_data/st_sdata/st_view/st_store/st_addvar/st_local/st_global/st_numscalar/st_matrix`… and the `xl()` class (load_book, get_sheets, get_string/get_number, put_*) |
+| Python | `python:` one-liners and `python`/`python:` … `end` blocks in a persistent external Python 3 process, `python query/search/which/describe/drop/clear/script/set exec`, `set python_exec`; `sfi` module subset (Data, Macro, Scalar, Matrix, SFIToolkit); not in the browser |
+| Other | `kdensity` (8 kernels), `outreg2`-style regression tables, `eststo`/`esttab`/`estout`/`estpost`/`estadd` (stored-model and descriptive tables to screen/RTF/CSV/LaTeX/HTML), `putexcel` (.xlsx, with cell formats: borders, number formats, fonts, fills, alignment, merged cells), `frmttable` (matrix tables to screen/RTF/LaTeX, merge/append/substat/annotate), `unique` |
+| Documents | `putdocx` (.docx: styled paragraphs, text, images, tables from data/matrices/estimates, page breaks, append), `putpdf` (basic PDF), `dyndoc`/`dyntext` (dynamic Markdown with `dd_do`/`dd_display`/`dd_graph`/skip/ignore/remove/include tags to HTML, .docx or text), `markdown`, `html2docx` |
 
 ---
 
@@ -152,7 +155,7 @@ The page is static (HTML, CSS, JS and the `.wasm` module), so any static host wo
 
 - The engine runs in a Web Worker, so the page stays responsive; **Stop** cancels a long computation (the engine restarts with an empty dataset, files are kept).
 - Session files are saved in the browser's IndexedDB and restored on the next visit; *clear* in the Files panel deletes them.
-- `shell`/`!` are unavailable; `sleep` returns immediately.
+- `shell`/`!` and `python` are unavailable; `sleep` returns immediately.
 - PNG and PDF graph exports are rasterised by the browser from the SVG rendering.
 
 ---
@@ -252,7 +255,9 @@ Graph commands build the graph in memory; nothing is written until `graph export
   - surfaces: `contour`, `contourline`, `heatmap` (thin-plate-spline interpolation of scattered data, colour key)
   - overlays with `||` or `()`, `by(var, total rows() cols())` panels, `horizontal`, `base()`, `barwidth()`, time-series operators in plotted variables
 - Styles: `msymbol()` (circle, diamond, triangle, square, plus, x, point, small and hollow variants), `lpattern()` (solid, dash, dot, …), `mcolor()`/`lcolor()`/`fcolor()`/`color()` by name, `"R G B"`, `#rrggbb` or `gs0`–`gs16`
-- `graph bar`, `graph hbar` (`over()`, `stack`, `blabel()`), `graph dot`, `graph box` (`over()`, `horizontal`, `medtype(marker)`), `graph pie` (`over()`, `pie(#, explode)`, `plabel()`), `graph matrix` (`half`), `graph combine`, `histogram` (`normal`, `kdensity`), `kdensity`, `spmap`
+- `graph bar`, `graph hbar` (`over()`, `stack`, `blabel()`), `graph dot`, `graph box` (`over()`, `horizontal`, `medtype(marker)`), `graph pie` (`over()`, `pie(#, explode)`, `plabel()`, `sort`, `angle0()`), `graph matrix` (`half`), `graph combine`, `histogram` (`normal`, `kdensity`), `kdensity`, `spmap`
+- `coefplot` (stored estimates, `*`, `.`, `matrix()`; `||` subgraphs; `keep() drop() order() rename() coeflabels() groups() eqlabels() aseq eqstrict vertical recast() ciopts() citop levels() offset() pcycle() mlabel addplot()`)
+- regression diagnostic plots: `rvfplot`, `rvpplot`, `avplot`, `avplots`, `lvr2plot`
 - Distribution plots: `qnorm`, `pnorm`, `quantile`, `qqplot`, `symplot`, `qchi`, `pchi`, `gladder`, `qladder`, `spikeplot`, `sunflower`
 - Time-series plots: `ac`, `pac`, `pergram`, `cumsp`, `xcorr`, `wntestb`; survival and ROC graphs: `sts graph`, `strate`, `ltable`, `roctab`, `roccomp`, `rocgold`, `rocfit`
 - Managing graphs: `graph save`, `use`, `export`, `print` (system spooler), `display`, `replay`, `describe`, `dir`, `copy`, `rename`, `drop`, `close`, `query`, `set`, `play` (a recording of option edits, one per line); `palette color|linepalette|symbolpalette`; `set graphics on|off`, `set printcolor` (grayscale or black-and-white printing and PDF export)

@@ -428,7 +428,7 @@ fn wrap_coefs(text: &str, b: &Matrix) -> String {
         if c == ']' {
             in_brack -= 1;
         }
-        if in_brack == 0 && (c.is_alphanumeric() || c == '_' || c == '.' || c == '#' || c == ':') {
+        if in_brack == 0 && (c.is_alphanumeric() || c == '_' || c == '.' || c == '#' || c == ':' || c == '@') {
             tok.push(c);
         } else if in_brack > 0 {
             if !tok.is_empty() && c == '[' {
@@ -616,7 +616,7 @@ impl CommandHandler for Lincom {
         let var: f64 = (0..k).map(|a| (0..k).map(|c| row[a] * v[(a, c)] * row[c]).sum::<f64>()).sum();
         let se = var.max(0.0).sqrt();
         let level = util::level(cmd, st)?;
-        let df = st.e.get("df_r").filter(|_| matches!(ecmd.as_str(), "regress" | "anova" | "areg" | "qreg" | "xtreg") && st.e.macros.get("model").map_or(true, |m| m != "re"));
+        let df = st.e.get("df_r").filter(|_| matches!(ecmd.as_str(), "regress" | "anova" | "areg" | "qreg" | "xtreg" | "mean" | "contrast") && st.e.macros.get("model").map_or(true, |m| m != "re"));
         let t = est / se;
         let (p, crit) = match df {
             Some(d) => (2.0 * dist::ttail(d, t.abs()), dist::invttail(d, (1.0 - level / 100.0) / 2.0)),
@@ -675,6 +675,8 @@ impl CommandHandler for Estimates {
                     return Err(rc_err(301, "last estimates not found"));
                 }
                 st.estimates.insert(name.clone(), st.e.clone());
+                st.estimates_order.retain(|n| n != name);
+                st.estimates_order.push(name.clone());
                 Ok(String::new())
             }
             "restore" | "res" => {
@@ -702,6 +704,7 @@ impl CommandHandler for Estimates {
                     Some(n) => st.estimates.get(n).ok_or_else(|| rc_err(111, format!("estimation result {n} not found")))?,
                     None => &st.e,
                 };
+                crate::est::stash_table_from_e(e, st.level);
                 Ok(e.macros.get("_output").cloned().unwrap_or_default())
             }
             "table" | "tab" => {
@@ -739,12 +742,24 @@ fn estimates_table(models: &[(String, Results)], cmd: &Command) -> Result<String
     let star = cmd.has_opt("star", 4);
     let stats: Vec<String> = cmd.opt("stats", 2).map(|s| s.split_whitespace().map(String::from).collect()).unwrap_or_default();
     let fmtb = cmd.opt("b", 1).map(|f| f.trim().to_string()).filter(|f| !f.is_empty());
+    let baselevels = cmd.has_opt("baselevels", 4) || cmd.has_opt("allbaselevels", 4);
+    let is_cons = |c: &str| c == "_cons" || c.ends_with(":_cons");
+    let is_base = |c: &str| {
+        let c = c.rsplit(':').next().unwrap_or(c);
+        c.split('#').any(|p| p.split_once('.').is_some_and(|(l, _)| l.ends_with('b') && l.trim_end_matches('b').parse::<f64>().is_ok()))
+    };
+    // union of the coefficient names; terms that only appear in later models
+    // go before the constant, which stays last
     let mut rownames: Vec<String> = Vec::new();
     for (_, e) in models {
         if let Some(b) = e.matrices.get("b") {
             for c in &b.colnames {
-                if !rownames.contains(c) {
-                    rownames.push(c.clone());
+                if rownames.contains(c) || (!baselevels && is_base(c)) {
+                    continue;
+                }
+                match rownames.iter().position(|r| is_cons(r)).filter(|_| !is_cons(c)) {
+                    Some(at) => rownames.insert(at, c.clone()),
+                    None => rownames.push(c.clone()),
                 }
             }
         }
@@ -759,6 +774,7 @@ fn estimates_table(models: &[(String, Results)], cmd: &Command) -> Result<String
         Some(f) => crate::format::fmt(v, f).trim().to_string(),
         None => g9(v),
     };
+    let mut last_header = String::new();
     for rn in &rownames {
         let mut cells = Vec::new();
         let mut ses = Vec::new();
@@ -798,7 +814,24 @@ fn estimates_table(models: &[(String, Results)], cmd: &Command) -> Result<String
                 }
             }
         }
-        out.push(format!("{:>12} |{}", crate::summarize::abbrev(rn, 12), cells.iter().map(|c| format!(" {:>w$}", c, w = cw)).collect::<String>()));
+        // factor levels are grouped under their variable, as in coefficient tables
+        let (label, header) = if rn.contains(':') { (rn.clone(), None) } else { crate::est::display_name(rn) };
+        match header {
+            Some(h) if h != last_header => {
+                if !out.last().is_some_and(|l| l.starts_with("-------")) {
+                    out.push(format!("{:>12} |", ""));
+                }
+                out.push(format!("{:>12} |", crate::summarize::abbrev(&h, 12)));
+                last_header = h;
+            }
+            Some(_) => {}
+            None if !last_header.is_empty() => {
+                out.push(format!("{:>12} |", ""));
+                last_header.clear();
+            }
+            None => {}
+        }
+        out.push(format!("{:>12} |{}", crate::summarize::abbrev(&label, 12), cells.iter().map(|c| format!(" {:>w$}", c, w = cw)).collect::<String>()));
         if show_se {
             out.push(format!("{:>12} |{}", "", ses.iter().map(|c| format!(" {:>w$}", c, w = cw)).collect::<String>()));
         }

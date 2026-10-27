@@ -58,11 +58,18 @@ pub struct AdoInterpreter {
     pub(crate) depth: usize,
     pub(crate) echo: bool,
     pub(crate) putexcel: crate::putexcel::PutExcel,
+    /// Documents being built by putdocx / putpdf.
+    pub(crate) docs: crate::putdocx::DocState,
     /// Outcome of the last top-level `if`, so a later `else` line can see it.
     top_last_if: Option<bool>,
     /// Output produced before the error of the last failed `run_script`.
     pub partial_output: String,
     pub(crate) outreg_tables: std::collections::HashMap<String, crate::outreg::Table>,
+    /// The external Python helper process and its settings.
+    pub(crate) python: crate::python::PyState,
+    pub(crate) frmt_tables: crate::frmttable::Tables,
+    /// Matrix-language globals and functions.
+    pub(crate) mata: crate::mata::MataState,
 }
 
 impl Default for AdoInterpreter {
@@ -87,9 +94,13 @@ impl AdoInterpreter {
             depth: 0,
             echo: false,
             putexcel: Default::default(),
+            docs: Default::default(),
             top_last_if: None,
             partial_output: String::new(),
             outreg_tables: Default::default(),
+            python: Default::default(),
+            frmt_tables: Default::default(),
+            mata: Default::default(),
         }
     }
 
@@ -304,12 +315,30 @@ impl AdoInterpreter {
                 return self.prefixed(&verb, &rest, body);
             }
             "version" => {
+                // the version number selects legacy behaviours (e.g. coefficient names of `mean, over()`)
+                let num = rest.split(':').next().unwrap_or("").split_whitespace().next().and_then(|v| v.parse::<f64>().ok());
                 if let Some(i) = rest.find(':') {
-                    return self.exec_text(&rest[i + 1..], body);
+                    let prev = self.engine.store.settings.get("version").cloned();
+                    if let Some(n) = num {
+                        self.engine.store.settings.insert("version".into(), n.to_string());
+                    }
+                    let res = self.exec_text(&rest[i + 1..], body);
+                    match prev {
+                        Some(p) => self.engine.store.settings.insert("version".into(), p),
+                        None => self.engine.store.settings.remove("version"),
+                    };
+                    return res;
+                }
+                if let Some(n) = num {
+                    self.engine.store.settings.insert("version".into(), n.to_string());
                 }
                 return Ok(Flow::Next);
             }
-            "xi" | "frame" | "timer" if rest.contains(':') => {
+            "frame" | "frames" if frame_prefix(&rest, body.is_some()).is_some() => {
+                let (name, command) = frame_prefix(&rest, body.is_some()).unwrap();
+                return self.in_frame(&name, &command, body);
+            }
+            "xi" | "timer" if rest.contains(':') => {
                 let i = rest.find(':').unwrap();
                 return self.exec_text(&rest[i + 1..], body);
             }
@@ -397,6 +426,27 @@ impl AdoInterpreter {
                 }
             }
         }
+    }
+
+    /// `frame name: command` / `frame name { ... }`: run in another frame,
+    /// then return to the current one (also after an error).
+    fn in_frame(&mut self, name: &str, command: &str, body: Option<&[Stmt]>) -> Result<Flow, String> {
+        let prev = self.engine.store.cur_frame.clone();
+        let e = &mut self.engine;
+        ferrostat_cmd::frames::switch(&mut e.dataset, &mut e.store, name)?;
+        let r = if command.is_empty() {
+            match body {
+                Some(b) => self.exec_block(b),
+                None => Ok(Flow::Next),
+            }
+        } else {
+            self.exec_text(command, body)
+        };
+        let e = &mut self.engine;
+        if ferrostat_cmd::frames::exists(&e.store, &prev) {
+            ferrostat_cmd::frames::switch(&mut e.dataset, &mut e.store, &prev)?;
+        }
+        r
     }
 
     fn by_prefix(&mut self, verb: &str, rest: &str) -> Result<Flow, String> {
@@ -536,6 +586,14 @@ impl AdoInterpreter {
             self.emit(&out);
             return Ok(Flow::Next);
         }
+        if first == "python" || first == "python:" {
+            crate::python::block(self, first == "python:", raw)?;
+            return Ok(Flow::Next);
+        }
+        if first == "mata" || first == "mata:" {
+            crate::mata::run_block(self, &h, raw)?;
+            return Ok(Flow::Next);
+        }
         Err(rc_err(3000, format!("{first} blocks are not supported")))
     }
 
@@ -618,6 +676,9 @@ impl AdoInterpreter {
             return self.run_program(verb_raw, rest.trim());
         }
         if self.engine.is_command(verb) || matches!(verb, "clear" | "preserve" | "restore" | "set" | "sysuse") {
+            if verb == "clear" && matches!(rest.trim(), "mata" | "all" | "*") {
+                crate::mata::clear(self);
+            }
             let cmd: Command = parse_line(full).map_err(|e| rc_err(198, e.message))?;
             return self.engine.execute(&cmd);
         }
@@ -627,6 +688,22 @@ impl AdoInterpreter {
 }
 
 /// First word (the verb) and the rest of a statement.
+/// `name: command` (or `name` before a block) after `frame`: the frame name
+/// and the command to run in it.
+fn frame_prefix(rest: &str, block: bool) -> Option<(String, String)> {
+    let rest = rest.trim();
+    let end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(rest.len());
+    let (name, after) = rest.split_at(end);
+    if name.is_empty() {
+        return None;
+    }
+    let after = after.trim_start();
+    if let Some(cmd) = after.strip_prefix(':') {
+        return Some((name.to_string(), cmd.trim().to_string()));
+    }
+    (block && after.is_empty()).then(|| (name.to_string(), String::new()))
+}
+
 pub fn split_verb(text: &str) -> (String, String) {
     let t = text.trim();
     let end = t.char_indices().find(|&(_, c)| c.is_whitespace() || c == ',' || c == '{' || (c == ':' && false)).map(|(i, _)| i).unwrap_or(t.len());
