@@ -115,3 +115,15 @@ fn factor_levels_show_value_labels() {
     let out = s.run("regress y i.d");
     assert!(out.contains("           1 |") && !out.contains("yes |"), "{out}");
 }
+
+#[test]
+fn front_end_session_clear_empties_data() {
+    // the session object behind the desktop and browser front ends
+    let _lock = Session::new();
+    let mut fe = ferrostat_ado::session::Session::new();
+    fe.submit("set obs 3");
+    fe.submit("gen x = 1");
+    assert_eq!((fe.n_obs(), fe.n_vars()), (3, 1));
+    assert_eq!(fe.submit("clear"), 0);
+    assert_eq!((fe.n_obs(), fe.n_vars()), (0, 0));
+}
