@@ -572,14 +572,7 @@ pub fn export(st: &mut Store, args: &str) -> Result<String, String> {
         other => return Err(rc_err(198, format!("export format {other} not supported"))),
     };
     vfs::write(&path, &bytes).map_err(|e| rc_err(603, format!("could not write {path}: {e}")))?;
-    Ok(format!("({} table saved to file {path})", kind_name(&kind)))
-}
-
-pub fn kind_name(kind: &str) -> &'static str {
-    match kind {
-        "docx" => "collection",
-        _ => "collection",
-    }
+    Ok(format!("(collection {} exported to file {path})", c.name))
 }
 
 fn latex(r: &collect::Rendered) -> String {

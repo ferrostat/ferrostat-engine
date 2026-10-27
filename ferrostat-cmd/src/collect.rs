@@ -450,7 +450,12 @@ impl Collection {
                     self.cell(&t).map(|c| if c.1.is_empty() { c.0 } else { format!("{}{}", c.0, c.1) })
                 })
                 .collect();
-            return (!parts.is_empty()).then(|| (parts.join(" "), String::new()));
+            if parts.is_empty() {
+                return None;
+            }
+            let joined = parts.join(" ");
+            let o = self.cell_opts(&Item { tags: tags.to_vec(), val: Val::Str(String::new()) });
+            return Some((o.sformat.map_or(joined.clone(), |sf| apply_sformat(&sf, &joined)), String::new()));
         }
         let it = self.find(tags)?;
         let text = self.format_item(it);
@@ -825,6 +830,9 @@ impl RTable {
     }
 
     fn stub_text(&self, r: &RRow, right: bool) -> String {
+        if r.label.is_empty() {
+            return String::new();
+        }
         let ind = "  ".repeat(r.indent);
         if right { format!("{}{}", r.label, ind) } else { format!("{}{}", ind, r.label) }
     }

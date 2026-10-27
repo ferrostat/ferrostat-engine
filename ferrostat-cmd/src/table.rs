@@ -325,7 +325,7 @@ pub(crate) fn split_specs(s: &str) -> Vec<String> {
 fn is_legacy(cmd: &Command) -> bool {
     cmd.opts.iter().any(|(n, _)| {
         let n = n.to_lowercase();
-        n == "c" || (n.len() >= 4 && "contents".starts_with(&n)) || n == "by" || n == "replace" || n == "row" || n == "col" || n == "column" || n == "scol"
+        n == "c" || (n.len() >= 3 && "contents".starts_with(&n)) || n == "by" || n == "replace" || n == "row" || n == "col" || n == "column" || n == "scol"
             || (n.len() >= 4 && "cellwidth".starts_with(&n)) || (n.len() >= 4 && "stubwidth".starts_with(&n)) || (n.len() >= 4 && "csepwidth".starts_with(&n))
             || n == "concise" || n == "center" || n == "left" || "format".starts_with(&n)
     })
@@ -372,7 +372,7 @@ fn legacy(ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, Str
     if byv.len() > 4 {
         return Err(rc_err(103, "too many by() variables"));
     }
-    let contents = cmd.opts.iter().find(|(n, _)| { let n = n.to_lowercase(); n == "c" || opt_matches(&n, "contents", 4) }).and_then(|x| x.1.clone()).unwrap_or_else(|| "freq".into());
+    let contents = cmd.opts.iter().find(|(n, _)| { let n = n.to_lowercase(); n == "c" || opt_matches(&n, "contents", 3) }).and_then(|x| x.1.clone()).unwrap_or_else(|| "freq".into());
     let mut stats: Vec<Stat> = Vec::new();
     let mut toks = contents.split_whitespace().peekable();
     while let Some(t) = toks.next() {

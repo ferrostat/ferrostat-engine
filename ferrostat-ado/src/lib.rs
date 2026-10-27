@@ -1,3 +1,4 @@
+pub mod collect;
 pub mod docx;
 pub mod dyndoc;
 pub mod estout;

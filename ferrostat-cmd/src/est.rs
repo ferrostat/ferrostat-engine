@@ -905,6 +905,19 @@ pub fn coef_table(s: &TableSpec) -> Vec<String> {
             Some((e, n)) => (e.to_string(), n.to_string()),
             None => (String::new(), name.clone()),
         };
+        // ancillary parameters ("/:lnalpha", "/:cut1"): shown as "/name"
+        // below a rule, without a test statistic
+        if eq == "/" {
+            if last_eq != "/" {
+                out.push(format!("{}+{}", "-".repeat(lw + 1), "-".repeat(64)));
+                last_eq = eq.clone();
+                last_header.clear();
+            }
+            let b = s.b[j];
+            let se = s.v[(j, j)].max(0.0).sqrt();
+            out.push(format!("{:>lw$} | {:>10}  {:>9}{:21}{:>9}   {:>9}", ab(&format!("/{nm}")), cell(b), cell(se), "", cell(b - crit * se), cell(b + crit * se)));
+            continue;
+        }
         if !eq.is_empty() && eq != last_eq {
             if !last_eq.is_empty() {
                 out.push(format!("{}+{}", "-".repeat(lw + 1), "-".repeat(64)));

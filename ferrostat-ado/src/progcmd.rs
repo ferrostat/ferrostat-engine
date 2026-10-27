@@ -265,6 +265,8 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
         "estpost" => crate::estout::estpost(me, r)?,
         "estadd" => crate::estout::estadd(me, r)?,
         "frmttable" => crate::frmttable::frmttable(me, r)?,
+        "collect" => crate::collect::collect(me, full)?,
+        "dtable" | "etable" => crate::collect::dtable_etable(me, verb, full)?,
         "mata" | "mata:" => crate::mata::run_line(me, r)?,
         "python" => crate::python::command(me, r)?,
         "set" if crate::python::is_set_python(r) => crate::python::set_option(me, r)?,
@@ -404,7 +406,7 @@ fn dir_listing(r: &str) -> Result<String, String> {
 
 /// Commands handled by the interpreter itself rather than the engine.
 pub const INTERP_COMMANDS: &[&str] = &[
-    "local", "global", "macro", "display", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit",
+    "local", "global", "macro", "display", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit", "collect", "dtable", "etable",
 ];
 
 fn is_interp_command(n: &str) -> bool {

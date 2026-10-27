@@ -189,7 +189,13 @@ impl CommandHandler for Predict {
         let is_count = matches!(ecmd.as_str(), "poisson" | "nbreg");
         let ordered = matches!(ecmd.as_str(), "ologit" | "oprobit");
         let mlogit = ecmd == "mlogit";
-        if ordered || mlogit {
+        if matches!(ecmd.as_str(), "zip" | "zinb") {
+            if stat.is_empty() {
+                msg = "(option n assumed; predicted number of events)".into();
+            }
+            let vals: Vec<f64> = (0..n).map(|i| if mask[i] { crate::zip::zi_prediction(st, &env, &stat, i) } else { Ok(SYSMISS) }).collect::<Result<_, _>>()?;
+            results.push((names[0].clone(), vals));
+        } else if ordered || mlogit {
             let cats: Vec<f64> = st.e.matrices.get(if mlogit { "out" } else { "cat" }).map(|m| m.data.clone()).unwrap_or_default();
             if stat == "xb" {
                 let vals: Vec<f64> = (0..n).map(|i| if mask[i] { xb_row(&env, &b, if mlogit { None } else { None }, i) } else { Ok(SYSMISS) }).collect::<Result<_, _>>()?;
@@ -1170,6 +1176,7 @@ impl CommandHandler for Estat {
                     g9(n), g9(ll0), g9(ll), k, g9(aic), g9(bic)
                 ))
             }
+            "gof" if ecmd == "poisson" => crate::gof::estat_gof(ds, st),
             "vce" => {
                 let mut out = vec!["Covariance matrix of coefficients".to_string(), String::new()];
                 out.push(format!("{:>12} |{}", "e(V)", b.colnames.iter().map(|c| format!(" {:>10}", crate::summarize::abbrev(c, 10))).collect::<String>()));

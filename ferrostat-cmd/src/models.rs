@@ -450,9 +450,9 @@ impl CommandHandler for BinaryModel {
         };
         let mut out = notes;
         out.push(String::new());
-        out.extend(est::iteration_log(&res.iterations, "Log likelihood"));
-        out.push(String::new());
         let ll_label = if robust { "Log pseudolikelihood" } else { "Log likelihood" };
+        out.extend(est::iteration_log(&res.iterations, ll_label));
+        out.push(String::new());
         let chi_label = if robust { format!("Wald chi2({})", df_m) } else { format!("LR chi2({})", df_m) };
         out.push(format!("{:<52}{:<15} = {:>10}", title, "Number of obs", g10(n)));
         out.push(format!("{:<52}{:<15} = {:>10}", "", chi_label, f2(chi2)));
