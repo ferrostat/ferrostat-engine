@@ -313,6 +313,35 @@ impl Engine {
             ("melogit", Box::new(ferrostat_cmd::melogit::Melogit { verb: "melogit" })),
             ("meqrlogit", Box::new(ferrostat_cmd::melogit::Melogit { verb: "meqrlogit" })),
             ("manova", Box::new(ferrostat_cmd::manova::Manova)),
+            // multivariate analysis
+            ("pca", Box::new(ferrostat_cmd::mv_pca::Pca { mat: false })),
+            ("pcamat", Box::new(ferrostat_cmd::mv_pca::Pca { mat: true })),
+            ("factor", Box::new(ferrostat_cmd::mv_pca::Factor { mat: false })),
+            ("factormat", Box::new(ferrostat_cmd::mv_pca::Factor { mat: true })),
+            ("rotate", Box::new(ferrostat_cmd::mv_pca::Rotate)),
+            ("rotatemat", Box::new(ferrostat_cmd::mv_rotate::Rotatemat)),
+            ("screeplot", Box::new(ferrostat_cmd::mv_pca::Screeplot)),
+            ("scree", Box::new(ferrostat_cmd::mv_pca::Screeplot)),
+            ("loadingplot", Box::new(ferrostat_cmd::mv_pca::Loadingplot { score: false })),
+            ("scoreplot", Box::new(ferrostat_cmd::mv_pca::Loadingplot { score: true })),
+            ("cluster", Box::new(ferrostat_cmd::mv_cluster::Cluster { mat: false })),
+            ("clustermat", Box::new(ferrostat_cmd::mv_cluster::Cluster { mat: true })),
+            ("mds", Box::new(ferrostat_cmd::mv_mds::Mds)),
+            ("mdsmat", Box::new(ferrostat_cmd::mv_mds::Mdsmat)),
+            ("mdslong", Box::new(ferrostat_cmd::mv_mds::Mdslong)),
+            ("mdsconfig", Box::new(ferrostat_cmd::mv_mds::Mdsconfig)),
+            ("ca", Box::new(ferrostat_cmd::mv_mds::Ca)),
+            ("camat", Box::new(ferrostat_cmd::mv_mds::Camat)),
+            ("cabiplot", Box::new(ferrostat_cmd::mv_mds::Cabiplot)),
+            ("mca", Box::new(ferrostat_cmd::mv_mds::Mca)),
+            ("biplot", Box::new(ferrostat_cmd::mv_mds::Biplot)),
+            ("discrim", Box::new(ferrostat_cmd::mv_discrim::Discrim { candisc: false })),
+            ("candisc", Box::new(ferrostat_cmd::mv_discrim::Discrim { candisc: true })),
+            ("canon", Box::new(ferrostat_cmd::mv_misc::Canon)),
+            ("alpha", Box::new(ferrostat_cmd::mv_misc::Alpha)),
+            ("hotelling", Box::new(ferrostat_cmd::mv_misc::Hotelling)),
+            ("mvtest", Box::new(ferrostat_cmd::mv_misc::Mvtest)),
+            ("procrustes", Box::new(ferrostat_cmd::mv_misc::Procrustes)),
             ("manovatest", Box::new(ferrostat_cmd::manova::Manovatest)),
             ("mvreg", Box::new(ferrostat_cmd::manova::Mvreg)),
             ("rreg", Box::new(ferrostat_cmd::rreg::Rreg)),
@@ -388,6 +417,8 @@ impl Engine {
         list.extend(ferrostat_cmd::xtnl::handlers());
         list.extend(ferrostat_cmd::stcox::handlers());
         list.extend(ferrostat_cmd::choice_mixed::handlers());
+        list.extend(ferrostat_cmd::basetools::handlers());
+        list.extend(ferrostat_cmd::data_utils::handlers());
         let mut handlers = HashMap::new();
         for (n, h) in list {
             handlers.insert(n, h);
@@ -508,7 +539,12 @@ impl Engine {
             _ => {
                 let h = self.handlers.get(verb.as_str()).ok_or_else(|| rc_err(199, format!("command {} is unrecognized", cmd.verb)))?;
                 ferrostat_cmd::est::take_table();
+                let before = self.store.e.macros.clone();
                 let res = h.execute(&mut self.dataset, &mut self.store, &cmd);
+                // new estimation results remember the command line (e(cmdline))
+                if res.is_ok() && self.store.e.macros != before && self.store.e.matrices.contains_key("b") && !self.store.e.macros.contains_key("cmdline") {
+                    self.store.e.set_str("cmdline", cmd.raw.trim());
+                }
                 // commands that display a coefficient table return it in r(table)
                 if let (Ok(_), Some((m, level))) = (&res, ferrostat_cmd::est::take_table()) {
                     let mut r = ferrostat_cmd::store::Results::new();

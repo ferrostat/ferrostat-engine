@@ -554,6 +554,7 @@ impl CommandHandler for MatrixCmd {
                 r.set("N", if w.as_ref().map_or(false, |w| w.kind == util::WeightKind::F) { sw } else { rows.len() as f64 });
                 return Ok(format!("(obs={})", rows.len()));
             }
+            l if l.len() >= 6 && "dissimilarity".starts_with(l) => return crate::mv_cluster::matrix_dissimilarity(ds, st, cmd),
             "symeigen" | "symeig" => {
                 let eq = find_top_level(rest, '=').ok_or_else(|| rc_err(198, "= expected"))?;
                 let names: Vec<&str> = rest[..eq].split_whitespace().collect();

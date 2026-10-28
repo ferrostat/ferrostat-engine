@@ -370,6 +370,10 @@ impl AdoInterpreter {
             if let Some(f) = crate::resample::intercept(self, &verb_raw, &rest, text)? {
                 return Ok(f);
             }
+            // jackknife, statsby, rolling, nestreg, stepwise, linktest, ml, fp
+            if let Some(f) = crate::basetools::intercept(self, &verb_raw, &rest, text)? {
+                return Ok(f);
+            }
             // svy: and mi prefixes, mi commands, estat after svy
             if let Some(f) = crate::mi::intercept(self, &verb_raw, &rest, text)? {
                 return Ok(f);

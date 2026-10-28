@@ -711,6 +711,9 @@ impl CommandHandler for Margins {
     }
 
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
+        if cmd.has_opt("pwcompare", 2) {
+            return crate::pwcompare::margins_pw(ds, st, cmd);
+        }
         let b = st.e.matrices.get("b").cloned().ok_or_else(|| rc_err(301, "last estimates not found"))?;
         let v = st.e.matrices.get("V").cloned().ok_or_else(|| rc_err(301, "last estimates not found"))?;
         let ecmd = st.e.macros.get("cmd").cloned().unwrap_or_default();

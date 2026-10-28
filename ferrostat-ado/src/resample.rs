@@ -24,7 +24,7 @@ use crate::interpreter::{split_verb, AdoInterpreter, Flow};
 use crate::macros::unquote;
 use crate::parallel;
 
-type Opts = Vec<(String, Option<String>)>;
+pub(crate) type Opts = Vec<(String, Option<String>)>;
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -106,34 +106,34 @@ fn vce_bootstrap(me: &AdoInterpreter, verb: &str, text: &str) -> Option<String> 
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
-enum Kind {
+pub(crate) enum Kind {
     B,
     Se,
     Expr(String),
 }
 
 #[derive(Clone, Debug)]
-struct ExpItem {
-    name: Option<String>,
-    kind: Kind,
+pub(crate) struct ExpItem {
+    pub(crate) name: Option<String>,
+    pub(crate) kind: Kind,
 }
 
-struct Prefix {
-    exps: Vec<ExpItem>,
-    opts: Opts,
-    command: String,
+pub(crate) struct Prefix {
+    pub(crate) exps: Vec<ExpItem>,
+    pub(crate) opts: Opts,
+    pub(crate) command: String,
     /// Leading words before the expression list (`permute` variable).
-    lead: Option<String>,
+    pub(crate) lead: Option<String>,
 }
 
-fn has(opts: &Opts, name: &str, min: usize) -> bool {
+pub(crate) fn has(opts: &Opts, name: &str, min: usize) -> bool {
     opts.iter().any(|(o, _)| {
         let o = o.to_lowercase();
         o.len() >= min && name.starts_with(o.as_str())
     })
 }
 
-fn arg(opts: &Opts, name: &str, min: usize) -> Option<String> {
+pub(crate) fn arg(opts: &Opts, name: &str, min: usize) -> Option<String> {
     opts.iter()
         .find(|(o, _)| {
             let o = o.to_lowercase();
@@ -142,14 +142,14 @@ fn arg(opts: &Opts, name: &str, min: usize) -> Option<String> {
         .and_then(|(_, a)| a.clone())
 }
 
-fn num_arg(opts: &Opts, name: &str, min: usize) -> Result<Option<f64>, String> {
+pub(crate) fn num_arg(opts: &Opts, name: &str, min: usize) -> Result<Option<f64>, String> {
     match arg(opts, name, min) {
         Some(a) => a.trim().parse::<f64>().map(Some).map_err(|_| rc_err(198, format!("option {name}() incorrectly specified"))),
         None => Ok(None),
     }
 }
 
-fn parse_prefix(rest: &str, with_lead: bool) -> Result<Prefix, String> {
+pub(crate) fn parse_prefix(rest: &str, with_lead: bool) -> Result<Prefix, String> {
     let colon = find_top_level(rest, ':').ok_or_else(|| rc_err(198, "a colon followed by a command is required"))?;
     let head = rest[..colon].trim();
     let command = rest[colon + 1..].trim().to_string();
@@ -207,7 +207,7 @@ fn item(name: Option<String>, text: &str) -> Result<ExpItem, String> {
     Ok(ExpItem { name, kind })
 }
 
-fn parse_exp_list(s: &str) -> Result<Vec<ExpItem>, String> {
+pub(crate) fn parse_exp_list(s: &str) -> Result<Vec<ExpItem>, String> {
     let words = split_top_level_words(s);
     let mut out = Vec::new();
     let mut i = 0;
@@ -263,25 +263,25 @@ fn parse_exp_list(s: &str) -> Result<Vec<ExpItem>, String> {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
-enum Src {
+pub(crate) enum Src {
     B(String),
     Se(String),
     Expr(usize),
 }
 
 #[derive(Clone, Debug)]
-struct Stat {
+pub(crate) struct Stat {
     /// Name in the results table (and coefficient name in e(b)).
-    name: String,
+    pub(crate) name: String,
     /// Variable name in the dataset of replicates.
-    var: String,
+    pub(crate) var: String,
     /// Expression text (variable label / legend).
-    label: String,
-    src: Src,
+    pub(crate) label: String,
+    pub(crate) src: Src,
 }
 
 /// Variable name for a coefficient statistic: `_b_x`, `eq_b_x`.
-fn coef_var(prefix: &str, col: &str) -> String {
+pub(crate) fn coef_var(prefix: &str, col: &str) -> String {
     let (eq, nm) = match col.split_once(':') {
         Some((e, n)) => (e.to_string(), n.to_string()),
         None => (String::new(), col.to_string()),
@@ -293,7 +293,7 @@ fn coef_var(prefix: &str, col: &str) -> String {
 }
 
 /// Expand the expression list against the current e() results.
-fn build_stats(me: &AdoInterpreter, exps: &[ExpItem], stem: &str) -> Result<(Vec<Stat>, Vec<Expr>), String> {
+pub(crate) fn build_stats(me: &AdoInterpreter, exps: &[ExpItem], stem: &str) -> Result<(Vec<Stat>, Vec<Expr>), String> {
     let mut stats = Vec::new();
     let mut parsed = Vec::new();
     for (k, it) in exps.iter().enumerate() {
@@ -329,7 +329,7 @@ fn build_stats(me: &AdoInterpreter, exps: &[ExpItem], stem: &str) -> Result<(Vec
     Ok((stats, parsed))
 }
 
-fn eval_stats(me: &AdoInterpreter, stats: &[Stat], parsed: &[Expr]) -> Vec<f64> {
+pub(crate) fn eval_stats(me: &AdoInterpreter, stats: &[Stat], parsed: &[Expr]) -> Vec<f64> {
     let st = &me.engine.store;
     let ds = &me.engine.dataset;
     let coef = |name: &str, se: bool| -> f64 {
@@ -359,7 +359,7 @@ fn eval_stats(me: &AdoInterpreter, stats: &[Stat], parsed: &[Expr]) -> Vec<f64> 
 
 /// Run a command with its output suppressed (unless `noisily`).
 /// The statistics as (`b` | `se` | `exp`, name or expression text).
-fn spec_of(stats: &[Stat]) -> Vec<(String, String)> {
+pub(crate) fn spec_of(stats: &[Stat]) -> Vec<(String, String)> {
     stats
         .iter()
         .map(|s| match &s.src {
@@ -389,13 +389,13 @@ pub(crate) fn stats_from_spec(spec: &[(String, String)]) -> Result<std::sync::Ar
 }
 
 /// The statistics of a replication, evaluated on its interpreter.
-fn stats_fn(stats: &[Stat], parsed: &[Expr]) -> std::sync::Arc<dyn Fn(&AdoInterpreter) -> Vec<f64> + Send + Sync> {
+pub(crate) fn stats_fn(stats: &[Stat], parsed: &[Expr]) -> std::sync::Arc<dyn Fn(&AdoInterpreter) -> Vec<f64> + Send + Sync> {
     let (stats, parsed) = (stats.to_vec(), parsed.to_vec());
     std::sync::Arc::new(move |me: &AdoInterpreter| eval_stats(me, &stats, &parsed))
 }
 
 /// Replication results with failures as missing values, and their dots.
-fn collect_reps(outs: Vec<Option<Vec<f64>>>, k: usize) -> (Vec<Vec<f64>>, Vec<char>) {
+pub(crate) fn collect_reps(outs: Vec<Option<Vec<f64>>>, k: usize) -> (Vec<Vec<f64>>, Vec<char>) {
     let results: Vec<Vec<f64>> = outs.into_iter().map(|o| o.unwrap_or_else(|| vec![SYSMISS; k])).collect();
     let marks = results.iter().map(|v| if v.iter().any(|x| is_missing(*x)) { 'x' } else { '.' }).collect();
     (results, marks)
@@ -420,7 +420,7 @@ pub(crate) fn run_cmd(me: &mut AdoInterpreter, cmd: &str, noisily: bool) -> Resu
 }
 
 /// The dots line: `Title (100): .........10.........20 ... done`.
-fn dots_line(title: &str, reps: usize, marks: &[char]) -> String {
+pub(crate) fn dots_line(title: &str, reps: usize, marks: &[char]) -> String {
     let mut s = format!("{title} ({}): ", util::commas(reps));
     for (i, c) in marks.iter().enumerate() {
         if (i + 1) % 10 == 0 && *c == '.' {
@@ -441,7 +441,7 @@ fn word_count(n: usize) -> String {
 }
 
 /// Seed the generator from a `seed()` option.
-fn apply_seed(me: &mut AdoInterpreter, opts: &Opts) -> Result<(), String> {
+pub(crate) fn apply_seed(me: &mut AdoInterpreter, opts: &Opts) -> Result<(), String> {
     if let Some(s) = arg(opts, "seed", 4) {
         let v: u64 = s.trim().parse().map_err(|_| rc_err(198, "seed() invalid"))?;
         me.engine.store.rng.borrow_mut().reseed(v);
@@ -460,7 +460,7 @@ pub(crate) fn empty_shell(base: &DataSet) -> DataSet {
 }
 
 /// Group key of each observation over `vars` (all equal when empty).
-fn keys(ds: &DataSet, vars: &[String]) -> Vec<String> {
+pub(crate) fn keys(ds: &DataSet, vars: &[String]) -> Vec<String> {
     (0..ds.n_obs)
         .map(|i| {
             vars.iter()
@@ -475,14 +475,14 @@ fn keys(ds: &DataSet, vars: &[String]) -> Vec<String> {
 }
 
 /// Sampling units (observations or clusters) grouped by stratum.
-struct Units {
+pub(crate) struct Units {
     /// Rows of each unit.
-    rows: Vec<Vec<usize>>,
+    pub(crate) rows: Vec<Vec<usize>>,
     /// Units of each stratum.
-    strata: Vec<Vec<usize>>,
+    pub(crate) strata: Vec<Vec<usize>>,
 }
 
-fn units(ds: &DataSet, cluster: &[String], strata: &[String]) -> Units {
+pub(crate) fn units(ds: &DataSet, cluster: &[String], strata: &[String]) -> Units {
     let sk = keys(ds, strata);
     let ck = keys(ds, cluster);
     let mut strata_ix: HashMap<String, usize> = HashMap::new();
@@ -510,7 +510,7 @@ fn units(ds: &DataSet, cluster: &[String], strata: &[String]) -> Units {
 }
 
 /// Results of the replications as a dataset (one observation per rep).
-fn results_dataset(stats: &[Stat], reps: &[Vec<f64>], double: bool) -> Result<DataSet, String> {
+pub(crate) fn results_dataset(stats: &[Stat], reps: &[Vec<f64>], double: bool) -> Result<DataSet, String> {
     let mut ds = DataSet::new();
     let ty = if double { VarType::Double } else { VarType::Float };
     for (j, s) in stats.iter().enumerate() {
@@ -524,7 +524,7 @@ fn results_dataset(stats: &[Stat], reps: &[Vec<f64>], double: bool) -> Result<Da
 }
 
 /// `saving(filename[, replace double])`.
-fn save_results(me: &mut AdoInterpreter, spec: &str, ds: DataSet) -> Result<(), String> {
+pub(crate) fn save_results(me: &mut AdoInterpreter, spec: &str, ds: DataSet) -> Result<(), String> {
     let (file, opts) = match find_top_level(spec, ',') {
         Some(i) => (spec[..i].trim(), split_options(&spec[i + 1..])),
         None => (spec.trim(), Vec::new()),
@@ -537,7 +537,7 @@ fn save_results(me: &mut AdoInterpreter, spec: &str, ds: DataSet) -> Result<(), 
     r
 }
 
-fn saving_double(spec: &str) -> bool {
+pub(crate) fn saving_double(spec: &str) -> bool {
     find_top_level(spec, ',').is_some_and(|i| has(&split_options(&spec[i + 1..]), "double", 6))
 }
 
@@ -835,7 +835,7 @@ fn bootstrap(me: &mut AdoInterpreter, rest: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn level_opt(me: &AdoInterpreter, opts: &Opts) -> Result<f64, String> {
+pub(crate) fn level_opt(me: &AdoInterpreter, opts: &Opts) -> Result<f64, String> {
     let l = num_arg(opts, "level", 1)?.unwrap_or(me.engine.store.level);
     if !(10.0..=99.99).contains(&l) {
         return Err(rc_err(198, "level() must be between 10 and 99.99 inclusive"));
@@ -843,16 +843,16 @@ fn level_opt(me: &AdoInterpreter, opts: &Opts) -> Result<f64, String> {
     Ok(l)
 }
 
-fn is_base_name(c: &str) -> bool {
+pub(crate) fn is_base_name(c: &str) -> bool {
     c.rsplit(':').next().unwrap_or(c).split('#').all(|p| p.split_once('.').is_some_and(|(l, _)| l.ends_with('b') && l.trim_end_matches('b').parse::<f64>().is_ok()))
 }
 
-fn is_omitted_name(c: &str) -> bool {
+pub(crate) fn is_omitted_name(c: &str) -> bool {
     c.rsplit(':').next().unwrap_or(c).split('#').any(|p| p.starts_with("o.") || p.split_once('.').is_some_and(|(l, _)| l.ends_with('o') && l.trim_end_matches(['o', 'b']).parse::<f64>().is_ok()))
 }
 
 /// Wald test that all coefficients except constants are zero.
-fn wald(names: &[String], b: &[f64], v: &Matrix) -> Option<(f64, usize)> {
+pub(crate) fn wald(names: &[String], b: &[f64], v: &Matrix) -> Option<(f64, usize)> {
     if names.iter().any(|n| n.contains(':')) {
         return None;
     }
@@ -877,7 +877,7 @@ fn wald(names: &[String], b: &[f64], v: &Matrix) -> Option<(f64, usize)> {
     Some((chi2, q))
 }
 
-fn title_for(e: &Results) -> String {
+pub(crate) fn title_for(e: &Results) -> String {
     let cmd = e.macros.get("cmd").map(String::as_str).unwrap_or("");
     match cmd {
         "regress" => "Linear regression".into(),
@@ -891,7 +891,7 @@ fn title_for(e: &Results) -> String {
 }
 
 /// Header with statistics right-aligned at column 78.
-fn header_lines(title: &str, rows: &[(String, String, String)]) -> Vec<String> {
+pub(crate) fn header_lines(title: &str, rows: &[(String, String, String)]) -> Vec<String> {
     let w = rows.iter().map(|r| r.2.len()).max().unwrap_or(0);
     let lab = rows.iter().map(|r| r.1.len()).max().unwrap_or(0).max(13);
     let start = 78usize.saturating_sub(lab + 3 + w);
@@ -905,7 +905,7 @@ fn header_lines(title: &str, rows: &[(String, String, String)]) -> Vec<String> {
         .collect()
 }
 
-fn eform_title(e: &Results) -> Option<&'static str> {
+pub(crate) fn eform_title(e: &Results) -> Option<&'static str> {
     let cmd = e.macros.get("cmd").map(String::as_str).unwrap_or("");
     let command = e.macros.get("command").cloned().unwrap_or_default();
     let opts = find_top_level(&command, ',').map(|i| split_options(&command[i + 1..])).unwrap_or_default();
@@ -918,7 +918,7 @@ fn eform_title(e: &Results) -> Option<&'static str> {
     None
 }
 
-fn header_rows(e: &Results) -> Vec<(String, String, String)> {
+pub(crate) fn header_rows(e: &Results) -> Vec<(String, String, String)> {
     let n = e.get("N").unwrap_or(SYSMISS);
     let mut rows = vec![
         (String::new(), "Number of obs".to_string(), if is_missing(n) { ".".into() } else { util::commas(n as usize) }),
@@ -1007,7 +1007,7 @@ fn display(me: &mut AdoInterpreter, level: f64, opts: &Opts) -> Result<String, S
     Ok(out.join("\n"))
 }
 
-fn summ_abbrev(s: &str, n: usize) -> String {
+pub(crate) fn summ_abbrev(s: &str, n: usize) -> String {
     ferrostat_cmd::summarize::abbrev(s, n)
 }
 

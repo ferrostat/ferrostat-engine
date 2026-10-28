@@ -304,7 +304,7 @@ impl CommandHandler for Import {
                 st.data_changed = false;
                 Ok(msg)
             }
-            _ => crate::columnar::import_cmd(kind, rest, ds, st, cmd).unwrap_or_else(|| Err(rc_err(198, format!("import {kind} not supported")))),
+            _ => crate::data_utils::formats::import_cmd(kind, rest, ds, st, cmd).or_else(|| crate::columnar::import_cmd(kind, rest, ds, st, cmd)).unwrap_or_else(|| Err(rc_err(198, format!("import {kind} not supported")))),
         }
     }
 }
@@ -550,6 +550,9 @@ impl CommandHandler for Export {
         let (kind, rest) = main.split_once(char::is_whitespace).unwrap_or((main, ""));
         if matches!(kind, "excel" | "xlsx") {
             return export_excel(ds, st, cmd, rest);
+        }
+        if let Some(r) = crate::data_utils::formats::export_cmd(kind, rest, ds, st, cmd) {
+            return r;
         }
         if let Some(r) = crate::columnar::export_cmd(kind, rest, ds, st, cmd) {
             return r;

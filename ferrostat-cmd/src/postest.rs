@@ -148,6 +148,9 @@ impl CommandHandler for Predict {
     }
 
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
+        if let Some(out) = crate::mv_post::predict(ds, st, cmd)? {
+            return Ok(out);
+        }
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
         if ecmd == "arima" {
@@ -455,7 +458,7 @@ fn eq_shorthand(text: &str) -> String {
 }
 
 /// Wrap coefficient names in `_b[ ]` so the constraint can be evaluated.
-fn wrap_coefs(text: &str, b: &Matrix) -> String {
+pub(crate) fn wrap_coefs(text: &str, b: &Matrix) -> String {
     let text = &eq_shorthand(text);
     let mut out = String::new();
     let mut tok = String::new();
@@ -729,7 +732,7 @@ impl CommandHandler for Estimates {
     fn name(&self) -> &'static str {
         "estimates"
     }
-    fn execute(&self, _ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
+    fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         let mut w = cmd.main.split_whitespace();
         let sub = w.next().unwrap_or("").to_lowercase();
         let rest: Vec<String> = w.map(String::from).collect();
@@ -749,7 +752,7 @@ impl CommandHandler for Estimates {
                 st.e = st.estimates.get(name).cloned().ok_or_else(|| rc_err(111, format!("estimation result {name} not found")))?;
                 Ok(String::new())
             }
-            "dir" => Ok(st.estimates.keys().map(|k| format!("{:<14} {}", k, st.estimates[k].macros.get("cmd").cloned().unwrap_or_default())).collect::<Vec<_>>().join("\n")),
+            "dir" => crate::postest2::estimates_dir(st, &rest),
             "drop" => {
                 if rest.iter().any(|r| r == "_all") {
                     st.estimates.clear();
@@ -795,7 +798,7 @@ impl CommandHandler for Estimates {
                 out.push("-----------------------------------------------------------------------------".to_string());
                 Ok(out.join("\n"))
             }
-            _ => Err(rc_err(198, format!("estimates {sub}: invalid subcommand"))),
+            _ => crate::postest2::estimates_more(ds, st, cmd, sub.trim_end_matches(':'), &rest),
         }
     }
 }
@@ -1188,6 +1191,9 @@ impl CommandHandler for Estat {
     }
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         let sub = cmd.main.split_whitespace().next().unwrap_or("").to_lowercase();
+        if let Some(r) = crate::mv_post::estat(ds, st, sub.as_str(), cmd) {
+            return r;
+        }
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
         if let Some(r) = crate::choice_mixed::estat(ds, st, sub.as_str(), cmd) {
@@ -1197,6 +1203,9 @@ impl CommandHandler for Estat {
             return r;
         }
         if let Some(r) = crate::stcox::estat(ds, st, sub.as_str(), cmd) {
+            return r;
+        }
+        if let Some(r) = crate::binpost::estat(ds, st, sub.as_str(), cmd) {
             return r;
         }
         if ecmd == "arima" && sub == "aroots" {

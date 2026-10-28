@@ -108,6 +108,9 @@ impl CommandHandler for FrameCmd {
         };
         let words: Vec<&str> = rest.split_whitespace().collect();
         let sub = sub.to_lowercase();
+        if let Some(r) = crate::data_utils::vars::frames_extra(&sub, rest, ds, st, cmd) {
+            return r;
+        }
         match sub.as_str() {
             "" | "pwf" => Ok(pwf(st)),
             "create" | "cre" => {
