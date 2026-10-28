@@ -14,6 +14,10 @@ pub mod progcmd;
 pub mod putdocx;
 pub mod putexcel;
 pub mod resample;
+// jackknife, statsby, rolling, nestreg, stepwise, linktest, ml, fp
+pub mod basetools;
+pub mod fracpoly;
+pub mod mlprog;
 pub mod parallel;
 pub mod python;
 pub mod lint;

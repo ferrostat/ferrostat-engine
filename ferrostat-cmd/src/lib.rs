@@ -1,4 +1,15 @@
 pub mod clonevar;
+pub mod data_utils;
+// lrtest, nlcom, pwcompare, binary-model postestimation, small statistics
+pub mod basetools;
+pub mod binpost;
+pub mod nlest;
+pub mod smallstat;
+pub mod smallstat2;
+pub mod pk;
+pub mod power;
+pub mod postest2;
+pub mod pwcompare;
 pub mod coefplot;
 pub mod collect;
 pub mod collect_cmd;
@@ -32,6 +43,15 @@ pub mod kdensity;
 pub mod labels;
 pub mod listing;
 pub mod manova;
+// multivariate methods (pca, factor, rotate, cluster, mds, ca, discrim, ...)
+pub mod mvutil;
+pub mod mv_rotate;
+pub mod mv_pca;
+pub mod mv_post;
+pub mod mv_cluster;
+pub mod mv_mds;
+pub mod mv_discrim;
+pub mod mv_misc;
 pub mod melogit;
 pub mod choice_mixed;
 pub mod heckman;
