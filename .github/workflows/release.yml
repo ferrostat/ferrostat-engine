@@ -123,9 +123,12 @@ jobs:
 
   # One job publishes the release after every build has finished, so the
   # release is created once with all files (jobs uploading in parallel race).
+  # macOS runners are sometimes not available (GitHub capacity); the release
+  # is published with the other platforms and gets the macOS files when those
+  # jobs are re-run ("Re-run failed jobs" re-runs this job too).
   publish:
     name: publish release
-    if: github.ref_type == 'tag'
+    if: ${{ !cancelled() && github.ref_type == 'tag' && needs.linux.result == 'success' && needs.wasm.result == 'success' }}
     needs: [linux, native, wasm]
     runs-on: ubuntu-latest
     steps:
@@ -142,4 +145,5 @@ jobs:
           name: Ferrostat ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
+          overwrite_files: true
           files: dist/*
