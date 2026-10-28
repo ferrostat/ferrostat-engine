@@ -17,6 +17,9 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # GitHub's macOS runners are often not available (capacity); don't let
+    # that mark the whole run as failed
+    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
     strategy:
       fail-fast: false
       matrix:
