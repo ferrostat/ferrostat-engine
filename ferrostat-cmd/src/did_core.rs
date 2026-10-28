@@ -536,7 +536,10 @@ pub fn rc(m: Method, rc1: bool, r: &Rc2) -> Result<Fit, String> {
             let mut att = (e11 - e10) - (e01 - e00);
             let mut inf = simple;
             if m == Method::Dripw {
-                // estimation effects of the propensity score and the control regressions
+                // estimation effects of the propensity score and the control
+                // regressions (pre-period terms enter with a minus sign, as
+                // in the corrected influence function of the reference R
+                // implementation)
                 let pv = pv.unwrap();
                 let sps: Vec<f64> = (0..n).map(|i| w[i] * (d[i] - ps[i])).collect();
                 let s_pre: Vec<f64> = (0..n).map(|i| regs.wts[0][i] * (y[i] - y00[i])).collect();
@@ -554,7 +557,7 @@ pub fn rc(m: Method, rc1: bool, r: &Rc2) -> Result<Fit, String> {
                 let cor_post = lin_dot(x, &s_post, &regs.inv[1], nf, &m3post);
                 let cor_pre = lin_dot(x, &s_pre, &regs.inv[0], nf, &m3pre);
                 for i in 0..n {
-                    inf[i] += tor_post[i] + tor_pre[i] - (cps[i] + cor_post[i] + cor_pre[i]);
+                    inf[i] += tor_post[i] - tor_pre[i] - (cps[i] + cor_post[i] - cor_pre[i]);
                 }
                 if !rc1 {
                     let s_pre_t: Vec<f64> = (0..n).map(|i| regs.wts[2][i] * (y[i] - y10[i])).collect();

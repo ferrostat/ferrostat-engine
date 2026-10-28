@@ -65,6 +65,12 @@ pub mod panel_ardl;
 pub mod postest;
 pub mod regplot;
 pub mod reghdfe;
+// heterogeneity-robust difference-in-differences (drdid, csdid, did_imputation, eventstudyinteract, didregress)
+pub mod did_core;
+pub mod did;
+pub mod did_imputation;
+pub mod esinteract;
+pub mod didregress;
 // regression discontinuity (rdrobust, rdbwselect)
 pub mod rdrobust;
 pub mod rdplot;
@@ -76,6 +82,9 @@ pub mod separate;
 pub mod smooth;
 pub mod roc;
 pub mod spatial;
+// spatial autoregressive models (spset, spmatrix, spregress, ...)
+pub mod sp_data;
+pub mod sp_reg;
 pub mod rng;
 pub mod rreg;
 pub mod stockyogo;

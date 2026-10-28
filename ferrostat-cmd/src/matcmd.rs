@@ -481,7 +481,7 @@ impl CommandHandler for MatrixCmd {
                 let fmt = opts.and_then(|o| ferrostat_parser::parser::split_options(o).into_iter().find(|(n, _)| n.starts_with("form")).and_then(|(_, a)| a));
                 return Ok(list_matrix(name, &m, fmt.as_deref()));
             }
-            "dir" => return Ok(st.matrices.iter().map(|(k, m)| format!("{:>12}[{},{}]", k, m.rows, m.cols)).collect::<Vec<_>>().join("\n")),
+            "dir" => return Ok(st.matrices.iter().filter(|(k, _)| !k.starts_with("__spmatrix_")).map(|(k, m)| format!("{:>12}[{},{}]", k, m.rows, m.cols)).collect::<Vec<_>>().join("\n")),
             "drop" => {
                 if rest == "_all" {
                     st.matrices.clear();
