@@ -18,6 +18,11 @@ on:
 permissions:
   contents: write
 
+# a newer run for the same branch or tag cancels the older one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
