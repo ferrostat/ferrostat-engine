@@ -57,8 +57,26 @@ pub mod table;
 pub mod proportion;
 pub mod teffects;
 pub mod community;
+pub mod community_dm;
+pub mod community_dm2;
 pub mod tabulate;
 pub mod tsplot;
+// VAR / SVAR / VEC / IRF / fcast
+pub mod tsla;
+pub mod tsvar;
+pub mod tsirf;
+pub mod tsvec;
+pub mod tsfcast;
+pub mod tsops;
+pub mod tsreg;
+pub mod arima;
+pub mod tstests;
+pub mod tssmooth;
+// panel nonlinear / dynamic panel / panel diagnostics
+pub mod xtnl;
+pub mod xtgls;
+pub mod xtdpd;
+pub mod xtdiag;
 pub mod unique;
 pub mod tests;
 pub mod util;

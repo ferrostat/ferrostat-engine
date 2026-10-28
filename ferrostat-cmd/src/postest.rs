@@ -150,6 +150,12 @@ impl CommandHandler for Predict {
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
+        if ecmd == "arima" {
+            return crate::arima::predict(ds, st, cmd);
+        }
+        if let Some(out) = crate::xtnl::predict(ds, st, cmd)? {
+            return Ok(out);
+        }
         if ecmd == "reghdfe" {
             if let Some(out) = crate::reghdfe::predict(ds, st, cmd)? {
                 return Ok(out);
@@ -1163,6 +1169,12 @@ impl CommandHandler for Estat {
         let sub = cmd.main.split_whitespace().next().unwrap_or("").to_lowercase();
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
+        if let Some(r) = crate::xtdpd::estat(st, sub.as_str(), cmd) {
+            return r;
+        }
+        if ecmd == "arima" && sub == "aroots" {
+            return crate::arima::aroots(st);
+        }
         match sub.as_str() {
             "ic" => {
                 let n = st.e.get("N").unwrap_or(SYSMISS);

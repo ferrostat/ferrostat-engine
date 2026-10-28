@@ -108,7 +108,7 @@ impl CommandHandler for Summarize {
         }
         let mut last: Option<Summary> = None;
         for (k, v) in vars.iter().enumerate() {
-            let var = ds.get_var(v).unwrap();
+            let var = ds.get_var(v).ok_or_else(|| crate::eval::rc_err(101, format!("{v}: time-series operators not allowed")))?;
             if var.var_type.is_string() {
                 if !detail && !meanonly {
                     out.push(format!("{:>12} |{:>11}", abbrev(v, 12), 0));

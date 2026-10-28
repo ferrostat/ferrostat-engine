@@ -70,7 +70,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("ls", "dir"),
     ("cat", "type"),
     ("logistic", "logistic"),
-    ("fre", "tabulate"),
     ("outreg", "outreg2"),
 ];
 
@@ -163,7 +162,7 @@ const ABBREV: &[(&str, usize)] = &[
 ];
 
 /// Commands that run once with group-aware evaluation under `by`.
-const GROUPWISE: &[&str] = &["generate", "replace", "egen", "assert", "drop", "keep"];
+const GROUPWISE: &[&str] = &["generate", "replace", "egen", "assert", "drop", "keep", "gegen", "fegen", "carryforward"];
 
 pub struct Engine {
     pub dataset: DataSet,
@@ -180,7 +179,7 @@ impl Default for Engine {
 
 impl Engine {
     pub fn new() -> Self {
-        let list: Vec<(&'static str, Box<dyn CommandHandler>)> = vec![
+        let mut list: Vec<(&'static str, Box<dyn CommandHandler>)> = vec![
             ("generate", Box::new(data::Generate)),
             ("replace", Box::new(data::Replace)),
             ("drop", Box::new(data::Drop)),
@@ -362,7 +361,21 @@ impl Engine {
             ("lvr2plot", Box::new(ferrostat_cmd::regplot::RegPlot)),
             ("graph", Box::new(graph::GraphCmd)),
             ("coefplot", Box::new(ferrostat_cmd::coefplot::Coefplot)),
+            // time series (tsreg, arima, tstests, tssmooth)
+            ("newey", Box::new(ferrostat_cmd::tsreg::Newey)),
+            ("prais", Box::new(ferrostat_cmd::tsreg::Prais)),
+            ("arima", Box::new(ferrostat_cmd::arima::Arima)),
+            ("dfuller", Box::new(ferrostat_cmd::tstests::Dfuller)),
+            ("pperron", Box::new(ferrostat_cmd::tstests::Pperron)),
+            ("dfgls", Box::new(ferrostat_cmd::tstests::Dfgls)),
+            ("corrgram", Box::new(ferrostat_cmd::tstests::Corrgram)),
+            ("wntestq", Box::new(ferrostat_cmd::tstests::Wntestq)),
+            ("tssmooth", Box::new(ferrostat_cmd::tssmooth::Tssmooth)),
+            ("tsfilter", Box::new(ferrostat_cmd::tssmooth::Tsfilter)),
         ];
+        list.extend(ferrostat_cmd::community_dm2::handlers());
+        list.extend(ferrostat_cmd::tsvar::handlers());
+        list.extend(ferrostat_cmd::xtnl::handlers());
         let mut handlers = HashMap::new();
         for (n, h) in list {
             handlers.insert(n, h);

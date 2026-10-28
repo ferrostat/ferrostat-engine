@@ -14,7 +14,7 @@ use crate::interpreter::{err_message, AdoInterpreter};
 use crate::macros::{self, macro_number, unquote};
 
 /// SSC packages whose functionality Ferrostat provides natively.
-pub const NATIVE_PACKAGES: &[&str] = &["outreg2", "xtpmg", "spmap", "shp2dta", "sppack", "spmat", "xtivreg2", "ivreg2", "ranktest", "unique", "frmttable", "outreg", "reghdfe", "ivreghdfe", "ftools", "distinct", "mdesc", "winsor2"];
+pub const NATIVE_PACKAGES: &[&str] = &["outreg2", "xtpmg", "spmap", "shp2dta", "sppack", "spmat", "xtivreg2", "ivreg2", "ranktest", "unique", "frmttable", "outreg", "reghdfe", "ivreghdfe", "ftools", "distinct", "mdesc", "winsor2", "gtools", "gcollapse", "gegen", "gquantiles", "fasterxtile", "gstats", "gtop", "gtoplevelsof", "gunique", "gdistinct", "glevelsof", "gisid", "gduplicates", "hashsort", "greshape", "fcollapse", "fegen", "fisid", "fsort", "join", "flevelsof", "fre", "sumup", "tabout", "egenmore", "rangestat", "carryforward", "labutil", "labmask", "labvalch", "labvalclone", "labvarch"];
 
 /// Community packages whose commands have a different name from the package,
 /// as (package, commands it provides).
@@ -22,12 +22,15 @@ const PACKAGE_COMMANDS: &[(&str, &[&str])] = &[
     ("estout", &["esttab", "eststo", "estout", "estadd", "estpost"]),
     ("outreg", &["frmttable", "outreg"]),
     ("tabout", &["tabout"]),
+    ("gtools", &["gcollapse", "gegen", "gquantiles", "fasterxtile", "gstats", "gtop", "gtoplevelsof", "gunique", "gdistinct", "glevelsof", "gisid", "gduplicates", "hashsort", "greshape"]),
+    ("ftools", &["fcollapse", "fegen", "fisid", "fsort", "join", "flevelsof"]),
+    ("labutil", &["labmask", "labvalch", "labvalclone", "labvarch"]),
     ("st0085_2", &["esttab", "eststo"]),
 ];
 
 /// Packages accepted without providing commands (helpers whose features are
 /// built in, or toolkits whose commands are not needed natively).
-const NOOP_PACKAGES: &[&str] = &["ietoolkit", "iefieldkit", "ftools", "moremata"];
+const NOOP_PACKAGES: &[&str] = &["ietoolkit", "iefieldkit", "moremata", "egenmore"];
 
 /// Native commands providing `pkg`, or None when the package is unknown.
 fn package_commands(me: &AdoInterpreter, pkg: &str) -> Option<Vec<String>> {

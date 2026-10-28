@@ -260,6 +260,17 @@ impl Lexer {
                 break;
             }
         }
+        // older pseudo-functions m(1960m1), q(1967q1), h(..), w(..) are tm(), tq(), ...
+        if matches!(s.as_str(), "m" | "q" | "h" | "w") && self.current_char == Some('(') {
+            if let Some(close) = self.input[self.pos..].find(')') {
+                let arg = self.input[self.pos + 1..self.pos + close].trim().to_lowercase();
+                let unit = s.chars().next().unwrap();
+                let lit = arg.split_once(unit).is_some_and(|(y, n)| !y.is_empty() && y.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+                if lit {
+                    s = format!("t{s}");
+                }
+            }
+        }
         // date literals: td(15jan2001), tm(1960m1), tq(1967q1), ... take their
         // argument as raw text, returned as a string
         if matches!(s.as_str(), "td" | "tc" | "tC" | "tw" | "tm" | "tq" | "th" | "ty") && self.current_char == Some('(') {

@@ -76,6 +76,7 @@ pub type Term = Vec<Factor>;
 /// Parse an indepvars list into terms, expanding `a##b`.
 pub fn parse_terms(ds: &DataSet, text: &str) -> Result<Vec<Term>, String> {
     let mut terms: Vec<Term> = Vec::new();
+    let text = &crate::tsops::expand_text(text);
     for raw in text.split_whitespace() {
         // i.(a b) groups
         let raw = raw.to_string();

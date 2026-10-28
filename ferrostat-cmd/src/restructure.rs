@@ -193,7 +193,7 @@ impl CommandHandler for Contract {
 
 // ---- collapse -----------------------------------------------------------------
 
-fn stat_value(stat: &str, vals: &mut Vec<(f64, f64)>, wk: Option<WeightKind>) -> f64 {
+pub(crate) fn stat_value(stat: &str, vals: &mut Vec<(f64, f64)>, wk: Option<WeightKind>) -> f64 {
     // vals: (x, w) for nonmissing x
     let n = vals.len();
     if n == 0 {

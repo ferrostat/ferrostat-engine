@@ -332,10 +332,12 @@ label variable le_bm "Life expectancy, black males"
 fn example(test: &str, dataset: &str, commands: &[&str]) {
     let mut s = Session::new();
     s.script(dataset);
+    // files written by the examples (IRF files) go to the temporary directory
+    let dir = temp_dir(test);
+    s.run(&format!("cd \"{}\"", dir.display()));
     for c in commands {
         s.run(c);
     }
-    let dir = temp_dir(test);
     for ext in ["svg", "png"] {
         let f = dir.join(format!("graph.{ext}"));
         s.run(&format!("graph export \"{}\", replace", f.display()));
@@ -667,7 +669,6 @@ fn estimated_failure_rate_without_cis() {
 
 /// FEVDs after irf
 #[test]
-#[ignore = "needs VAR/VEC estimation (var, svar, irf, varfcast, vec), not implemented"]
 fn fevds_after_irf() {
     example(
         "fevds_after_irf",
@@ -682,7 +683,6 @@ fn fevds_after_irf() {
 
 /// Forecasts of dependent variables after var
 #[test]
-#[ignore = "needs VAR/VEC estimation (var, svar, irf, varfcast, vec), not implemented"]
 fn forecasts_of_dependent_variables_after_var() {
     example(
         "forecasts_of_dependent_variables_after_var",
@@ -830,7 +830,6 @@ fn horizontal_twoway_dropped_line_plot() {
 
 /// Impulse–response functions
 #[test]
-#[ignore = "needs VAR/VEC estimation (var, svar, irf, varfcast, vec), not implemented"]
 fn impulse_response_functions() {
     example(
         "impulse_response_functions",
@@ -1064,7 +1063,6 @@ fn overlaid_horizontal_area_plots() {
 
 /// Overlaid impulse–response functions
 #[test]
-#[ignore = "needs VAR/VEC estimation (var, svar, irf, varfcast, vec), not implemented"]
 fn overlaid_impulse_response_function() {
     example(
         "overlaid_impulse_response_function",
@@ -1502,7 +1500,6 @@ fn spike_plot() {
 
 /// Stability condition of VECM estimates
 #[test]
-#[ignore = "needs VAR/VEC estimation (var, svar, irf, varfcast, vec), not implemented"]
 fn stability_condition_of_vecm_estimates() {
     example(
         "stability_condition_of_vecm_estimates",

@@ -230,30 +230,18 @@ impl<'a> Env<'a> {
             let v = self.eval_name(var, row)?.num()?;
             return Ok(Val::Num(if is_missing(v) { SYSMISS } else if v == level { 1.0 } else { 0.0 }));
         }
-        let (kind, k) = match lower.chars().next() {
-            Some(c @ ('l' | 'f' | 'd' | 's')) => {
-                let n = lower[1..].parse::<i64>().unwrap_or(1);
-                (c, n)
+        let _ = lower;
+        // combined and chained operators (LD.x, L2S4.x, L.D.x) via their lag polynomial
+        let (ops, var) = name.rsplit_once('.').unwrap();
+        let poly = crate::tsops::lag_poly(ops).ok_or_else(|| rc_err(111, format!("{name} not found")))?;
+        let mut v = 0.0;
+        for (k, c) in poly {
+            let x = self.ts_value(var, row, k)?;
+            if is_missing(x) {
+                return Ok(Val::Num(SYSMISS));
             }
-            _ => return Err(rc_err(111, format!("{name} not found"))),
-        };
-        let lag = |r: usize, k: i64| -> Result<f64, String> { self.ts_value(var, r, k) };
-        let v = match kind {
-            'l' => lag(row, k)?,
-            'f' => lag(row, -k)?,
-            'd' => {
-                let mut cur: Vec<f64> = (0..=k).map(|j| lag(row, j)).collect::<Result<_, _>>()?;
-                for _ in 0..k {
-                    cur = cur.windows(2).map(|w| if is_missing(w[0]) || is_missing(w[1]) { SYSMISS } else { w[0] - w[1] }).collect();
-                }
-                cur[0]
-            }
-            _ => {
-                let a = lag(row, 0)?;
-                let b = lag(row, k)?;
-                if is_missing(a) || is_missing(b) { SYSMISS } else { a - b }
-            }
-        };
+            v += c * x;
+        }
         Ok(Val::Num(v))
     }
 

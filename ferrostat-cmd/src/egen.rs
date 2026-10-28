@@ -26,7 +26,7 @@ fn plural(n: usize) -> String {
 }
 
 /// Per-observation group id according to by-variables (or the by prefix).
-fn by_ids(ds: &DataSet, st: &Store, by: &[String], mask: &[bool]) -> (Vec<usize>, usize) {
+pub(crate) fn by_ids(ds: &DataSet, st: &Store, by: &[String], mask: &[bool]) -> (Vec<usize>, usize) {
     if by.is_empty() {
         if let Some(g) = &st.by_groups {
             // by prefix: groups are contiguous ranges
@@ -391,9 +391,14 @@ impl CommandHandler for Egen {
                 }
             }
             "mtr" => return Err(rc_err(198, "egen mtr() not supported")),
-            _ => {
-                return Err(rc_err(133, format!("unknown egen function {func}()")));
-            }
+            _ => match crate::community_dm::egen_extra(&func, &args, ds, st, cmd, &mask, &by)? {
+                Some(crate::community_dm::Extra::Num(v)) => out = v,
+                Some(crate::community_dm::Extra::Str(v)) => {
+                    is_str = true;
+                    sout = v;
+                }
+                None => return Err(rc_err(133, format!("unknown egen function {func}()"))),
+            },
         }
         let var = if is_str {
             let w = sout.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
@@ -402,7 +407,7 @@ impl CommandHandler for Egen {
             v
         } else {
             let t = ty.unwrap_or(match func.as_str() {
-                "group" | "tag" | "count" | "rowmiss" | "rownonmiss" | "seq" | "anycount" | "anymatch" | "diff" => {
+                "group" | "tag" | "count" | "rowmiss" | "rownonmiss" | "seq" | "anycount" | "anymatch" | "diff" | "nunique" | "nvals" | "nmissing" | "rcount" | "rall" | "rany" | "outside" | "id" => {
                     let b = util::best_numeric_type(&out);
                     if b == VarType::Byte && func == "count" { VarType::Long } else { b }
                 }
