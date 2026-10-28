@@ -13,6 +13,8 @@ on:
   push:
     branches: [main, master]
     tags: ["v*"]
+  # run by hand on a tag (Run workflow > Use workflow from: Tags > vX.Y.Z)
+  # to (re)publish that release
   workflow_dispatch:
 
 permissions:
@@ -62,10 +64,6 @@ jobs:
           name: dist-${{ matrix.target }}
           path: dist/
           retention-days: 30
-      - uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
-        with:
-          files: dist/*
 
   native:
     name: build (${{ matrix.target }})
@@ -94,10 +92,6 @@ jobs:
           name: dist-${{ matrix.target }}
           path: dist/
           retention-days: 30
-      - uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
-        with:
-          files: dist/*
 
   wasm:
     name: build (wasm32, browser)
@@ -126,7 +120,26 @@ jobs:
           name: dist-wasm32-web
           path: dist/
           retention-days: 30
-      - uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
+
+  # One job publishes the release after every build has finished, so the
+  # release is created once with all files (jobs uploading in parallel race).
+  publish:
+    name: publish release
+    if: github.ref_type == 'tag'
+    needs: [linux, native, wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
         with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: List files
+        run: ls -la dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Ferrostat ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
           files: dist/*
