@@ -8,7 +8,7 @@
 //! Statistical Analysis of Failure Time Data*; Collett, *Modelling Survival
 //! Data in Medical Research*.
 
-use ferrostat_core::missing::is_missing;
+use ferrostat_core::missing::{is_missing, SYSMISS};
 use ferrostat_core::{DataSet, Value, VarType, Variable};
 use ferrostat_parser::Command;
 
@@ -30,6 +30,189 @@ fn set_var(ds: &mut DataSet, name: &str, vt: VarType, vals: &[f64]) -> Result<()
     ds.add_variable(v)
 }
 
+// ---------------------------------------------------------------------------
+// st settings shared by the survival commands
+// ---------------------------------------------------------------------------
+
+/// One record of the st analysis: entry and exit analysis times, failure
+/// flag, observation number and the stset weight (1 when unweighted).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StObs {
+    pub t0: f64,
+    pub t: f64,
+    pub d: bool,
+    pub row: usize,
+    pub w: f64,
+}
+
+/// A `_dta[st_*]` characteristic.
+pub fn st_char(ds: &DataSet, key: &str) -> Option<String> {
+    ds.characteristics.get("_dta").and_then(|c| c.get(key)).filter(|s| !s.is_empty()).cloned()
+}
+
+/// Error unless the data have been stset.
+pub fn require_st(ds: &DataSet) -> Result<(), String> {
+    if ["_t", "_d", "_st", "_t0"].iter().any(|v| ds.get_var(v).is_none()) {
+        return Err(rc_err(119, "data not st; use stset"));
+    }
+    Ok(())
+}
+
+/// The id() variable of stset, if any.
+pub fn st_id(ds: &DataSet) -> Option<String> {
+    st_char(ds, "st_id").filter(|v| ds.get_var(v).is_some())
+}
+
+/// The stset weight: (kind, values) where kind is fweight/pweight/iweight.
+pub fn st_weight(ds: &DataSet, st: &Store) -> Result<Option<(String, Vec<f64>)>, String> {
+    let (Some(kind), Some(expr)) = (st_char(ds, "st_wt"), st_char(ds, "st_wv")) else { return Ok(None) };
+    let e = ferrostat_parser::parser::parse_expression(&expr).map_err(|e| rc_err(198, e.message))?;
+    let w = util::eval_col(ds, st, &e, &vec![true; ds.n_obs])?;
+    Ok(Some((kind, w)))
+}
+
+/// Records in the st analysis among the observations selected by `mask`.
+pub fn st_obs_mask(ds: &DataSet, st: &Store, mask: &[bool]) -> Result<Vec<StObs>, String> {
+    require_st(ds)?;
+    let (t, t0, d, s) = (util::col(ds, "_t")?, util::col(ds, "_t0")?, util::col(ds, "_d")?, util::col(ds, "_st")?);
+    let w = st_weight(ds, st)?.map(|(_, w)| w);
+    Ok((0..ds.n_obs)
+        .filter(|&i| mask[i] && s[i] == 1.0 && !is_missing(t[i]))
+        .map(|i| StObs { t0: if is_missing(t0[i]) { 0.0 } else { t0[i] }, t: t[i], d: d[i] == 1.0, row: i, w: w.as_ref().map_or(1.0, |w| w[i]) })
+        .collect())
+}
+
+/// Records in the st analysis and in the command's if/in sample.
+pub fn st_obs(ds: &DataSet, st: &Store, cmd: &Command) -> Result<Vec<StObs>, String> {
+    require_st(ds)?;
+    let mask = util::touse(ds, st, cmd)?;
+    st_obs_mask(ds, st, &mask)
+}
+
+/// `%w.0gc`: like fmt_g with thousands separators in the integer part.
+pub fn gc(v: f64, width: usize) -> String {
+    let s = fmt_g(v, width);
+    if s.contains('e') || is_missing(v) {
+        return s;
+    }
+    let (sign, body) = if let Some(b) = s.strip_prefix('-') { ("-", b) } else { ("", s.as_str()) };
+    let (int, frac) = match body.split_once('.') {
+        Some((a, b)) => (a, format!(".{b}")),
+        None => (body, String::new()),
+    };
+    let mut out = String::new();
+    for (i, c) in int.chars().enumerate() {
+        if i > 0 && (int.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    format!("{sign}{out}{frac}")
+}
+
+/// Text describing how analysis time is computed: `t1`, `(t1-origin)/365.25`.
+fn analysis_time_text(ds: &DataSet) -> String {
+    let bt = st_char(ds, "st_bt").or_else(|| st_char(ds, "st_t").filter(|t| t != "_t")).unwrap_or_else(|| "_t".into());
+    let scale = st_char(ds, "st_s").and_then(|s| s.parse::<f64>().ok()).unwrap_or(1.0);
+    let base = if st_char(ds, "st_orig").is_some() { format!("({bt}-origin)") } else { bt };
+    if scale != 1.0 { format!("{base}/{}", fmt_g(scale, 10)) } else { base }
+}
+
+/// The failure/analysis-time block printed by the st commands.
+pub fn st_header(ds: &DataSet) -> String {
+    let mut rows: Vec<(&str, String)> = Vec::new();
+    let fail = match st_char(ds, "st_bd").or_else(|| st_char(ds, "st_d").filter(|d| d != "_d")) {
+        Some(v) => match st_char(ds, "st_ev") {
+            Some(ev) => format!("{v}=={ev}"),
+            None => v,
+        },
+        None => "1 (meaning all fail)".into(),
+    };
+    rows.push(("Failure _d", fail));
+    rows.push(("Analysis time _t", analysis_time_text(ds)));
+    if let Some(o) = st_char(ds, "st_orig") {
+        rows.push(("Origin", o));
+    }
+    if let Some(e) = st_char(ds, "st_enter") {
+        rows.push(("Enter on or after", e));
+    }
+    if let Some(e) = st_char(ds, "st_exit") {
+        rows.push(("Exit on or before", e));
+    }
+    if let Some(id) = st_char(ds, "st_id") {
+        rows.push(("ID variable", id));
+    }
+    if let (Some(k), Some(v)) = (st_char(ds, "st_wt"), st_char(ds, "st_wv")) {
+        rows.push(("Weight", format!("[{k}={v}]")));
+    }
+    rows.iter().map(|(l, v)| format!("{l:>18}: {v}")).collect::<Vec<_>>().join("\n")
+}
+
+/// How an origin(), enter() or exit() time is specified.
+enum TimeSpec {
+    /// `time exp`: one value per observation.
+    Time(Vec<f64>),
+    /// `varname==numlist` (empty list: varname != 0 & varname < .).
+    Event(Vec<f64>, Vec<f64>),
+    Failure,
+    Min,
+    Never,
+}
+
+fn parse_time_spec(ds: &DataSet, st: &Store, text: &str) -> Result<TimeSpec, String> {
+    let t = text.trim();
+    if let Some(rest) = t.strip_prefix("time ").or_else(|| t.strip_prefix("time(").map(|r| r.trim_end_matches(')'))) {
+        let rest = rest.trim();
+        if rest == "." {
+            return Ok(TimeSpec::Never);
+        }
+        let e = ferrostat_parser::parser::parse_expression(rest).map_err(|e| rc_err(198, e.message))?;
+        return Ok(TimeSpec::Time(util::eval_col(ds, st, &e, &vec![true; ds.n_obs])?));
+    }
+    if "failure".starts_with(t) && !t.is_empty() {
+        return Ok(TimeSpec::Failure);
+    }
+    if t == "min" {
+        return Ok(TimeSpec::Min);
+    }
+    if t == "." {
+        return Ok(TimeSpec::Never);
+    }
+    let (v, codes) = match t.split_once("==") {
+        Some((v, l)) => (v.trim(), crate::margins::numlist(l)?),
+        None => (t, Vec::new()),
+    };
+    let v = varlist::resolve_name(ds, v)?;
+    Ok(TimeSpec::Event(util::col(ds, &v)?, codes))
+}
+
+fn event_match(vals: &[f64], codes: &[f64], i: usize) -> bool {
+    let x = vals[i];
+    if is_missing(x) {
+        return false;
+    }
+    if codes.is_empty() { x != 0.0 } else { codes.contains(&x) }
+}
+
+/// Remove the st variables and characteristics.
+fn st_clear(ds: &mut DataSet) -> Result<(), String> {
+    for v in ["_st", "_d", "_t", "_t0"] {
+        if ds.get_var(v).is_some() {
+            ds.drop_variable(v)?;
+        }
+    }
+    if let Some(c) = ds.characteristics.get_mut("_dta") {
+        c.retain(|k, _| !k.starts_with("st_") && k != "_dta");
+    }
+    Ok(())
+}
+
+fn label_var(ds: &mut DataSet, name: &str, label: &str) {
+    if let Some(v) = ds.get_var_mut(name) {
+        v.label = label.to_string();
+    }
+}
+
 pub struct Stset;
 
 impl CommandHandler for Stset {
@@ -37,15 +220,43 @@ impl CommandHandler for Stset {
         "stset"
     }
 
-    /// stset timevar [if] [, failure(var[==numlist])]
+    /// stset timevar [if] [weight] [, failure(var[==numlist]) id(var)
+    ///     origin(time exp|var==numlist|min) enter(time exp|var==numlist)
+    ///     exit(failure|time exp|var==numlist) scale(#) time0(var)]
+    /// stset, clear
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
+        if cmd.main.trim().is_empty() {
+            if cmd.has_opt("clear", 5) {
+                st_clear(ds)?;
+                return Ok(String::new());
+            }
+            let raw = st_char(ds, "st_cmd").ok_or_else(|| rc_err(119, "data not st; use stset"))?;
+            let c = ferrostat_parser::parser::parse_line(&raw).map_err(|e| rc_err(198, e.message))?;
+            return self.execute(ds, st, &c);
+        }
         let tvar = varlist::resolve_name(ds, cmd.main.trim())?;
-        let mask = util::touse(ds, st, cmd)?;
+        let n = ds.n_obs;
+        let mut mask = util::touse(ds, st, cmd)?;
+        let n_if = mask.iter().filter(|m| !**m).count();
+        let weights = util::weights(ds, st, cmd, &mut mask, "fpi")?;
+        let wtext = cmd.weight.as_ref().and_then(|_| {
+            let a = cmd.raw.find('[')?;
+            let b = cmd.raw[a..].find(']')? + a;
+            let (k, v) = cmd.raw[a + 1..b].split_once('=')?;
+            let k = match k.trim() {
+                "fw" | "fweight" => "fweight",
+                "pw" | "pweight" => "pweight",
+                "iw" | "iweight" => "iweight",
+                _ => "fweight",
+            };
+            Some((k.to_string(), v.trim().to_string()))
+        });
+        let n_weight = mask.iter().filter(|m| !**m).count() - n_if;
         let t = util::col(ds, &tvar)?;
         let (fvar, codes): (Option<String>, Vec<f64>) = match cmd.opt("failure", 1) {
             Some(f) => {
                 let (v, list) = match f.split_once("==") {
-                    Some((v, l)) => (v.trim().to_string(), l.split(|c: char| c == ',' || c.is_whitespace()).filter_map(|x| x.trim().parse().ok()).collect()),
+                    Some((v, l)) => (v.trim().to_string(), crate::margins::numlist(l)?),
                     None => (f.trim().to_string(), Vec::new()),
                 };
                 (Some(varlist::resolve_name(ds, &v)?), list)
@@ -53,58 +264,259 @@ impl CommandHandler for Stset {
             None => (None, Vec::new()),
         };
         let fcol = fvar.as_ref().map(|v| util::col(ds, v)).transpose()?;
-        let n = ds.n_obs;
-        let mut stv = vec![0.0; n];
-        let mut tv = vec![ferrostat_core::SYSMISS; n];
-        let mut dv = vec![ferrostat_core::SYSMISS; n];
+        let idvar = cmd.opt("id", 2).map(|v| varlist::resolve_name(ds, v.trim())).transpose()?;
+        let t0var = cmd.opt("time0", 2).map(|v| varlist::resolve_name(ds, v.trim())).transpose()?;
+        let t0col = t0var.as_ref().map(|v| util::col(ds, v)).transpose()?;
+        let origin = cmd.opt("origin", 2).map(|o| parse_time_spec(ds, st, o)).transpose()?;
+        let enter = cmd.opt("enter", 2).map(|o| parse_time_spec(ds, st, o)).transpose()?;
+        let exit = cmd.opt("exit", 2).map(|o| parse_time_spec(ds, st, o)).transpose()?.unwrap_or(TimeSpec::Failure);
+        let scale = util::opt_num(cmd, "scale", 2)?.unwrap_or(1.0);
+        if scale <= 0.0 {
+            return Err(rc_err(198, "scale() must be positive"));
+        }
+        // marking out
+        let mut n_tmiss = 0;
         for i in 0..n {
-            if mask[i] && !is_missing(t[i]) && t[i] > 0.0 {
-                stv[i] = 1.0;
-                tv[i] = t[i];
-                dv[i] = match &fcol {
-                    None => 1.0,
-                    Some(f) if is_missing(f[i]) => 0.0,
-                    Some(f) if codes.is_empty() => (f[i] != 0.0) as u8 as f64,
-                    Some(f) => codes.contains(&f[i]) as u8 as f64,
-                };
+            if mask[i] && is_missing(t[i]) {
+                mask[i] = false;
+                n_tmiss += 1;
             }
         }
-        let t0: Vec<f64> = (0..n).map(|i| if stv[i] == 1.0 { 0.0 } else { ferrostat_core::SYSMISS }).collect();
+        let mut n_idmiss = 0;
+        let idcol = idvar.as_ref().map(|v| util::col(ds, v)).transpose()?;
+        if let Some(c) = &idcol {
+            for i in 0..n {
+                if mask[i] && is_missing(c[i]) {
+                    mask[i] = false;
+                    n_idmiss += 1;
+                }
+            }
+        }
+        // subjects: rows sorted by exit time
+        let mut subjects: Vec<Vec<usize>> = match &idcol {
+            Some(c) => {
+                let mut m: std::collections::BTreeMap<u64, Vec<usize>> = Default::default();
+                for i in 0..n {
+                    if mask[i] {
+                        m.entry(c[i].to_bits()).or_default().push(i);
+                    }
+                }
+                m.into_values().collect()
+            }
+            None => (0..n).filter(|&i| mask[i]).map(|i| vec![i]).collect(),
+        };
+        for s in subjects.iter_mut() {
+            s.sort_by(|&a, &b| t[a].total_cmp(&t[b]).then(a.cmp(&b)));
+        }
+        let fails = |i: usize| match &fcol {
+            None => true,
+            Some(f) => event_match(f, &codes, i),
+        };
+        let first_event = |rows: &[usize], vals: &[f64], codes: &[f64]| rows.iter().find(|&&i| event_match(vals, codes, i)).map(|&i| t[i]);
+        let (mut stv, mut tv, mut t0v, mut dv) = (vec![0.0; n], vec![SYSMISS; n], vec![SYSMISS; n], vec![SYSMISS; n]);
+        let (mut n_enter, mut n_exit, mut n_orig) = (0usize, 0usize, 0usize);
+        let mut n_subj = 0usize;
+        for rows in &subjects {
+            let org = match &origin {
+                None => 0.0,
+                Some(TimeSpec::Time(v)) => v[rows[0]],
+                Some(TimeSpec::Event(v, c)) => first_event(rows, v, c).unwrap_or(SYSMISS),
+                Some(TimeSpec::Min) => rows.iter().filter_map(|&i| t0col.as_ref().map(|c| c[i])).filter(|x| !is_missing(*x)).fold(f64::INFINITY, f64::min).min(0.0),
+                Some(_) => 0.0,
+            };
+            let ent = match &enter {
+                None => f64::NEG_INFINITY,
+                Some(TimeSpec::Time(v)) => if is_missing(v[rows[0]]) { f64::NEG_INFINITY } else { v[rows[0]] },
+                Some(TimeSpec::Event(v, c)) => first_event(rows, v, c).unwrap_or(f64::INFINITY),
+                Some(_) => f64::NEG_INFINITY,
+            };
+            let ext = match &exit {
+                TimeSpec::Failure => rows.iter().find(|&&i| fails(i)).map_or(f64::INFINITY, |&i| t[i]),
+                TimeSpec::Never | TimeSpec::Min => f64::INFINITY,
+                TimeSpec::Time(v) => if is_missing(v[rows[0]]) { f64::INFINITY } else { v[rows[0]] },
+                TimeSpec::Event(v, c) => first_event(rows, v, c).unwrap_or(f64::INFINITY),
+            };
+            let mut used = false;
+            for (k, &i) in rows.iter().enumerate() {
+                if is_missing(org) {
+                    n_orig += 1;
+                    continue;
+                }
+                let raw0 = match &t0col {
+                    Some(c) => c[i],
+                    None if idcol.is_some() && k > 0 => t[rows[k - 1]],
+                    None => org,
+                };
+                let raw0 = if is_missing(raw0) { org } else { raw0 };
+                let begin = raw0.max(org).max(ent);
+                if begin >= ext {
+                    n_exit += 1;
+                    continue;
+                }
+                let (end, d) = if t[i] > ext { (ext, false) } else { (t[i], fails(i)) };
+                if end <= begin {
+                    if t[i] <= org && origin.is_some() {
+                        n_orig += 1;
+                    } else {
+                        n_enter += 1;
+                    }
+                    continue;
+                }
+                stv[i] = 1.0;
+                tv[i] = (end - org) / scale;
+                t0v[i] = (begin - org) / scale;
+                dv[i] = d as u8 as f64;
+                used = true;
+            }
+            n_subj += used as usize;
+        }
+        // store
+        st_clear(ds)?;
         set_var(ds, "_st", VarType::Byte, &stv)?;
         set_var(ds, "_d", VarType::Byte, &dv)?;
         set_var(ds, "_t", VarType::Double, &tv)?;
-        set_var(ds, "_t0", VarType::Double, &t0)?;
-        ds.characteristics.entry("_dta".into()).or_default().insert("st_t".into(), tvar.clone());
-        if let Some(f) = &fvar {
-            ds.characteristics.entry("_dta".into()).or_default().insert("st_d".into(), f.clone());
+        set_var(ds, "_t0", VarType::Double, &t0v)?;
+        label_var(ds, "_st", "1 if record is to be used; 0 otherwise");
+        label_var(ds, "_d", "1 if failure; 0 if censored");
+        label_var(ds, "_t", "Analysis time when record ends");
+        label_var(ds, "_t0", "Analysis time when record begins");
+        let spec = |c: &Command, name: &str, min: usize| c.opt(name, min).map(|s| s.trim().to_string());
+        {
+            let ch = ds.characteristics.entry("_dta".into()).or_default();
+            let mut put = |k: &str, v: String| {
+                ch.insert(k.into(), v);
+            };
+            put("_dta", "st".into());
+            put("st_ver", "2".into());
+            put("st_t", "_t".into());
+            put("st_t0", "_t0".into());
+            put("st_d", "_d".into());
+            put("st_bt", tvar.clone());
+            put("st_s", fmt_g(scale, 12));
+            put("st_cmd", cmd.raw.clone());
+            if let Some(f) = &fvar {
+                put("st_bd", f.clone());
+                if !codes.is_empty() {
+                    put("st_ev", codes.iter().map(|c| fmt_g(*c, 12)).collect::<Vec<_>>().join(" "));
+                }
+            }
+            if let Some(id) = &idvar {
+                put("st_id", id.clone());
+            }
+            if let Some(v) = &t0var {
+                put("st_bt0", v.clone());
+            }
+            if let Some(o) = spec(cmd, "origin", 2) {
+                put("st_orig", o);
+            }
+            if let Some(o) = spec(cmd, "enter", 2) {
+                put("st_enter", o);
+            }
+            if let Some(o) = spec(cmd, "exit", 2) {
+                if !"failure".starts_with(o.as_str()) {
+                    put("st_exit", o);
+                }
+            }
+            if let Some((k, v)) = &wtext {
+                put("st_wt", k.clone());
+                put("st_wv", v.clone());
+            }
         }
+        let _ = weights;
+        // report
         let used = stv.iter().filter(|&&s| s == 1.0).count();
-        let failures = dv.iter().filter(|&&d| d == 1.0).count();
-        let risk: f64 = tv.iter().filter(|x| !is_missing(**x)).sum();
+        let failures: f64 = dv.iter().filter(|d| !is_missing(**d)).sum();
+        let risk: f64 = (0..n).filter(|&i| stv[i] == 1.0).map(|i| tv[i] - t0v[i]).sum();
         let fdesc = match &fvar {
-            None => "(assumed to fail at time=_t)".to_string(),
-            Some(f) if codes.is_empty() => format!("{f} != 0 & {f} < ."),
-            Some(f) => format!("{f} == {}", codes.iter().map(|c| fmt_g(*c, 9)).collect::<Vec<_>>().join(" ")),
+            None => format!("(assumed to fail at time={tvar})"),
+            Some(f) if codes.is_empty() => format!("{f}!=0 & {f}<."),
+            Some(f) => format!("{f}=={}", codes.iter().map(|c| fmt_g(*c, 9)).collect::<Vec<_>>().join(" ")),
         };
-        Ok(format!(
-            "Survival-time data settings\n\n         Failure event: {fdesc}\nObserved time interval: (0, {tvar}]\n     Exit on or before: failure\n\n{:>10}  total observations\n{:>10}  observations excluded\n{:>10}  observations remaining, representing\n{:>10}  failures in single-record/single-failure data\n{:>10}  total analysis time at risk and under observation",
-            util::commas(n),
-            util::commas(n - used),
-            util::commas(used),
-            util::commas(failures),
-            fmt_g(risk, 12)
-        ))
+        let mut out = vec!["Survival-time data settings".to_string(), String::new()];
+        if let Some(id) = &idvar {
+            out.push(format!("{:>22}: {id}", "ID variable"));
+        }
+        out.push(format!("{:>22}: {fdesc}", "Failure event"));
+        let interval = match (&t0var, &idvar) {
+            (Some(v), _) => format!("({v}, {tvar}]"),
+            (None, Some(_)) => format!("({tvar}[_n-1], {tvar}]"),
+            (None, None) => format!("(0, {tvar}]"),
+        };
+        out.push(format!("{:>22}: {interval}", "Observed time interval"));
+        if let Some(e) = spec(cmd, "enter", 2) {
+            out.push(format!("{:>22}: {e}", "Enter on or after"));
+        }
+        let exit_text = match spec(cmd, "exit", 2) {
+            Some(e) if !"failure".starts_with(e.as_str()) => e,
+            _ => "failure".into(),
+        };
+        out.push(format!("{:>22}: {exit_text}", "Exit on or before"));
+        if origin.is_some() || scale != 1.0 {
+            out.push(format!("{:>22}: {}", "Time for analysis", analysis_time_text(ds)));
+        }
+        if let Some(o) = spec(cmd, "origin", 2) {
+            out.push(format!("{:>22}: {o}", "Origin"));
+        }
+        if let Some((k, v)) = &wtext {
+            out.push(format!("{:>22}: [{k}={v}]", "Weight"));
+        }
+        out.push(String::new());
+        let bar = "-".repeat(74);
+        out.push(bar.clone());
+        out.push(format!("{:>11}  total observations", util::commas(n)));
+        let mut excl = Vec::new();
+        if n_if > 0 {
+            excl.push(format!("{:>11}  ignored at outset because of if/in", util::commas(n_if)));
+        }
+        if n_weight > 0 {
+            excl.push(format!("{:>11}  weights invalid", util::commas(n_weight)));
+        }
+        if n_tmiss > 0 {
+            excl.push(format!("{:>11}  event time missing ({tvar}>=.){:>18}", util::commas(n_tmiss), "PROBABLE ERROR"));
+        }
+        if n_idmiss > 0 {
+            excl.push(format!("{:>11}  missing id ({})", util::commas(n_idmiss), idvar.clone().unwrap_or_default()));
+        }
+        if n_orig > 0 {
+            excl.push(format!("{:>11}  observations end on or before origin()", util::commas(n_orig)));
+        }
+        if n_enter > 0 {
+            excl.push(format!("{:>11}  observations end on or before enter()", util::commas(n_enter)));
+        }
+        if n_exit > 0 {
+            excl.push(format!("{:>11}  observations begin on or after exit", util::commas(n_exit)));
+        }
+        if excl.is_empty() {
+            out.push(format!("{:>11}  exclusions", 0));
+        } else {
+            out.extend(excl);
+        }
+        out.push(bar);
+        out.push(format!("{:>11}  observations remaining, representing", util::commas(used)));
+        if idvar.is_some() {
+            out.push(format!("{:>11}  subjects", util::commas(n_subj)));
+        }
+        let kind = match (&idvar, &exit) {
+            (None, _) => "single-record/single-failure data",
+            (Some(_), TimeSpec::Failure) => "single-failure-per-subject data",
+            (Some(_), _) => "multiple-failure-per-subject data",
+        };
+        out.push(format!("{:>11}  failures in {kind}", gc(failures, 10)));
+        out.push(format!("{:>11}  total analysis time at risk and under observation", gc(risk, 10)));
+        let min0 = (0..n).filter(|&i| stv[i] == 1.0).map(|i| t0v[i]).fold(f64::INFINITY, f64::min);
+        let maxt = (0..n).filter(|&i| stv[i] == 1.0).map(|i| tv[i]).fold(f64::NEG_INFINITY, f64::max);
+        if used > 0 {
+            out.push(format!("{:>64}{:>10}", "At risk from t =", 0));
+            out.push(format!("{:>64}{:>10}", "Earliest observed entry t =", gc(min0, 9)));
+            out.push(format!("{:>64}{:>10}", "Last observed exit t =", gc(maxt, 9)));
+        }
+        Ok(out.join("\n"))
     }
 }
 
 /// (t, d, row) of the observations in the st analysis and the command sample.
 fn st_data(ds: &DataSet, st: &Store, cmd: &Command) -> Result<Vec<(f64, bool, usize)>, String> {
-    if ds.get_var("_t").is_none() || ds.get_var("_d").is_none() {
-        return Err(rc_err(119, "data not st; use stset"));
-    }
-    let mask = util::touse(ds, st, cmd)?;
-    let (t, d, s) = (util::col(ds, "_t")?, util::col(ds, "_d")?, util::col(ds, "_st")?);
-    Ok((0..ds.n_obs).filter(|&i| mask[i] && s[i] == 1.0 && !is_missing(t[i])).map(|i| (t[i], d[i] == 1.0, i)).collect())
+    Ok(st_obs(ds, st, cmd)?.into_iter().map(|o| (o.t, o.d, o.row)).collect())
 }
 
 /// Groups of a by() variable: (label, observation rows); one group when absent.
@@ -125,7 +537,17 @@ fn by_groups(ds: &DataSet, var: Option<&str>, data: &[(f64, bool, usize)]) -> Re
         .collect())
 }
 
+/// Risk-set table with delayed entry: a record is at risk at `tj` when
+/// `_t0 < tj <= _t`.
+fn risk_table_t0(rows: &[(f64, bool, usize)], t0: &[f64]) -> Vec<(f64, f64, f64)> {
+    let mut times: Vec<f64> = rows.iter().filter(|r| r.1).map(|r| r.0).collect();
+    times.sort_by(f64::total_cmp);
+    times.dedup();
+    times.into_iter().map(|tj| (tj, rows.iter().filter(|r| r.0 >= tj && t0[r.2] < tj).count() as f64, rows.iter().filter(|r| r.0 == tj && r.1).count() as f64)).collect()
+}
+
 /// Risk-set table: (time, at risk, failures) at each distinct failure time.
+#[cfg(test)]
 fn risk_table(rows: &[(f64, bool, usize)]) -> Vec<(f64, f64, f64)> {
     let mut times: Vec<f64> = rows.iter().filter(|r| r.1).map(|r| r.0).collect();
     times.sort_by(f64::total_cmp);
@@ -144,9 +566,10 @@ impl CommandHandler for Sts {
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         let sub = cmd.main.split_whitespace().next().unwrap_or("graph");
         if !matches!(sub, "graph" | "gr") {
-            return Err(rc_err(198, format!("sts {sub} not supported; use sts graph")));
+            return crate::stsum::sts(ds, st, cmd, sub);
         }
         let data = st_data(ds, st, cmd)?;
+        let t0 = util::col(ds, "_t0")?;
         let na = cmd.has_opt("na", 2) || cmd.has_opt("cumhaz", 4);
         let groups = by_groups(ds, cmd.opt("by", 2).as_deref(), &data)?;
         let mut graph = Graph::default();
@@ -155,7 +578,7 @@ impl CommandHandler for Sts {
             // step function starting at 0
             let mut level = if na { 0.0 } else { 1.0 };
             let mut pts = vec![(0.0, level)];
-            for (tj, nj, dj) in risk_table(rows) {
+            for (tj, nj, dj) in risk_table_t0(rows, &t0) {
                 pts.push((tj, level));
                 level = if na { level + dj / nj } else { level * (1.0 - dj / nj) };
                 pts.push((tj, level));
@@ -170,7 +593,7 @@ impl CommandHandler for Sts {
                     let tk = tmax * k as f64 / 5.0;
                     marks.points.push((tk, if na { 0.0 } else { 0.02 }));
                     marks.sizes.push(0.0);
-                    marks.mlabels.push(rows.iter().filter(|r| r.0 >= tk).count().to_string());
+                    marks.mlabels.push(rows.iter().filter(|r| r.0 >= tk && (t0[r.2] < tk || t0[r.2] <= 0.0)).count().to_string());
                 }
                 graph.layers.push(marks);
             }
@@ -185,11 +608,14 @@ impl CommandHandler for Sts {
                 graph.legend = false;
             }
         }
-        let fail = ds.characteristics.get("_dta").and_then(|c| c.get("st_d")).cloned().unwrap_or_else(|| "_d".into());
-        let time = ds.characteristics.get("_dta").and_then(|c| c.get("st_t")).cloned().unwrap_or_else(|| "_t".into());
         let extra = graph::finish(&mut graph, cmd, st)?;
-        Ok([format!("        Failure _d: {fail}\n  Analysis time _t: {time}"), extra].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n"))
+        Ok([st_header(ds), extra].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n"))
     }
+}
+
+/// Exact Poisson confidence interval for a rate (for other modules).
+pub fn poisson_ci_pub(d: f64, y: f64, level: f64) -> (f64, f64) {
+    poisson_ci(d, y, level)
 }
 
 /// Exact Poisson confidence interval for a rate with `d` events in `y` time units.

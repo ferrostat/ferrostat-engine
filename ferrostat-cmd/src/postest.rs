@@ -156,6 +156,12 @@ impl CommandHandler for Predict {
         if let Some(out) = crate::xtnl::predict(ds, st, cmd)? {
             return Ok(out);
         }
+        if let Some(out) = crate::stcox::predict(ds, st, cmd)? {
+            return Ok(out);
+        }
+        if let Some(out) = crate::streg::predict(ds, st, cmd)? {
+            return Ok(out);
+        }
         if ecmd == "reghdfe" {
             if let Some(out) = crate::reghdfe::predict(ds, st, cmd)? {
                 return Ok(out);
@@ -1170,6 +1176,9 @@ impl CommandHandler for Estat {
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
         if let Some(r) = crate::xtdpd::estat(st, sub.as_str(), cmd) {
+            return r;
+        }
+        if let Some(r) = crate::stcox::estat(ds, st, sub.as_str(), cmd) {
             return r;
         }
         if ecmd == "arima" && sub == "aroots" {

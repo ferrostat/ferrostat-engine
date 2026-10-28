@@ -256,7 +256,7 @@ impl CommandHandler for Xtgls {
                 rho = if corr == Corr::Ar1 { vec![r.iter().sum::<f64>() / m as f64; m] } else { r };
             }
             let (xs, ys) = prais(&p, &x, &d.y, &rho);
-            let (bs, _) = ols_b(&xs, &ys, &ones);
+            let bs = if it == 0 { ols_b(&xs, &ys, &ones).0 } else { b.clone() };
             let es = resid(&xs, &ys, &bs);
             let div = if nmk { (n - ka) as f64 / n as f64 } else { 1.0 };
             sigma = match pan {

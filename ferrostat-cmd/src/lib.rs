@@ -53,6 +53,10 @@ pub mod store;
 pub mod summarize;
 pub mod surface;
 pub mod survival;
+// survival models and summaries (stcox, streg, sts list/test, stsplit...)
+pub mod stcox;
+pub mod streg;
+pub mod stsum;
 pub mod table;
 pub mod proportion;
 pub mod teffects;
