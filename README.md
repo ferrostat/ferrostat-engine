@@ -67,7 +67,7 @@ Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with
 | Descriptive | `summarize` (incl. `detail`, weights), `proportion`, `distinct`, `mdesc`, `winsor2`, `tabulate` (one/two-way, `chi2`, `lrchi2`, `exact`, `V`, `gamma`, `taub`, `generate()`), `tab1`, `tab2`, `tabstat`, `table` (current and legacy `contents()` syntax), `dtable`, `correlate`, `pwcorr`, `spearman`, `centile`, `mean`, `total`, `ci`, `codebook`, `misstable` |
 | Tests | `ttest` (one-sample, paired, by-group, unequal/Welch), `prtest`, `sdtest`, `ranksum`, `signrank`, `signtest`, `kwallis`, `oneway`, `ksmirnov`, `swilk`, `hausman` |
 | Linear models | `regress` (robust, HC2/HC3, cluster, `fw`/`aw`/`pw`/`iw`), `anova`, `areg`, `qreg`, `rreg`, `mvreg`, `manova`/`manovatest`, `ivregress 2sls`/`liml`/`gmm` (`wmatrix()`, `igmm`; `estat firststage`, `estat overid`) |
-| Panel | `xtreg` (`fe`, `re`, `be`, cluster), `xtivreg` (`fe`, `be`, `fd`, `re` with G2SLS or `ec2sls`), `xtivreg2` (`fe`, cluster; Kleibergen–Paap and Cragg–Donald identification tests with Stock–Yogo critical values, Hansen J, C endogeneity test), `xtpmg` (PMG, MG; Pesaran CD test) |
+| Panel | `xtlogit`, `xtprobit`, `xtpoisson`, `xtnbreg` (re by adaptive quadrature, fe, pa), `xtgls`, `xtpcse`, `xtabond`, `xtdpdsys`, `xtabond2`, `xttest0`, `xttest3`, `xtserial`, `xtcsd`, `xtreg` (`fe`, `re`, `be`, cluster), `xtivreg` (`fe`, `be`, `fd`, `re` with G2SLS or `ec2sls`), `xtivreg2` (`fe`, cluster; Kleibergen–Paap and Cragg–Donald identification tests with Stock–Yogo critical values, Hansen J, C endogeneity test), `xtpmg` (PMG, MG; Pesaran CD test) |
 | Nonlinear | `logit`, `logistic`, `probit`, `cloglog`, `poisson`, `nbreg`, `zip`, `zinb`, `ologit`, `oprobit`, `mlogit`, `tobit`, `glm` (6 families, 7 links) |
 | Multilevel | `melogit`/`meqrlogit` (random intercepts and independent slopes, nested levels, adaptive Gauss–Hermite quadrature) |
 | Resampling | `bootstrap` (and `vce(bootstrap)`, `estat bootstrap` with normal/percentile/BC/BCa intervals), `simulate`, `permute`; replications run in parallel on all cores (`set processors #`) with results independent of the core count, also in the browser |
@@ -75,7 +75,8 @@ Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with
 | High-dimensional FE | `reghdfe` (multiple absorbed fixed effects, multi-way clustering, singleton dropping, saved FEs) |
 | Post-estimation | `predict` (xb, residuals, stdp/stdf/stdr, leverage, rstandard/rstudent, cooksd, pr, n, ir, mu, u/e/xbu, scores), `test`, `testparm`, `lincom`, `margins` (predictive margins, `dydx()`, `at()` with numlists and statistics, `atmeans`, `over()`, `predict()` outcomes; delta-method SEs), `marginsplot`, `contrast` (r./a./ar./g. operators, `@` groups, joint Wald tests, `effects`, `post`), r(table) after every coefficient table, `estimates store/restore/table/stats`, `estat ic/vce/hettest/ovtest/vif/summarize/firststage/gof` |
 | Spatial | `shp2dta` (ESRI shapefile + dBase import), `spmat contiguity` (queen/rook, row/minmax/spectral normalisation), `spmat lag`, `spmap` (choropleths) |
-| Survival | `stset`, `sts graph`, `strate` (exact Poisson CIs), `ltable` (actuarial life tables, Greenwood SEs) |
+| Survival | `stset` (id, enter, exit, origin, scale), `stcox` (Breslow, Efron, exact ties; strata, robust, tvc, shared frailty; `estat phtest`, `estat concordance`, `stcurve`), `streg` (exponential, Weibull, Gompertz, log-logistic, lognormal, generalized gamma; PH/AFT; frailty), `sts graph|list|test|generate`, `stsum`, `stci`, `stdescribe`, `stptime`, `stsplit`, `stjoin`, `strate`, `ltable` |
+| Time series | `arima` (ARMAX, seasonal, Kalman-filter ML), `newey`, `prais`, `dfuller`, `pperron`, `dfgls`, `corrgram`, `wntestq`, `tssmooth`, `tsfilter` (hp, bk, cf, bw), `var`, `svar`, `varsoc`, `varstable`, `varlmar`, `varnorm`, `vargranger`, `varwle`, `irf` (create, table, graph, ctable, ...), `vec`, `vecrank`, `fcast` |
 | ROC | `roctab` (DeLong SE, Lorenz/Gini/Pietra), `roccomp`, `rocgold` (DeLong comparisons), `rocfit` (binormal ML) |
 | Mata | `mata`/`mata:` … `end` blocks and `mata:` one-liners (real/string matrices, operators incl. colon ops, subscripts and ranges, typed functions, loops, pointers), `mata describe/drop/clear`, `clear mata`; library (J, I, select, sort, cross, invsym, colsum, mean, tokens, sprintf/printf, …), `st_data/st_sdata/st_view/st_store/st_addvar/st_local/st_global/st_numscalar/st_matrix`… and the `xl()` class (load_book, get_sheets, get_string/get_number, put_*) |
 | Python | `python:` one-liners and `python`/`python:` … `end` blocks in a persistent external Python 3 process, `python query/search/which/describe/drop/clear/script/set exec`, `set python_exec`; `sfi` module subset (Data, Macro, Scalar, Matrix, SFIToolkit); not in the browser |
@@ -203,7 +204,7 @@ None: graph text uses an embedded copy of the DejaVu Sans font (`assets/fonts`, 
 
 Commands, prefixes and options follow the familiar conventions of do-file syntax, including minimal abbreviations, `[fw=]`/`[aw=]`/`[pw=]`/`[iw=]` weights and `in f/l` ranges. Error messages end with the usual return code (`r(111);`), which `capture` stores in `_rc`; in batch mode the process exit status is the return code of the failing command.
 
-Community packages that Ferrostat implements natively (`estout`/`esttab`/`eststo`, `coefplot`, `outreg2`, `frmttable`, `unique`, `reghdfe`/`ftools`, `distinct`, `mdesc`, `winsor2`, `xtivreg2`/`ivreg2`, `xtpmg`, `spmap`, `shp2dta`, `spmat`) are reported by `which` and accepted by `ssc install`, which installs nothing. Other community packages are not downloaded.
+Community packages that Ferrostat implements natively (`estout`/`esttab`/`eststo`, `coefplot`, `outreg2`, `frmttable`, `unique`, `reghdfe`/`ftools`, `gtools`, `fre`, `tabout`, `rangestat`, `carryforward`, `labutil`, `xtabond2`, `distinct`, `mdesc`, `winsor2`, `xtivreg2`/`ivreg2`, `xtpmg`, `spmap`, `shp2dta`, `spmat`) are reported by `which` and accepted by `ssc install`, which installs nothing. Other community packages are not downloaded.
 
 ---
 
@@ -297,7 +298,7 @@ cargo test --workspace
 
 - Mata covers the common matrix language and `st_*` interface but not complex numbers or classes (other than `xl()`), and views are copies. Python needs an external Python 3 and is unavailable in the browser.
 - Community packages are not downloaded; only the natively implemented ones above are available.
-- Not yet implemented: VAR/VEC models (`var`, `svar`, `irf`, `vec`, `varfcast`), linear mixed models (`mixed`) and the other `me` commands besides `melogit`, `svy`, `mi`, Bayesian and SEM suites.
+- Not yet implemented: `svy`, `mi`, Bayesian and SEM suites; linear mixed models and most `me` commands are in progress.
 - `xtivreg` `be`/`fd`/`re` and `ivregress liml`/`gmm` are validated against independent textbook implementations, not yet against original output; the random-effects variance components use the Swamy–Arora-type within/between 2SLS estimates (Baltagi, ch. 7).
 - `xtivreg2` reports the Kleibergen–Paap rk LM/Wald F (Anderson LM and Cragg–Donald F under i.i.d. errors), Hansen J/Sargan and the C endogeneity test. Stock–Yogo critical values (TSLS bias and size, from the published tables) are shown alongside. Its header follows `xtivreg`, and the small-sample conventions under fixed effects with clustering have not yet been checked against original output.
 - Random-number streams are reproducible within Ferrostat but differ from other software for the same seed.
@@ -310,6 +311,8 @@ cargo test --workspace
 - The `.dta` format is implemented from publicly available documentation.
 - All statistical algorithms are textbook implementations (Wooldridge, Greene, Cameron & Trivedi, Hayashi, Pesaran–Shin–Smith, Kleibergen–Paap 2006, Cragg–Donald 1993) or standard numerical methods.
 - Weak-instrument critical values are transcribed from the tables published by Stock and Yogo (2005).
+- Community packages are reimplemented from their documentation and published papers, without copying their code. Where a package's licence permits it, its source was also consulted for algorithm details: `xtabond2` (D. Roodman, GPL-3.0-or-later), `reghdfe`/`ftools` (S. Correia, MIT), `gtools` (M. Caceres Bravo, MIT).
+- Johansen cointegration critical values are transcribed from the published tables of Osterwald-Lenum (1992).
 - The logo is original artwork generated by `assets/make_logo.py`.
 - Every parser rule, AST node, and evaluation function is original code.
 - Expected test values come from an independent reference implementation, not from running other software.
@@ -323,8 +326,7 @@ This project exists to ensure long-term accessibility of statistical datasets an
 
 Contributions are welcome! Priority areas:
 
-- [ ] Survival models: `stcox`, `streg`
-- [ ] Time series: `arima`, `newey`, `prais`, VAR/VEC (`var`, `irf`, `vec`)
+- [ ] Time series: `arch`/`garch`, `sspace`, `dfactor`, `ucm`, `mswitch`, `forecast`
 - [ ] Survey data: `svyset`, `svy:`
 - [ ] Multiple imputation: `mi`
 - [ ] `heckman`, `clogit`, `xtlogit`, `mixed` and the other multilevel models

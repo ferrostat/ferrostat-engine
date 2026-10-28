@@ -102,6 +102,8 @@ pub struct Cox {
     pub d: Vec<bool>,
     pub w: Vec<f64>,
     pub strata: Vec<usize>,
+    /// offset added to every linear predictor (log frailties)
+    pub off: Vec<f64>,
     pub ties: Ties,
     pub groups: Vec<FailGroup>,
     /// failure groups of each stratum, ordered by time
@@ -165,7 +167,7 @@ impl Cox {
                 groups.push(FailGroup { stratum: s, tau, g: gfun(tau), fails: f });
             }
         }
-        Cox { x, z, kx, kz, xmean, zmean, t0, t, d, w, strata, ties, groups, sgroups, srecs }
+        Cox { x, z, kx, kz, xmean, zmean, t0, t, d, w, strata, off: vec![0.0; n], ties, groups, sgroups, srecs }
     }
 
     pub fn n(&self) -> usize {
@@ -184,7 +186,7 @@ impl Cox {
     }
 
     fn eta(&self, b: &[f64], i: usize, g: f64) -> f64 {
-        let mut s: f64 = self.x[i].iter().zip(b).map(|(x, b)| x * b).sum();
+        let mut s: f64 = self.off[i] + self.x[i].iter().zip(b).map(|(x, b)| x * b).sum::<f64>();
         if self.kz > 0 {
             s += self.z[i].iter().zip(&b[self.kx..]).map(|(z, b)| z * b * g).sum::<f64>();
         }
@@ -632,6 +634,188 @@ pub fn fit_from_e(ds: &DataSet, st: &Store) -> Result<CoxFit, String> {
 }
 
 // ---------------------------------------------------------------------------
+// shared gamma frailty
+// ---------------------------------------------------------------------------
+
+/// Result of the shared-frailty fit.
+pub struct FrailFit {
+    pub b: Vec<f64>,
+    pub v: Matrix,
+    pub ll: f64,
+    pub theta: f64,
+    pub se_theta: f64,
+    pub profile_log: Vec<f64>,
+    pub converged: bool,
+}
+
+/// For a fixed theta: EM over the group frailties (Klein 1992). Returns the
+/// marginal log likelihood (shifted so that theta -> 0 gives the partial
+/// likelihood), the coefficients and the frailty means.
+fn frailty_em(cox: &mut Cox, grp: &[usize], ng: usize, theta: f64, b0: &[f64], w0: &[f64]) -> Result<(f64, Vec<f64>, Vec<f64>), String> {
+    let n = cox.n();
+    let k = cox.k();
+    let mut b = b0.to_vec();
+    let mut wg = w0.to_vec();
+    let mut dg = vec![0.0; ng];
+    for i in 0..n {
+        if cox.d[i] {
+            dg[grp[i]] += cox.w[i];
+        }
+    }
+    let it = 1.0 / theta;
+    let mut hg = vec![0.0; ng];
+    for _ in 0..2000 {
+        for i in 0..n {
+            cox.off[i] = wg[grp[i]].ln();
+        }
+        if k > 0 {
+            let res = est::maximize(&CoxLik { cox }, b.clone(), 100)?;
+            b = res.b;
+        }
+        // Breslow increments with the frailty-weighted risk sets
+        let base = cox.baseline(&b);
+        let shift: f64 = cox.xmean.iter().zip(&b).map(|(m, b)| m * b).sum();
+        hg.iter_mut().for_each(|h| *h = 0.0);
+        let cum = cumulative_by_record(cox, &base);
+        for i in 0..n {
+            let r = (cox.eta(&b, i, 0.0) - cox.off[i] + shift).exp();
+            hg[grp[i]] += cox.w[i] * r * cum[i];
+        }
+        let new: Vec<f64> = (0..ng).map(|g| (it + dg[g]) / (it + hg[g])).collect();
+        let change = new.iter().zip(&wg).map(|(a, c)| (a.ln() - c.ln()).abs()).fold(0.0, f64::max);
+        wg = new;
+        if change < 1e-13 {
+            break;
+        }
+    }
+    for i in 0..n {
+        cox.off[i] = wg[grp[i]].ln();
+    }
+    let base = cox.baseline(&b);
+    let shift: f64 = cox.xmean.iter().zip(&b).map(|(m, b)| m * b).sum();
+    let cum = cumulative_by_record(cox, &base);
+    hg.iter_mut().for_each(|h| *h = 0.0);
+    let mut ll = 0.0;
+    for (gi, f) in cox.groups.iter().enumerate() {
+        let dt: f64 = f.fails.iter().map(|&i| cox.w[i]).sum();
+        ll += dt * base[gi].0.ln() - dt * (dt.ln() - 1.0);
+    }
+    for i in 0..n {
+        let xb = cox.eta(&b, i, 0.0) - cox.off[i] + shift;
+        hg[grp[i]] += cox.w[i] * xb.exp() * cum[i];
+        if cox.d[i] {
+            ll += cox.w[i] * xb;
+        }
+    }
+    for g in 0..ng {
+        ll += dg[g] * theta.ln() + dist::lngamma(it + dg[g]) - dist::lngamma(it) - (it + dg[g]) * (theta * hg[g]).ln_1p();
+    }
+    Ok((ll, b, wg))
+}
+
+/// Baseline cumulative hazard over each record's interval (t0, t].
+fn cumulative_by_record(cox: &Cox, base: &[(f64, f64)]) -> Vec<f64> {
+    let mut out = vec![0.0; cox.n()];
+    for (s, recs) in cox.srecs.iter().enumerate() {
+        let gl = &cox.sgroups[s];
+        let taus: Vec<f64> = gl.iter().map(|&g| cox.groups[g].tau).collect();
+        let mut cum = vec![0.0; gl.len() + 1];
+        for (k, &g) in gl.iter().enumerate() {
+            cum[k + 1] = cum[k] + base[g].0;
+        }
+        for &r in recs {
+            let hi = taus.partition_point(|&tau| tau <= cox.t[r]);
+            let lo = taus.partition_point(|&tau| tau <= cox.t0[r]);
+            out[r] = cum[hi] - cum[lo];
+        }
+    }
+    out
+}
+
+/// Shared gamma frailty Cox model: profile likelihood over ln(theta) with
+/// EM inside; standard errors from the penalized partial likelihood
+/// (frailties as parameters, penalty (1/theta) sum(omega - exp(omega))).
+pub fn frailty_fit(cox: &mut Cox, grp: &[usize], ng: usize) -> Result<FrailFit, String> {
+    let k = cox.k();
+    let mut b = vec![0.0; k];
+    let mut w = vec![1.0; ng];
+    let mut prof = |phi: f64, b: &mut Vec<f64>, w: &mut Vec<f64>| -> Result<f64, String> {
+        let (ll, nb, nw) = frailty_em(cox, grp, ng, phi.exp(), b, w)?;
+        *b = nb;
+        *w = nw;
+        Ok(ll)
+    };
+    let mut phi = (0.5f64).ln();
+    let mut cur = prof(phi, &mut b, &mut w)?;
+    let mut log = vec![cur];
+    let h = 2e-3;
+    let mut converged = false;
+    let mut d2 = -1.0;
+    for _ in 0..60 {
+        let mut at = |x: f64| {
+            let (mut bp, mut wp) = (b.clone(), w.clone());
+            prof(x, &mut bp, &mut wp)
+        };
+        let (up, dn, up2, dn2) = (at(phi + h)?, at(phi - h)?, at(phi + h / 2.0)?, at(phi - h / 2.0)?);
+        // Richardson-extrapolated central differences
+        let d1 = (4.0 * (up2 - dn2) / h - (up - dn) / (2.0 * h)) / 3.0;
+        d2 = (4.0 * (up2 - 2.0 * cur + dn2) / (h * h / 4.0) - (up - 2.0 * cur + dn) / (h * h)) / 3.0;
+        let mut step = if d2 < 0.0 { -d1 / d2 } else { d1.signum() * 1.0 };
+        step = step.clamp(-3.0, 3.0);
+        if d1.abs() < 1e-9 && d2 < 0.0 {
+            converged = true;
+            break;
+        }
+        let mut accepted = false;
+        for _ in 0..30 {
+            let (mut bt, mut wt) = (b.clone(), w.clone());
+            let cand = prof(phi + step, &mut bt, &mut wt)?;
+            if cand >= cur - 1e-12 {
+                phi += step;
+                cur = cand;
+                b = bt;
+                w = wt;
+                accepted = true;
+                break;
+            }
+            step /= 2.0;
+        }
+        log.push(cur);
+        if !accepted || phi < -15.0 {
+            break;
+        }
+    }
+    let theta = if phi < -15.0 { 0.0 } else { phi.exp() };
+    let se_theta = if d2 < 0.0 { theta / (-d2).sqrt() } else { SYSMISS };
+    // penalized information over (beta, omega)
+    let n = cox.n();
+    let xa: Vec<Vec<f64>> = (0..n).map(|i| {
+        let mut r: Vec<f64> = cox.x[i].iter().zip(&cox.xmean).map(|(x, m)| x + m).collect();
+        r.extend((0..ng).map(|g| (grp[i] == g) as u8 as f64));
+        r
+    }).collect();
+    let ba: Vec<f64> = b.iter().cloned().chain(w.iter().map(|x| x.ln())).collect();
+    let aug = Cox::new(xa, vec![Vec::new(); n], &|t| t, cox.t0.clone(), cox.t.clone(), cox.d.clone(), cox.w.clone(), cox.strata.clone(), Ties::Breslow);
+    let (_, _, mut info, _) = aug.approx(&ba);
+    if theta > 0.0 {
+        for g in 0..ng {
+            info[(k + g, k + g)] += w[g] / theta;
+        }
+    }
+    let (inv, _) = info.sym_inverse(1e-14);
+    let mut v = Matrix::zeros(k, k);
+    for a in 0..k {
+        for c in 0..k {
+            v[(a, c)] = inv[(a, c)];
+        }
+    }
+    for i in 0..n {
+        cox.off[i] = 0.0;
+    }
+    Ok(FrailFit { b, v, ll: cur, theta, se_theta, profile_log: log, converged })
+}
+
+// ---------------------------------------------------------------------------
 // stcox
 // ---------------------------------------------------------------------------
 
@@ -721,9 +905,7 @@ impl CommandHandler for Stcox {
         } else {
             Ties::Breslow
         };
-        if cmd.opt("shared", 3).is_some() {
-            return Err(rc_err(198, "shared() not allowed; use streg with frailty() for shared-frailty models"));
-        }
+        let shared = cmd.opt("shared", 3).map(|v| varlist::resolve_name(ds, v.trim())).transpose()?;
         let strata: Vec<String> = match cmd.opt("strata", 3) {
             Some(s) => varlist::expand(ds, s)?,
             None => Vec::new(),
@@ -746,6 +928,9 @@ impl CommandHandler for Stcox {
         if vce != Vce::Oim && matches!(ties, Ties::ExactM | Ties::ExactP) {
             return Err(rc_err(198, "vce(robust) not allowed with exactm or exactp"));
         }
+        if shared.is_some() && (ties != Ties::Breslow || vce != Vce::Oim || cmd.opt("tvc", 3).is_some()) {
+            return Err(rc_err(198, "shared() allowed only with Breslow ties, the default variance and no tvc()"));
+        }
         if wt.is_some() && matches!(ties, Ties::ExactM | Ties::ExactP) {
             return Err(rc_err(101, "weights not allowed with exactm or exactp"));
         }
@@ -755,6 +940,9 @@ impl CommandHandler for Stcox {
         if let Vce::Cluster(v) = &vce {
             extra.push(varlist::resolve_name(ds, v)?);
         }
+        if let Some(v) = &shared {
+            extra.push(v.clone());
+        }
         let mut d = est::build(ds, st, &c2, DesignSpec { depvar: None, indep: &cmd.main, noconstant: true, weights: "", extra })?;
         // drop weight-invalid rows
         if let Some((_, w)) = &wt {
@@ -763,19 +951,26 @@ impl CommandHandler for Stcox {
                 d = crate::xtnl::subset_design(&d, &keep);
             }
         }
-        // covariates constant in the sample are collinear with the baseline hazard
+        // covariates constant within strata are collinear with the baseline
+        // hazards: sweep stratum indicators first, then the covariates
         {
-            d.cols.push(vec![1.0; d.n()]);
-            d.names.push("_cons".into());
-            d.omitted.push(false);
-            d.is_base.push(false);
-            d.has_cons = true;
+            let sidx = strata_index(ds, &strata, &d.rows)?;
+            let ns = sidx.iter().copied().max().map_or(1, |m| m + 1);
+            let kd = d.k();
+            for s in (0..ns).rev() {
+                d.cols.insert(0, sidx.iter().map(|&x| (x == s) as u8 as f64).collect());
+                d.names.insert(0, format!("__s{s}"));
+                d.omitted.insert(0, false);
+                d.is_base.insert(0, true);
+            }
             est::drop_collinear(&mut d);
-            d.cols.pop();
-            d.names.pop();
-            d.omitted.pop();
-            d.is_base.pop();
-            d.has_cons = false;
+            for _ in 0..ns {
+                d.cols.remove(0);
+                d.names.remove(0);
+                d.omitted.remove(0);
+                d.is_base.remove(0);
+            }
+            debug_assert_eq!(d.k(), kd);
         }
         let rows = d.rows.clone();
         let n = rows.len();
@@ -793,15 +988,33 @@ impl CommandHandler for Stcox {
         let z: Vec<Vec<f64>> = rows.iter().map(|&i| tcols.iter().map(|c| c[i]).collect()).collect();
         let sidx = strata_index(ds, &strata, &rows)?;
         let g = texp_fn(texp.as_deref())?;
-        let cox = Cox::new(x, z, &*g, rows.iter().map(|&i| t0c[i]).collect(), rows.iter().map(|&i| tc[i]).collect(), rows.iter().map(|&i| dc[i] == 1.0).collect(), w.clone(), sidx, ties);
+        let mut cox = Cox::new(x, z, &*g, rows.iter().map(|&i| t0c[i]).collect(), rows.iter().map(|&i| tc[i]).collect(), rows.iter().map(|&i| dc[i] == 1.0).collect(), w.clone(), sidx, ties);
         let ka = cox.k();
         let lik = CoxLik { cox: &cox };
         let res = est::maximize(&lik, vec![0.0; ka], 100)?;
         let ll0 = res.iterations[0];
+        // shared gamma frailty: profile likelihood over theta
+        let frail = match &shared {
+            Some(sv) => {
+                let c = util::col(ds, sv)?;
+                let mut keys: Vec<u64> = rows.iter().map(|&i| c[i].to_bits()).collect();
+                keys.sort();
+                keys.dedup();
+                let gidx: Vec<usize> = rows.iter().map(|&i| keys.binary_search(&c[i].to_bits()).unwrap()).collect();
+                let f = frailty_fit(&mut cox, &gidx, keys.len())?;
+                Some((f, gidx, keys.len()))
+            }
+            None => None,
+        };
+        let ll_cox = res.ll;
+        let (bhat, llhat) = match &frail {
+            Some((f, _, _)) => (f.b.clone(), f.ll),
+            None => (res.b.clone(), res.ll),
+        };
         // variance
         let (hinv, _) = res.info.sym_inverse(1e-14);
         let mut nclust = None;
-        let vact = match &vce {
+        let vact = if let Some((f, _, _)) = &frail { f.v.clone() } else { match &vce {
             Vce::Oim | Vce::Ols => hinv.clone(),
             _ => {
                 let (_, _, _, stats) = cox.approx(&res.b);
@@ -821,7 +1034,7 @@ impl CommandHandler for Stcox {
                 }
                 vv.scale(gf / (gf - 1.0))
             }
-        };
+        } };
         // full coefficient vector: main columns then tvc
         let mut names: Vec<String> = Vec::new();
         let mut omitted = Vec::new();
@@ -842,13 +1055,13 @@ impl CommandHandler for Stcox {
         pos.extend((0..tvc.len()).map(|j| d.k() + j));
         let mut b = vec![0.0; k];
         for (a, &j) in pos.iter().enumerate() {
-            b[j] = res.b[a];
+            b[j] = bhat[a];
         }
         let v = est::expand_v(&vact, &pos, k);
         let robust = vce != Vce::Oim;
         let df_m = ka as f64;
-        let (chi2, chi_label) = if robust {
-            let bs: Vec<f64> = res.b.clone();
+        let (chi2, chi_label) = if robust || frail.is_some() {
+            let bs: Vec<f64> = bhat.clone();
             let (vi, dropped) = vact.sym_inverse(1e-14);
             let w: f64 = (0..ka).map(|a| (0..ka).map(|c| bs[a] * vi[(a, c)] * bs[c]).sum::<f64>()).sum();
             (w, format!("Wald chi2({})", ka - dropped.len()))
@@ -864,18 +1077,55 @@ impl CommandHandler for Stcox {
         let ll_label = if robust { "Log pseudolikelihood" } else { "Log likelihood" };
         let mut out = vec![st_header(ds), String::new()];
         out.extend(d.notes.iter().cloned());
-        out.extend(iter_log(&res.iterations, ll_label, true));
-        out.push("Refining estimates:".into());
-        out.push(format!("Iteration 0:  {ll_label} = {}", fmt_ll(res.ll)));
-        out.push(String::new());
+        if let Some((f, _, _)) = &frail {
+            out.push("Fitting comparison Cox model:".into());
+            out.push(String::new());
+            out.extend(iter_log(&res.iterations, ll_label, true));
+            out.push("Refining estimates:".into());
+            out.push(format!("Iteration 0:  {ll_label} = {}", fmt_ll(res.ll)));
+            out.push(String::new());
+            out.push("Estimating frailty variance:".into());
+            out.push(String::new());
+            out.extend(f.profile_log.iter().enumerate().map(|(i, l)| format!("Iteration {i}:  Log profile likelihood = {}", fmt_ll(*l))));
+            out.push(String::new());
+            out.push("Fitting final Cox model:".into());
+            out.push(String::new());
+        } else {
+            out.extend(iter_log(&res.iterations, ll_label, true));
+            out.push("Refining estimates:".into());
+            out.push(format!("Iteration 0:  {ll_label} = {}", fmt_ll(res.ll)));
+            out.push(String::new());
+        }
         let method = match ties {
             Ties::Breslow => "Breslow method for ties",
             Ties::Efron => "Efron method for ties",
             Ties::ExactM => "exact marginal likelihood",
             Ties::ExactP => "exact partial likelihood",
         };
-        let title = if strata.is_empty() { format!("Cox regression with {method}") } else { format!("Stratified Cox regression with {method}") };
-        out.extend(st_model_header(&title, nsub, nfail, risk, nobs, &chi_label, if ka == 0 { SYSMISS } else { chi2 }, p, ll_label, res.ll));
+        let mut title = if strata.is_empty() { format!("Cox regression with {method}") } else { format!("Stratified Cox regression with {method}") };
+        if let (Some(sv), Some((_, gidx, ng))) = (&shared, &frail) {
+            let mut counts = vec![0usize; *ng];
+            for &g in gidx {
+                counts[g] += 1;
+            }
+            let (mn, mx) = (counts.iter().min().copied().unwrap_or(0), counts.iter().max().copied().unwrap_or(0));
+            let vals = [gc(nsub, 12), gc(nfail, 12), gc(risk, 12)];
+            let wv = vals.iter().map(|s| s.len()).max().unwrap_or(1);
+            let r = |l: &str, v: String| format!("{:<17}= {:>10}", l, v);
+            out.push(title.clone());
+            out.push(format!("{:<48}{}", "Gamma shared frailty", r("Number of obs", gc(nobs, 10))));
+            out.push(format!("{:<48}{}", format!("Group variable: {sv}"), r("Number of groups", gc(*ng as f64, 10))));
+            out.push(String::new());
+            out.push(format!("{:<48}Obs per group:", format!("No. of subjects = {:>wv$}", vals[0])));
+            out.push(format!("{:<48}{}", format!("No. of failures = {:>wv$}", vals[1]), r("             min", mn.to_string())));
+            out.push(format!("{:<48}{}", format!("Time at risk    = {:>wv$}", vals[2]), r("             avg", fmt_g(n as f64 / *ng as f64, 9))));
+            out.push(format!("{:<48}{}", "", r("             max", mx.to_string())));
+            out.push(format!("{:<48}{}", "", r(&chi_label, format!("{chi2:.2}"))));
+            out.push(format!("{:<48}{}", format!("{ll_label} = {}", fmt_ll(llhat)), r("Prob > chi2", format!("{p:.4}"))));
+            title.clear();
+        } else {
+            out.extend(st_model_header(&title, nsub, nfail, risk, nobs, &chi_label, if ka == 0 { SYSMISS } else { chi2 }, p, ll_label, llhat));
+        }
         if let Some(g) = nclust {
             let cv = match &vce {
                 Vce::Cluster(c) => c.clone(),
@@ -898,6 +1148,17 @@ impl CommandHandler for Stcox {
                 eform: if nohr { None } else { Some("Haz. ratio") },
                 coef_title: "Coefficient",
             }));
+            if let Some((f, _, _)) = &frail {
+                let bar = out.pop().unwrap_or_default();
+                let lw = bar.len().saturating_sub(66);
+                out.push(format!("{}+{}", "-".repeat(lw + 1), "-".repeat(64)));
+                out.push(format!("{:>lw$} | {:>10}  {:>9}", "theta", fmt_g(f.theta, 8), fmt_g(f.se_theta, 8)));
+                out.push(bar);
+                let chibar = (2.0 * (f.ll - ll_cox)).max(0.0);
+                let pc = if chibar <= 0.0 { 1.0 } else { 0.5 * dist::chi2tail(1.0, chibar) };
+                out.push(format!("LR test of theta=0: chibar2(01) = {:.2}{:>34}", chibar, format!("Prob >= chibar2 = {pc:.3}")));
+                out.push("Note: Standard errors of hazard ratios are conditional on theta.".into());
+            }
             if !tvc.is_empty() {
                 out.push(format!("Note: Variables in tvc equation interacted with {}.", texp.clone().unwrap_or_else(|| "_t".into())));
             }
@@ -920,7 +1181,18 @@ impl CommandHandler for Stcox {
         e.set("N_sub", nsub);
         e.set("N_fail", nfail);
         e.set("risk", risk);
-        e.set("ll", res.ll);
+        e.set("ll", llhat);
+        if let Some((f, _, ng)) = &frail {
+            e.set("theta", f.theta);
+            e.set("se_theta", f.se_theta);
+            e.set("ll_c", ll_cox);
+            let chibar = (2.0 * (f.ll - ll_cox)).max(0.0);
+            e.set("chi2_c", chibar);
+            e.set("p_c", if chibar <= 0.0 { 1.0 } else { 0.5 * dist::chi2tail(1.0, chibar) });
+            e.set("N_g", *ng as f64);
+            e.set_str("shared", shared.clone().unwrap_or_default());
+            e.set_str("distrib", "gamma");
+        }
         e.set("ll_0", ll0);
         e.set("chi2", if ka == 0 { SYSMISS } else { chi2 });
         e.set("df_m", df_m);
@@ -1085,7 +1357,7 @@ pub fn predict(ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<Option
         Ok(s)
     };
     let mut out_vals: Vec<Vec<f64>> = Vec::new();
-    let mut label = String::new();
+    let label: String;
     // centred-scale estimates of the fitted model
     let cb: Vec<f64> = b.clone();
     let active_b: Vec<f64> = {

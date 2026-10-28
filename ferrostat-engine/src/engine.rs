@@ -377,6 +377,7 @@ impl Engine {
         list.extend(ferrostat_cmd::tsvar::handlers());
         list.extend(ferrostat_cmd::xtnl::handlers());
         list.extend(ferrostat_cmd::stcox::handlers());
+        list.extend(ferrostat_cmd::choice_mixed::handlers());
         let mut handlers = HashMap::new();
         for (n, h) in list {
             handlers.insert(n, h);

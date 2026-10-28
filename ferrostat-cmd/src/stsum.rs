@@ -491,8 +491,8 @@ fn sts_test(ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, S
     let rule = format!("{}+{}", "-".repeat(lw + 1), "-".repeat(if with_ranks { 39 } else { 25 }));
     out.push(rule.clone());
     for (g, (_, l, _)) in gs.iter().enumerate() {
-        let rk = if with_ranks { format!("{:>14}", fmt_g(ranks[g], 10)) } else { String::new() };
-        out.push(format!("{:<lw$} | {:>9} {:>14.2}{rk}", level_text(l), fmt_g(observed[g], 9), expected[g]));
+        let rk = if with_ranks { format!("{:>14}", fmt_g(ranks[g], 8)) } else { String::new() };
+        out.push(format!("{:>lw$} | {:>9} {:>14.2}{rk}", level_text(l), fmt_g(observed[g], 9), expected[g]));
     }
     out.push(rule);
     let tr = if with_ranks { format!("{:>14}", 0) } else { String::new() };
@@ -554,7 +554,7 @@ impl CommandHandler for Stsum {
                 "{:>lw$} | {:>12} {:>10} {:>13} {:>10} {:>9} {:>9}",
                 level_text(label),
                 gc(risk, 10),
-                fmt_g(fails / risk, 9),
+                fmt_g(fails / risk, 8),
                 gc(nsub, 10),
                 fmt_g(q[0], 9),
                 fmt_g(q[1], 9),
@@ -604,8 +604,8 @@ impl CommandHandler for Stci {
         let rmean = cmd.has_opt("rmean", 2);
         let mut out = header_or_not(ds, cmd);
         let lw = vars.join(" ").len().max(8);
-        let what = if rmean { "Restricted mean".to_string() } else { format!("{}%", fmt_g(p * 100.0, 6)) };
-        out.push(format!("{:>lw$} |    Number of", ""));
+        let (top, what) = if rmean { ("Restricted".to_string(), "mean".to_string()) } else { (String::new(), format!("{}%", fmt_g(p * 100.0, 6))) };
+        out.push(format!("{:>lw$} |    Number of {:>11}", "", top));
         out.push(format!("{:>lw$} |     subjects {:>11}   Std. err.     [{}% conf. interval]", vars.join(" "), what, fmt_g(level, 4)));
         out.push(format!("{}+{}", "-".repeat(lw + 1), "-".repeat(64)));
         let mut gs = if vars.is_empty() { Vec::new() } else { groups(ds, &vars, &obs)? };
@@ -620,7 +620,7 @@ impl CommandHandler for Stci {
             let nsub = subjects(ds, &id, rows);
             let (est, se, lo, hi) = if rmean { restricted_mean(&steps, z) } else { percentile_ci(&steps, p, z) };
             let star = if rmean && steps.last().is_some_and(|s| s.d == 0.0 || s.s > 0.0) { "(*)" } else { "" };
-            out.push(format!("{:>lw$} | {:>12} {:>11}{:<3}{:>9} {:>11} {:>10}", level_text(label), gc(nsub, 10), fmt_g(est, 9), star, fmt_g(se, 9), fmt_g(lo, 9), fmt_g(hi, 9)));
+            out.push(format!("{:>lw$} | {:>12} {:>11}{:<3}{:>9} {:>11} {:>10}", level_text(label), gc(nsub, 10), fmt_g(est, 8), star, fmt_g(se, 8), fmt_g(lo, 8), fmt_g(hi, 8)));
             if k == ng - 1 {
                 r.set("N_sub", nsub);
                 if rmean {
@@ -762,7 +762,7 @@ impl CommandHandler for Stptime {
         let total = ("Total".to_string(), obs.iter().map(|o| (o.t - o.t0) * o.w).sum::<f64>(), obs.iter().filter(|o| o.d).map(|o| o.w).sum::<f64>());
         let line = |(l, y, d): &(String, f64, f64)| {
             let (lo, hi) = crate::survival::poisson_ci_pub(*d, *y, level);
-            format!("{:>lw$} | {:>12} {:>10} {:>11} {:>10} {:>10}", l, gc(*y, 10), fmt_g(*d, 9), fmt_g(d / y * per, 9), fmt_g(lo * per, 9), fmt_g(hi * per, 9))
+            format!("{:>lw$} | {:>12} {:>10} {:>11} {:>10} {:>10}", l, gc(*y, 10), fmt_g(*d, 9), fmt_g(d / y * per, 8), fmt_g(lo * per, 8), fmt_g(hi * per, 8))
         };
         for r in &rows_out {
             out.push(line(r));
@@ -837,7 +837,7 @@ impl CommandHandler for Stdescribe {
         out.push("-".repeat(78));
         let full = |label: &str, v: &[f64], total: bool| {
             let (s, m, mn, md, mx) = stats(v);
-            format!("{:<20}{:>10}{:>12}{:>12}{:>12}{:>12}", label, if total { gc(s, 9) } else { String::new() }, fmt_g(m, 9), fmt_g(mn, 9), fmt_g(md, 9), fmt_g(mx, 9))
+            format!("{:<20}{:>10}{:>12}{:>12}{:>12}{:>12}", label, if total { gc(s, 9) } else { String::new() }, fmt_g(m, 8), fmt_g(mn, 8), fmt_g(md, 8), fmt_g(mx, 8))
         };
         let nsub = subj.len() as f64;
         out.push(format!("{:<20}{:>10}", "Number of subjects", gc(nsub, 9)));

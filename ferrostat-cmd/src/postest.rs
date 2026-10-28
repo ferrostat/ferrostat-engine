@@ -153,6 +153,9 @@ impl CommandHandler for Predict {
         if ecmd == "arima" {
             return crate::arima::predict(ds, st, cmd);
         }
+        if let Some(out) = crate::choice_mixed::predict(ds, st, cmd)? {
+            return Ok(out);
+        }
         if let Some(out) = crate::xtnl::predict(ds, st, cmd)? {
             return Ok(out);
         }
@@ -1175,6 +1178,9 @@ impl CommandHandler for Estat {
         let sub = cmd.main.split_whitespace().next().unwrap_or("").to_lowercase();
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
+        if let Some(r) = crate::choice_mixed::estat(ds, st, sub.as_str(), cmd) {
+            return r;
+        }
         if let Some(r) = crate::xtdpd::estat(st, sub.as_str(), cmd) {
             return r;
         }

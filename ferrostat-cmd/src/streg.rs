@@ -591,8 +591,8 @@ impl CommandHandler for Streg {
             }
             let e0 = &mut eqs[0];
             let cons = e0.names.iter().position(|n| n == "_cons");
-            for (nm, c) in &strata_cols {
-                let at = cons.unwrap_or(e0.names.len());
+            for (k, (nm, c)) in strata_cols.iter().enumerate() {
+                let at = cons.map_or(e0.names.len(), |p| p + k);
                 e0.names.insert(at, nm.clone());
                 e0.cols.insert(at, c.clone());
             }
@@ -723,7 +723,15 @@ impl CommandHandler for Streg {
             out.extend(crate::stcox::iter_log(&res.iterations, ll_label, false));
         }
         out.push(String::new());
-        let ll0 = null.as_ref().map_or(SYSMISS, |r| r.ll);
+        let mut ll0 = null.as_ref().map_or(SYSMISS, |r| r.ll);
+        if frailty != Frailty::None && null.is_some() {
+            // constant-only model with frailty, for the LR test of the covariates
+            let mut b0f = b0.clone();
+            b0f.push(*res.b.last().unwrap());
+            if let Ok(r0) = fit(&eq0, frailty, b0f) {
+                ll0 = r0.ll.max(ll0);
+            }
+        }
         let k = res.b.len();
         // variance
         let (hinv, _) = res.info.sym_inverse(1e-14);
@@ -774,8 +782,7 @@ impl CommandHandler for Streg {
             let bs: Vec<f64> = idx.iter().map(|&i| res.b[i]).collect();
             ((0..bs.len()).map(|a| (0..bs.len()).map(|c| bs[a] * vi[(a, c)] * bs[c]).sum::<f64>()).sum::<f64>(), format!("Wald chi2({})", df_m))
         } else {
-            let base = if frailty != Frailty::None { ll0 } else { ll0 };
-            (2.0 * (if frailty != Frailty::None { ll_nofrail } else { res.ll } - base), format!("LR chi2({})", df_m))
+            (2.0 * (res.ll - ll0), format!("LR chi2({})", df_m))
         };
         let p = if df_m > 0.0 { dist::chi2tail(df_m, chi2) } else { SYSMISS };
         let nobs: f64 = if wt.as_ref().is_some_and(|(k, _)| k == "fweight") { w.iter().sum() } else { n as f64 };
@@ -1280,6 +1287,17 @@ mod tests {
             let dh = (lnh_cumh(dist, aft, t + e, 0.4, &anc).1 - lnh_cumh(dist, aft, t - e, 0.4, &anc).1) / (2.0 * e);
             assert!((lh.exp() - dh).abs() < 1e-6 * dh.abs().max(1.0), "{dist:?}: {} vs {dh}", lh.exp());
         }
+    }
+
+    #[test]
+    fn ggamma_nests_weibull_and_lognormal() {
+        let (t, eta, lsig) = (2.3, 0.7, -0.2);
+        let g = lnh_cumh(Dist::Ggamma, true, t, eta, &[lsig, 1.0]);
+        let w = lnh_cumh(Dist::Weibull, true, t, eta, &[-lsig]);
+        assert!((g.0 - w.0).abs() < 1e-9 && (g.1 - w.1).abs() < 1e-9, "{g:?} {w:?}");
+        let g = lnh_cumh(Dist::Ggamma, true, t, eta, &[lsig, 1e-4]);
+        let l = lnh_cumh(Dist::Lognormal, true, t, eta, &[lsig]);
+        assert!((g.0 - l.0).abs() < 1e-3 && (g.1 - l.1).abs() < 1e-3, "{g:?} {l:?}");
     }
 
     #[test]

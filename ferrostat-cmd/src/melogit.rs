@@ -1,6 +1,7 @@
-//! `melogit` / `meqrlogit`: multilevel mixed-effects logistic regression
-//! with random intercepts and (independent) random slopes, fitted by
-//! mean-variance adaptive Gauss-Hermite quadrature.
+//! `melogit` / `meqrlogit` / `meprobit` / `mepoisson` / `meglm`:
+//! multilevel mixed-effects generalized linear models (logit, probit and
+//! Poisson) with random intercepts and (independent) random slopes, fitted
+//! by mean-variance adaptive Gauss-Hermite quadrature.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -49,7 +50,42 @@ struct Unit {
     children: Vec<Unit>,
 }
 
+/// Response family and link of a mixed model.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MeFam {
+    Logit,
+    Probit,
+    Poisson,
+}
+
+/// Per-observation log density and its first two derivatives in eta.
+fn me_lf(f: MeFam, y: f64, eta: f64) -> (f64, f64, f64) {
+    match f {
+        MeFam::Logit => {
+            let p = dist::invlogit(eta);
+            let lp = -(1.0 + (-eta).exp()).ln();
+            let lq = -(1.0 + eta.exp()).ln();
+            let lp = if lp.is_finite() { lp } else { eta };
+            let lq = if lq.is_finite() { lq } else { -eta };
+            (if y != 0.0 { lp } else { lq }, (if y != 0.0 { 1.0 } else { 0.0 }) - p, -p * (1.0 - p))
+        }
+        MeFam::Probit => {
+            let q = if y != 0.0 { 1.0 } else { -1.0 };
+            let z = q * eta;
+            let lp = crate::xtnl::ln_phi(z);
+            let lam = (dist::lnnormalden(z) - lp).exp();
+            (lp, q * lam, -lam * (z + lam))
+        }
+        MeFam::Poisson => {
+            let mu = eta.exp();
+            (y * eta - mu - dist::lngamma(y + 1.0), y - mu, -mu)
+        }
+    }
+}
+
 struct MeModel<'a> {
+    fam: MeFam,
+    off0: &'a [f64],
     x: Vec<&'a [f64]>,
     y: &'a [f64],
     levels: Vec<Level>,
@@ -128,16 +164,10 @@ impl<'a> MeModel<'a> {
                 for r in 0..q {
                     eta += lv.z[r][i] * u[r];
                 }
-                let yi = self.y[i];
-                let lp = -(1.0 + (-eta).exp()).ln();
-                let lq = -(1.0 + eta.exp()).ln();
-                let lp = if lp.is_finite() { lp } else { eta };
-                let lq = if lq.is_finite() { lq } else { -eta };
-                ll += if yi != 0.0 { lp } else { lq };
+                let (li, r, d2) = me_lf(self.fam, self.y[i], eta);
+                ll += li;
                 if derivs {
-                    let pr = dist::invlogit(eta);
-                    let r = (if yi != 0.0 { 1.0 } else { 0.0 }) - pr;
-                    let wv = pr * (1.0 - pr);
+                    let wv = -d2;
                     let hm = h.as_mut().unwrap();
                     for a in 0..k {
                         let xa = self.x[a][i];
@@ -297,12 +327,11 @@ impl<'a> MeModel<'a> {
                 for r in 0..q {
                     eta += lv.z[r][i] * u[r];
                 }
-                let pr = dist::invlogit(eta);
-                let res = (if self.y[i] != 0.0 { 1.0 } else { 0.0 }) - pr;
+                let (_, res, d2) = me_lf(self.fam, self.y[i], eta);
                 for r in 0..q {
                     g[r] += res * lv.z[r][i];
                     for s in 0..q {
-                        h[(r, s)] += pr * (1.0 - pr) * lv.z[r][i] * lv.z[s][i];
+                        h[(r, s)] += -d2 * lv.z[r][i] * lv.z[s][i];
                     }
                 }
             }
@@ -334,7 +363,7 @@ impl<'a> Likelihood for MeModel<'a> {
     fn eval(&self, b: &[f64], need_scores: bool) -> (f64, Vec<f64>, Matrix, Vec<Vec<f64>>) {
         let p = self.nparm();
         let n = self.y.len();
-        let xb: Vec<f64> = (0..n).map(|i| self.x.iter().zip(b).map(|(c, bb)| c[i] * bb).sum()).collect();
+        let xb: Vec<f64> = (0..n).map(|i| self.off0[i] + self.x.iter().zip(b).map(|(c, bb)| c[i] * bb).sum::<f64>()).collect();
         let mut ll = 0.0;
         let mut g = vec![0.0; p];
         let mut h = Matrix::zeros(p, p);
@@ -425,10 +454,10 @@ impl CommandHandler for Melogit {
         if !raw.contains("||") {
             // replay
             let e = &st.e;
-            if !matches!(e.macros.get("cmd").map(String::as_str), Some("melogit" | "meqrlogit")) || !cmd.main.trim().is_empty() {
+            if e.macros.get("cmd").map(String::as_str) != Some(self.verb) || !cmd.main.trim().is_empty() {
                 return Err(if cmd.main.trim().is_empty() { rc_err(301, "last estimates not found") } else { rc_err(198, "random-effects equation required (||)") });
             }
-            let eform = cmd.has_opt("or", 2);
+            let eform = cmd.has_opt("or", 2) || cmd.has_opt("irr", 3) || cmd.has_opt("eform", 2);
             let text = render(&st.e, eform, util::level(cmd, st)?);
             return Ok(text);
         }
@@ -489,10 +518,44 @@ impl CommandHandler for Melogit {
         for s in &specs {
             extra.extend(s.revars.iter().cloned());
         }
+        let fam = me_family(self.verb, &fcmd)?;
+        let offv = match fcmd.opt("offset", 3) {
+            Some(o) => Some(crate::varlist::resolve_name(ds, o.trim())?),
+            None => None,
+        };
+        let expv = match fcmd.opt("exposure", 1) {
+            Some(o) => Some(crate::varlist::resolve_name(ds, o.trim())?),
+            None => None,
+        };
+        extra.extend(offv.iter().cloned());
+        extra.extend(expv.iter().cloned());
         let mut d = est::build(ds, st, &fcmd, DesignSpec { depvar: Some(&dep), indep, noconstant: fcmd.has_opt("noconstant", 3), weights: "", extra })?;
-        for y in d.y.iter_mut() {
-            *y = if *y != 0.0 { 1.0 } else { 0.0 };
+        if fam == MeFam::Poisson {
+            if d.y.iter().any(|v| *v < 0.0) {
+                return Err(rc_err(459, format!("{dep} must be greater than or equal to zero")));
+            }
+        } else {
+            for y in d.y.iter_mut() {
+                *y = if *y != 0.0 { 1.0 } else { 0.0 };
+            }
         }
+        let mut off0 = vec![0.0; d.n()];
+        if let Some(o) = &offv {
+            let c = util::col(ds, o)?;
+            for (t, &i) in d.rows.iter().enumerate() {
+                off0[t] += c[i];
+            }
+        }
+        if let Some(o) = &expv {
+            let c = util::col(ds, o)?;
+            for (t, &i) in d.rows.iter().enumerate() {
+                if c[i] <= 0.0 {
+                    return Err(rc_err(459, format!("{o} must be greater than zero")));
+                }
+                off0[t] += c[i].ln();
+            }
+        }
+        let offset_name = offv.clone().or_else(|| expv.as_ref().map(|e| format!("ln({e})")));
         let nq = util::opt_num(&fcmd, "intpoints", 3)?.unwrap_or(7.0) as usize;
         if nq < 1 || nq > 128 {
             return Err(rc_err(198, "intpoints() must be between 1 and 128"));
@@ -542,26 +605,28 @@ impl CommandHandler for Melogit {
             w: &d.w,
             fweight: false,
             f: &|t: usize, idx: &[f64]| {
-                let p = dist::invlogit(idx[0]);
-                let eta = idx[0];
-                let lp = -(1.0 + (-eta).exp()).ln();
-                let lq = -(1.0 + eta.exp()).ln();
-                let lp = if lp.is_finite() { lp } else { eta };
-                let lq = if lq.is_finite() { lq } else { -eta };
-                (if d.y[t] != 0.0 { lp } else { lq }, vec![d.y[t] - p], vec![vec![-p * (1.0 - p)]])
+                let (l, d1, d2) = me_lf(fam, d.y[t], idx[0] + off0[t]);
+                (l, vec![d1], vec![vec![d2]])
             },
         };
         let mut b0 = vec![0.0; k];
         if let Some(cp) = act.iter().position(|&j| d.names[j] == "_cons") {
             let my = d.y.iter().sum::<f64>() / n as f64;
-            b0[cp] = dist::logit(my.clamp(1e-6, 1.0 - 1e-6));
+            b0[cp] = match fam {
+                MeFam::Logit => dist::logit(my.clamp(1e-6, 1.0 - 1e-6)),
+                MeFam::Probit => dist::invnormal(my.clamp(1e-6, 1.0 - 1e-6)),
+                MeFam::Poisson => {
+                    let mo = off0.iter().map(|o| o.exp()).sum::<f64>() / n as f64;
+                    (my.max(1e-6) / mo).ln()
+                }
+            };
         }
-        let fres = est::maximize(&fe, b0, 300)?;
+        let fres = crate::zip::maximize_robust(&fe, b0, 300)?;
         out.push(String::new());
         out.push("Fitting fixed-effects model:".into());
         out.push(String::new());
         out.extend(est::iteration_log(&fres.iterations, ll_label));
-        let model = MeModel { x: cols.clone(), y: &d.y, levels, units, a, w, cache: RefCell::new(HashMap::new()) };
+        let model = MeModel { fam, off0: &off0, x: cols.clone(), y: &d.y, levels, units, a, w, cache: RefCell::new(HashMap::new()) };
         let p = model.nparm();
         let mut th0 = fres.b.clone();
         th0.resize(p, 0.0);
@@ -570,7 +635,7 @@ impl CommandHandler for Melogit {
         out.push("Refining starting values:".into());
         out.push(String::new());
         let mut best = (f64::NEG_INFINITY, th0.clone());
-        for (gi, lsd) in [0.0f64, -0.5, 0.5].iter().enumerate() {
+        for (gi, lsd) in [0.0f64, -0.5, 0.5, -1.5, -3.0].iter().enumerate() {
             let mut th = th0.clone();
             for v in th.iter_mut().skip(k) {
                 *v = *lsd;
@@ -585,7 +650,7 @@ impl CommandHandler for Melogit {
             }
         }
         model.cache.borrow_mut().clear();
-        let res = est::maximize(&model, best.1, 200)?;
+        let res = crate::zip::maximize_robust(&model, best.1, 200)?;
         out.push(String::new());
         out.push("Fitting full model:".into());
         out.push(String::new());
@@ -669,19 +734,61 @@ impl CommandHandler for Melogit {
             e.set_mat("g_avg", av);
             e.set_mat("g_max", mx);
             e.set_str("ivars", ivars.join(" "));
-            e.set_str("title", "Mixed-effects logistic regression");
-            e.set_str("model", "logistic");
+            let (title, model, fam_s, link_s) = match fam {
+                MeFam::Logit => ("Mixed-effects logistic regression", "logistic", "bernoulli", "logit"),
+                MeFam::Probit => ("Mixed-effects probit regression", "probit", "bernoulli", "probit"),
+                MeFam::Poisson => ("Mixed-effects Poisson regression", "Poisson", "poisson", "log"),
+            };
+            e.set_str("title", if verb == "meglm" { "Mixed-effects GLM" } else { title });
+            e.set_str("model", model);
+            e.set_str("family", fam_s);
+            e.set_str("link", link_s);
+            if let Some(o) = &offset_name {
+                e.set_str("offset", o.clone());
+            }
             e.set_str("intmethod", if nq == 1 { "laplace" } else { "mvaghermite" });
             e.set_str("chi2type", "Wald");
             e.set_str("vce", "oim");
-            e.set_str("predict", "melogit_p");
+            e.set_str("predict", "meglm_p");
             e.set_str("_head", text_head.clone());
         });
-        let text = format!("{}\n{}", text_head, render(&st.e, fcmd.has_opt("or", 2), level));
+        let eform = fcmd.has_opt("or", 2) || fcmd.has_opt("irr", 3) || fcmd.has_opt("eform", 2);
+        let text = format!("{}\n{}", text_head, render(&st.e, eform, level));
         if !res.converged {
             return Ok(format!("{text}\nconvergence not achieved"));
         }
         Ok(text)
+    }
+}
+
+/// Family of a mixed GLM command (`meglm` reads family() and link()).
+fn me_family(verb: &str, cmd: &Command) -> Result<MeFam, String> {
+    match verb {
+        "meprobit" => Ok(MeFam::Probit),
+        "mepoisson" => Ok(MeFam::Poisson),
+        "meglm" => {
+            let fam = cmd.opt("family", 2).unwrap_or("gaussian").trim().to_lowercase();
+            let fam = fam.split_whitespace().next().unwrap_or("").to_string();
+            let link = cmd.opt("link", 1).map(|l| l.trim().to_lowercase());
+            let is = |full: &str, min: usize| fam.len() >= min && full.starts_with(fam.as_str());
+            if is("bernoulli", 4) || is("binomial", 3) {
+                match link.as_deref().unwrap_or("logit") {
+                    "logit" => Ok(MeFam::Logit),
+                    "probit" => Ok(MeFam::Probit),
+                    l => Err(rc_err(198, format!("link({l}) not supported with family({fam})"))),
+                }
+            } else if is("poisson", 3) {
+                match link.as_deref().unwrap_or("log") {
+                    "log" => Ok(MeFam::Poisson),
+                    l => Err(rc_err(198, format!("link({l}) not supported with family({fam})"))),
+                }
+            } else if is("gaussian", 3) {
+                Err(rc_err(198, "family(gaussian): use mixed for linear mixed models"))
+            } else {
+                Err(rc_err(198, format!("family({fam}) not supported")))
+            }
+        }
+        _ => Ok(MeFam::Logit),
     }
 }
 
@@ -696,7 +803,12 @@ fn render(e: &Results, eform: bool, level: f64) -> String {
     let (ng, mn, av, mx) = (mat("N_g"), mat("g_min"), mat("g_avg"), mat("g_max"));
     let row = |l: &str, k: &str, v: String| format!("{:<48}{:<17} = {:>10}", l, k, v);
     let mut out = vec![String::new()];
-    out.push(row("Mixed-effects logistic regression", "Number of obs", util::commas(get("N") as usize)));
+    let title = e.macros.get("title").cloned().unwrap_or_else(|| "Mixed-effects logistic regression".into());
+    out.push(row(&title, "Number of obs", util::commas(get("N") as usize)));
+    if title == "Mixed-effects GLM" {
+        out.push(row(&format!("Family: {:>14}", e.macros.get("family").map(|s| s.as_str()).unwrap_or("")), "", String::new()).trim_end().trim_end_matches('=').trim_end().to_string());
+        out.push(row(&format!("Link:   {:>14}", e.macros.get("link").map(|s| s.as_str()).unwrap_or("")), "", String::new()).trim_end().trim_end_matches('=').trim_end().to_string());
+    }
     if ivars.len() == 1 {
         out.push(row(&format!("Group variable: {}", ivars[0]), "Number of groups", util::commas(ng.first().copied().unwrap_or(0.0) as usize)));
         out.push(String::new());
@@ -734,7 +846,9 @@ fn render(e: &Results, eform: bool, level: f64) -> String {
     }
     let is_base: Vec<bool> = fnames.iter().map(|c| c.split('#').all(|p| p.split_once('.').is_some_and(|(l, _)| l.ends_with('b') && l.trim_end_matches('b').parse::<f64>().is_ok()))).collect();
     let omitted: Vec<bool> = fnames.iter().zip(&is_base).map(|(c, ib)| *ib || c.starts_with("o.")).collect();
-    let mut tbl = est::coef_table(&est::TableSpec { depvar: &dep, names: &fnames, b: &fb, v: &fv, omitted: &omitted, is_base: &is_base, df: None, level, eform: if eform { Some("Odds ratio") } else { None }, coef_title: "Coefficient" });
+    let model = e.macros.get("model").cloned().unwrap_or_else(|| "logistic".into());
+    let ef_label = if model == "Poisson" { "IRR" } else if model == "probit" { "exp(b)" } else { "Odds ratio" };
+    let mut tbl = est::coef_table(&est::TableSpec { depvar: &dep, names: &fnames, b: &fb, v: &fv, omitted: &omitted, is_base: &is_base, df: None, level, eform: if eform { Some(ef_label) } else { None }, coef_title: "Coefficient" });
     let bar = tbl.pop().unwrap_or_default();
     let lw = bar.len().saturating_sub(66);
     let crit = dist::invnormal(1.0 - (1.0 - level / 100.0) / 2.0);
@@ -755,20 +869,24 @@ fn render(e: &Results, eform: bool, level: f64) -> String {
         let lo = (2.0 * (lsd - crit * sl)).exp();
         let hi = (2.0 * (lsd + crit * sl)).exp();
         let label = format!("var({})", crate::summarize::abbrev(&zn, lw.saturating_sub(4)));
-        tbl.push(format!("{:>w$}| {:>10}  {:>9}{:21}{:>9}   {:>9}", label, fmt_g(var, 8), fmt_g(se, 8), "", fmt_g(lo, 8), fmt_g(hi, 8), w = lw + 1));
+        let cf = |x: f64| if x.is_finite() { fmt_g(x, 8) } else { ".".to_string() };
+        tbl.push(format!("{:>w$}| {:>10}  {:>9}{:21}{:>9}   {:>9}", label, cf(var), cf(se), "", cf(lo), cf(hi), w = lw + 1));
     }
     tbl.push(bar);
     out.extend(tbl);
-    if eform {
+    if eform && model == "logistic" {
         out.push("Note: Estimates are transformed only in the first equation to odds ratios.".into());
         out.push("Note: _cons estimates baseline odds (conditional on zero random effects).".into());
+    } else if eform && model == "Poisson" {
+        out.push("Note: Estimates are transformed only in the first equation to incidence-rate ratios.".into());
+        out.push("Note: _cons estimates baseline incidence rate (conditional on zero random effects).".into());
     }
     let chi2c = get("chi2_c");
     let dfc = get("df_c");
     if dfc == 1.0 {
-        out.push(format!("LR test vs. logistic model: chibar2(01) = {:.2}     Prob >= chibar2 = {:.4}", chi2c, get("p_c")));
+        out.push(format!("LR test vs. {model} model: chibar2(01) = {:.2}     Prob >= chibar2 = {:.4}", chi2c, get("p_c")));
     } else if !is_missing(dfc) {
-        out.push(format!("LR test vs. logistic model: chi2({}) = {:.2}{:>27}", fmt_g(dfc, 9), chi2c, format!("Prob > chi2 = {:.4}", get("p_c"))));
+        out.push(format!("LR test vs. {model} model: chi2({}) = {:.2}{:>27}", fmt_g(dfc, 9), chi2c, format!("Prob > chi2 = {:.4}", get("p_c"))));
         out.push(String::new());
         out.push("Note: LR test is conservative and provided only for reference.".into());
     }

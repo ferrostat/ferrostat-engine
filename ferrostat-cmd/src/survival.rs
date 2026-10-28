@@ -349,19 +349,19 @@ impl CommandHandler for Stset {
                 };
                 let raw0 = if is_missing(raw0) { org } else { raw0 };
                 let begin = raw0.max(org).max(ent);
+                if t[i] <= org && origin.is_some() {
+                    n_orig += 1;
+                    continue;
+                }
+                if t[i] <= begin {
+                    n_enter += 1;
+                    continue;
+                }
                 if begin >= ext {
                     n_exit += 1;
                     continue;
                 }
                 let (end, d) = if t[i] > ext { (ext, false) } else { (t[i], fails(i)) };
-                if end <= begin {
-                    if t[i] <= org && origin.is_some() {
-                        n_orig += 1;
-                    } else {
-                        n_enter += 1;
-                    }
-                    continue;
-                }
                 stv[i] = 1.0;
                 tv[i] = (end - org) / scale;
                 t0v[i] = (begin - org) / scale;
