@@ -30,6 +30,12 @@ plotters = { version = "0.3", default-features = false, features = ["bitmap_back
 statrs = "0.17"
 lazy_static = "1"
 
+# Debug builds keep only line tables (file:line in backtraces): full debug
+# info made each of the ~40 test executables about 240 MB, enough to fill
+# a CI runner's disk while linking.
+[profile.dev]
+debug = "line-tables-only"
+
 # keep build directories small: no debug info for third-party crates
 [profile.dev.package."*"]
 debug = false

@@ -715,11 +715,25 @@ impl CommandHandler for Streg {
         let mut ll_nofrail = SYSMISS;
         if frailty != Frailty::None {
             ll_nofrail = res.ll;
+            let b_nofrail = res.b.clone();
             let mut bf = res.b.clone();
             bf.push((0.5f64).ln());
             out.push(String::new());
             out.push(format!("Fitting {} model with frailty:", dist.name()));
             res = fit(&eqs, frailty, bf)?;
+            // The model without frailty is the limit theta -> 0, so the
+            // frailty fit can never be worse; if the search stopped below it
+            // (a flat ridge when the frailty variance is near zero), restart
+            // from that boundary and keep the better fit.
+            if res.ll < ll_nofrail - 1e-9 {
+                let mut bb = b_nofrail;
+                bb.push(-12.0);
+                if let Ok(r2) = fit(&eqs, frailty, bb) {
+                    if r2.ll > res.ll {
+                        res = r2;
+                    }
+                }
+            }
             out.extend(crate::stcox::iter_log(&res.iterations, ll_label, false));
         }
         out.push(String::new());
