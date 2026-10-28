@@ -68,6 +68,9 @@ jobs:
   native:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    # macOS runners are often unavailable (GitHub capacity): the release is
+    # published without them and they can be re-run later
+    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
     strategy:
       fail-fast: false
       matrix:
