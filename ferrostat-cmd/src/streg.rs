@@ -679,11 +679,11 @@ impl CommandHandler for Streg {
         let keep0: Vec<bool> = eq0[0].names.iter().map(|nm| nm == "_cons" || nm.starts_with("_S")).collect();
         eq0[0].cols = eq0[0].cols.iter().zip(&keep0).filter(|(_, k)| **k).map(|(c, _)| c.clone()).collect();
         eq0[0].names = eq0[0].names.iter().zip(&keep0).filter(|(_, k)| **k).map(|(c, _)| c.clone()).collect();
-        let fit = |eqs: &[Eq], fr: Frailty, b0: Vec<f64>| -> Result<est::MlResult, String> {
+        let fit_iter = |eqs: &[Eq], fr: Frailty, b0: Vec<f64>, iters: usize| -> Result<est::MlResult, String> {
             let model = Model { dist, aft, eqs, t: &t, t0: &t0, d: &dv, w: &w, frailty: fr, groups: if fr == Frailty::None { (0..n).map(|r| vec![r]).collect() } else { groups.clone() } };
-            // a Weibull start for the generalized gamma
-            maximize(&model, b0, 300)
+            maximize(&model, b0, iters)
         };
+        let fit = |eqs: &[Eq], fr: Frailty, b0: Vec<f64>| fit_iter(eqs, fr, b0, 300);
         let mut b0 = start(&eq0, false);
         let has_cons0 = eq0[0].names.iter().any(|n| n == "_cons");
         let null = if has_cons0 { Some(fit(&eq0, Frailty::None, b0.clone())?) } else { None };
@@ -726,12 +726,22 @@ impl CommandHandler for Streg {
             // (a flat ridge when the frailty variance is near zero), restart
             // from that boundary and keep the better fit.
             if res.ll < ll_nofrail - 1e-9 {
-                let mut bb = b_nofrail;
+                let mut bb = b_nofrail.clone();
                 bb.push(-12.0);
                 if let Ok(r2) = fit(&eqs, frailty, bb) {
                     if r2.ll > res.ll {
                         res = r2;
                     }
+                }
+            }
+            // still below: the maximum is at the boundary theta = 0, so report
+            // that point (no-frailty coefficients, theta ~ e^-20) as the fit
+            if res.ll < ll_nofrail - 1e-9 {
+                let mut bb = b_nofrail;
+                bb.push(-20.0);
+                if let Ok(r3) = fit_iter(&eqs, frailty, bb, 0) {
+                    let iterations = res.iterations.clone();
+                    res = est::MlResult { iterations, ..r3 };
                 }
             }
             out.extend(crate::stcox::iter_log(&res.iterations, ll_label, false));
