@@ -917,14 +917,18 @@ impl CommandHandler for Tsset {
         let mut out = Vec::new();
         if let Some(p) = &panel {
             out.push(format!("Panel variable: {p}"));
-            ds.characteristics.entry("_dta".into()).or_default().insert("iis".into(), p.clone());
+            let c = ds.characteristics.entry("_dta".into()).or_default();
+            c.insert("iis".into(), p.clone());
+            c.insert("_TSpanel".into(), p.clone());
         }
         if let Some(t) = &time {
             let tv = util::col(ds, t)?;
             let lo = tv.iter().cloned().filter(|x| !is_missing(*x)).fold(f64::INFINITY, f64::min);
             let hi = tv.iter().cloned().filter(|x| !is_missing(*x)).fold(f64::NEG_INFINITY, f64::max);
             out.push(format!(" Time variable: {t}, {} to {}", crate::format::fmt_g(lo, 9), crate::format::fmt_g(hi, 9)));
-            ds.characteristics.entry("_dta".into()).or_default().insert("tis".into(), t.clone());
+            let c = ds.characteristics.entry("_dta".into()).or_default();
+            c.insert("tis".into(), t.clone());
+            c.insert("_TStvar".into(), t.clone());
         }
         st.tsset = time.clone().map(|t| (panel.clone(), t)).or_else(|| panel.clone().map(|p| (Some(p), String::new())));
         if time.is_none() {
@@ -934,5 +938,20 @@ impl CommandHandler for Tsset {
             }
         }
         Ok(out.join("\n"))
+    }
+}
+
+/// The panel and time variables saved in the data's characteristics by
+/// `tsset`/`xtset` (`_TSpanel`/`_TStvar`, or the older `iis`/`tis`), if
+/// those variables exist.
+pub fn tsset_from_chars(ds: &DataSet) -> Option<(Option<String>, String)> {
+    let c = ds.characteristics.get("_dta")?;
+    let get = |a: &str, b: &str| c.get(a).or_else(|| c.get(b)).map(|v| v.trim().to_string()).filter(|v| !v.is_empty() && ds.var_index.contains_key(v.as_str()));
+    let time = get("_TStvar", "tis");
+    let panel = get("_TSpanel", "iis");
+    match (panel, time) {
+        (p, Some(t)) => Some((p, t)),
+        (Some(p), None) => Some((Some(p), String::new())),
+        (None, None) => None,
     }
 }

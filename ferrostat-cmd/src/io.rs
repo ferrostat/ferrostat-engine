@@ -67,7 +67,7 @@ impl CommandHandler for Use {
         *ds = new;
         st.data_changed = false;
         st.filename = path.clone();
-        st.tsset = None;
+        st.tsset = crate::data::tsset_from_chars(ds);
         Ok(String::new())
     }
 }

@@ -468,8 +468,9 @@ impl CommandHandler for MatrixCmd {
         let raw = cmd.raw.trim();
         let body = raw.split_once(char::is_whitespace).map(|x| x.1).unwrap_or("").trim();
         let first = body.split_whitespace().next().unwrap_or("").to_string();
-        let lfirst = first.to_lowercase();
         let rest = body[first.len()..].trim();
+        // `matrix L = ...` defines a matrix named like a subcommand abbreviation
+        let lfirst = if rest.starts_with('=') { String::new() } else { first.to_lowercase() };
         match lfirst.as_str() {
             "list" | "li" | "l" => {
                 let (name, opts) = match find_top_level(rest, ',') {

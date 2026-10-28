@@ -118,3 +118,32 @@ fn proportion_estimates_and_covariance() {
     s.run("proportion d, over(group)");
     assert!(s.scalar("_b[1.d@2.group]") >= 0.0);
 }
+
+#[test]
+fn matrix_named_like_a_subcommand() {
+    let mut s = Session::new();
+    s.run("matrix A = (1,2)");
+    s.run("matrix L = A");
+    s.run("matrix dir = A*2");
+    assert_eq!(s.scalar("L[1,2]"), 2.0);
+    assert_eq!(s.scalar("dir[1,2]"), 4.0);
+    assert!(s.run("matrix list L").contains("L[1,2]"));
+}
+
+#[test]
+fn use_restores_tsset() {
+    let mut s = Session::with_fixture();
+    s.run("tsset id");
+    let dir = temp_dir("tsuse");
+    let f = dir.join("ts.dta").display().to_string();
+    s.run(&format!("save \"{f}\", replace"));
+    s.run("clear");
+    s.run(&format!("use \"{f}\""));
+    s.run("gen lx = L.x");
+    assert!(s.nums("lx")[0].is_nan() || s.nums("lx")[0] > 1e300);
+    assert_eq!(s.nums("lx")[1], s.nums("x")[0]);
+    s.run("xtset group id");
+    s.run(&format!("save \"{f}\", replace"));
+    s.run(&format!("use \"{f}\", clear"));
+    assert!(s.run("xtset").contains("group"));
+}
