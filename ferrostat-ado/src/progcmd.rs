@@ -14,7 +14,7 @@ use crate::interpreter::{err_message, AdoInterpreter};
 use crate::macros::{self, macro_number, unquote};
 
 /// SSC packages whose functionality Ferrostat provides natively.
-pub const NATIVE_PACKAGES: &[&str] = &["outreg2", "xtpmg", "spmap", "shp2dta", "sppack", "spmat", "xtivreg2", "ivreg2", "ranktest", "unique", "frmttable", "outreg", "reghdfe", "ivreghdfe", "ftools", "distinct", "mdesc", "winsor2", "gtools", "gcollapse", "gegen", "gquantiles", "fasterxtile", "gstats", "gtop", "gtoplevelsof", "gunique", "gdistinct", "glevelsof", "gisid", "gduplicates", "hashsort", "greshape", "fcollapse", "fegen", "fisid", "fsort", "join", "flevelsof", "fre", "sumup", "tabout", "egenmore", "rangestat", "carryforward", "labutil", "labmask", "labvalch", "labvalclone", "labvarch"];
+pub const NATIVE_PACKAGES: &[&str] = &["outreg2", "xtpmg", "spmap", "shp2dta", "sppack", "spmat", "xtivreg2", "ivreg2", "ranktest", "unique", "frmttable", "outreg", "reghdfe", "ivreghdfe", "ftools", "distinct", "mdesc", "winsor2", "gtools", "gcollapse", "gegen", "gquantiles", "fasterxtile", "gstats", "gtop", "gtoplevelsof", "gunique", "gdistinct", "glevelsof", "gisid", "gduplicates", "hashsort", "greshape", "fcollapse", "fegen", "fisid", "fsort", "join", "flevelsof", "fre", "sumup", "tabout", "egenmore", "rangestat", "carryforward", "labutil", "labmask", "labvalch", "labvalclone", "labvarch", "rdrobust", "rdbwselect", "rdplot", "rddensity", "rdbwdensity", "binscatter", "ppmlhdfe"];
 
 /// Community packages whose commands have a different name from the package,
 /// as (package, commands it provides).
@@ -26,6 +26,8 @@ const PACKAGE_COMMANDS: &[(&str, &[&str])] = &[
     ("ftools", &["fcollapse", "fegen", "fisid", "fsort", "join", "flevelsof"]),
     ("labutil", &["labmask", "labvalch", "labvalclone", "labvarch"]),
     ("st0085_2", &["esttab", "eststo"]),
+    ("rdrobust", &["rdrobust", "rdbwselect", "rdplot"]),
+    ("rddensity", &["rddensity", "rdbwdensity"]),
 ];
 
 /// Packages accepted without providing commands (helpers whose features are

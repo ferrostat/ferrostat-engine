@@ -45,6 +45,12 @@ pub mod panel_ardl;
 pub mod postest;
 pub mod regplot;
 pub mod reghdfe;
+// regression discontinuity (rdrobust, rdbwselect)
+pub mod rdrobust;
+pub mod rdplot;
+pub mod rddensity;
+pub mod ppmlhdfe;
+pub mod binscatter;
 pub mod restructure;
 pub mod separate;
 pub mod smooth;
@@ -57,6 +63,9 @@ pub mod store;
 pub mod summarize;
 pub mod surface;
 pub mod survival;
+// complex survey designs and the svy: prefix
+pub mod svy;
+pub mod svy_est;
 // survival models and summaries (stcox, streg, sts list/test, stsplit...)
 pub mod stcox;
 pub mod streg;

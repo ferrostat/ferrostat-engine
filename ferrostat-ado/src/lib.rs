@@ -4,6 +4,8 @@ pub mod dyndoc;
 pub mod estout;
 pub mod interpreter;
 pub mod macros;
+pub mod mi;
+pub mod mi_impute;
 pub mod mata;
 pub mod frmttable;
 pub mod outreg;

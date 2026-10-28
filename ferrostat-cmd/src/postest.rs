@@ -633,7 +633,19 @@ fn wald_report(st: &mut Store, b: &Matrix, v: &Matrix, cons: &[(String, String)]
             lines.push(format!("       Constraint {} dropped", d + 1));
         }
     }
-    if let Some(df_r) = st.e.get("df_r").filter(|_| !matches!(st.e.macros.get("cmd").map(String::as_str), Some("logit" | "probit" | "poisson"))) {
+    if st.e.macros.get("prefix").map(String::as_str) == Some("svy") && st.e.get("df_r").is_some() {
+        // survey estimates: adjusted Wald test with the design df
+        let d = st.e.get("df_r").unwrap();
+        let df2 = d - df + 1.0;
+        let f = (d - df + 1.0) / (d * df) * w;
+        let p = dist::ftail(df, df2, f);
+        lines.insert(0, "Adjusted Wald test\n".into());
+        lines.push(format!("       F({:>3}, {:>5}) = {:>8.2}", df, df2, f));
+        lines.push(format!("            Prob > F = {:>10.4}", p));
+        res.set("F", f);
+        res.set("df_r", df2);
+        res.set("p", p);
+    } else if let Some(df_r) = st.e.get("df_r").filter(|_| !matches!(st.e.macros.get("cmd").map(String::as_str), Some("logit" | "probit" | "poisson"))) {
         let f = w / df;
         let p = dist::ftail(df, df_r, f);
         lines.push(format!("       F({:>3}, {:>5}) = {:>8.2}", df, df_r, f));

@@ -46,7 +46,7 @@ Ferrostat runs existing analysis scripts unchanged: it reads and writes `.dta` f
 ### Language
 - Macros: `` `local' ``, `$global`, `` `=exp' ``, `` `:extended function' ``, `` `++i' ``, nested macros, compound quotes
 - Control flow: `foreach` (in/of local/global/varlist/newlist/numlist), `forvalues`, `while`, `if`/`else if`/`else`, `continue`, `break`
-- Prefixes: `quietly`, `noisily`, `capture` (sets `_rc`), `by`/`bysort` (group-aware `_n`, `_N`, subscripts), `xi:`, `frame name:`, `bootstrap:`, `simulate:`, `permute:`, `collect:`
+- Prefixes: `quietly`, `noisily`, `capture` (sets `_rc`), `by`/`bysort` (group-aware `_n`, `_N`, subscripts), `xi:`, `frame name:`, `bootstrap:`, `simulate:`, `permute:`, `collect:`, `svy:`, `mi estimate:`
 - Programs: `program define … end` with `syntax`, `args`, `tokenize`, `gettoken`, `marksample`, `tempvar`/`tempname`/`tempfile`, `return`/`ereturn`
 - Stored results `r()`, `e()`, `c()`, `_b[]`, `_se[]`, scalars and a matrix language (`J()`, `I()`, `diag()`, `inv()`, joins, subscripts, `accum`, `symeigen`, `mkmat`/`svmat`)
 - Command abbreviations (`gen`, `su`, `reg`, `tab`, …), varlist wildcards and ranges, factor variables (`i.`, `ib#.`, `c.`, `#`, `##`) and time-series operators (`L.`, `F.`, `D.`, `S.`)
@@ -71,8 +71,11 @@ Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with
 | Nonlinear | `logit`, `logistic`, `probit`, `cloglog`, `poisson`, `nbreg`, `zip`, `zinb`, `ologit`, `oprobit`, `mlogit`, `tobit`, `glm` (6 families, 7 links) |
 | Multilevel | `melogit`/`meqrlogit` (random intercepts and independent slopes, nested levels, adaptive Gauss–Hermite quadrature) |
 | Resampling | `bootstrap` (and `vce(bootstrap)`, `estat bootstrap` with normal/percentile/BC/BCa intervals), `simulate`, `permute`; replications run in parallel on all cores (`set processors #`) with results independent of the core count, also in the browser |
+| Survey data | `svyset` (pweights, strata, multistage with `\|\|`, `fpc()`, `singleunit()`, BRR/jackknife/bootstrap/SDR replicate weights; stored with the data), `svydescribe`, `svymarkout`, `svy:` / `svy brr\|jackknife\|bootstrap\|sdr:` with `mean`, `total`, `ratio`, `proportion`, `tabulate` (one-way, two-way with Rao–Scott corrected Pearson and LR tests), `regress`, `logit`, `logistic`, `probit`, `poisson`, `ologit`, `oprobit`, `mlogit`; Taylor-linearized or replicate-weight variances, `subpop()`, adjusted Wald F, `estat effects` (DEFF/DEFT), `estat sd` |
+| Multiple imputation | `mi set wide\|mlong\|flong`, `mi register`/`unregister`, `mi impute regress\|pmm\|logit\|ologit\|mlogit\|poisson\|mvn\|monotone\|chained` (proper Bayesian draws from the session generator), `mi describe`, `mi passive:`, `mi xeq:`, `mi extract`, `mi convert`, `mi rename`, `mi reset`, `mi varying`, `mi misstable`, `mi estimate:` (Rubin's rules, Barnard–Rubin small-sample df, RVI/FMI, equal-FMI model F test), `mi test` |
 | Treatment effects | `teffects ra`, `ipw`, `aipw` (binary treatment; ATE, ATET, potential-outcome means; robust M-estimation standard errors) |
-| High-dimensional FE | `reghdfe` (multiple absorbed fixed effects, multi-way clustering, singleton dropping, saved FEs) |
+| High-dimensional FE | `reghdfe` (multiple absorbed fixed effects, multi-way clustering, singleton dropping, saved FEs), `ppmlhdfe` (Poisson PML with separation detection) |
+| Regression discontinuity | `rdrobust`, `rdbwselect`, `rdplot`, `rddensity`, `rdbwdensity`; binned scatter plots with `binscatter` |
 | Post-estimation | `predict` (xb, residuals, stdp/stdf/stdr, leverage, rstandard/rstudent, cooksd, pr, n, ir, mu, u/e/xbu, scores), `test`, `testparm`, `lincom`, `margins` (predictive margins, `dydx()`, `at()` with numlists and statistics, `atmeans`, `over()`, `predict()` outcomes; delta-method SEs), `marginsplot`, `contrast` (r./a./ar./g. operators, `@` groups, joint Wald tests, `effects`, `post`), r(table) after every coefficient table, `estimates store/restore/table/stats`, `estat ic/vce/hettest/ovtest/vif/summarize/firststage/gof` |
 | Spatial | `shp2dta` (ESRI shapefile + dBase import), `spmat contiguity` (queen/rook, row/minmax/spectral normalisation), `spmat lag`, `spmap` (choropleths) |
 | Survival | `stset` (id, enter, exit, origin, scale), `stcox` (Breslow, Efron, exact ties; strata, robust, tvc, shared frailty; `estat phtest`, `estat concordance`, `stcurve`), `streg` (exponential, Weibull, Gompertz, log-logistic, lognormal, generalized gamma; PH/AFT; frailty), `sts graph|list|test|generate`, `stsum`, `stci`, `stdescribe`, `stptime`, `stsplit`, `stjoin`, `strate`, `ltable` |
@@ -204,7 +207,7 @@ None: graph text uses an embedded copy of the DejaVu Sans font (`assets/fonts`, 
 
 Commands, prefixes and options follow the familiar conventions of do-file syntax, including minimal abbreviations, `[fw=]`/`[aw=]`/`[pw=]`/`[iw=]` weights and `in f/l` ranges. Error messages end with the usual return code (`r(111);`), which `capture` stores in `_rc`; in batch mode the process exit status is the return code of the failing command.
 
-Community packages that Ferrostat implements natively (`estout`/`esttab`/`eststo`, `coefplot`, `outreg2`, `frmttable`, `unique`, `reghdfe`/`ftools`, `gtools`, `fre`, `tabout`, `rangestat`, `carryforward`, `labutil`, `xtabond2`, `distinct`, `mdesc`, `winsor2`, `xtivreg2`/`ivreg2`, `xtpmg`, `spmap`, `shp2dta`, `spmat`) are reported by `which` and accepted by `ssc install`, which installs nothing. Other community packages are not downloaded.
+Community packages that Ferrostat implements natively (`estout`/`esttab`/`eststo`, `coefplot`, `outreg2`, `frmttable`, `unique`, `reghdfe`/`ftools`, `ppmlhdfe`, `rdrobust`/`rdplot`, `rddensity`, `binscatter`, `gtools`, `fre`, `tabout`, `rangestat`, `carryforward`, `labutil`, `xtabond2`, `distinct`, `mdesc`, `winsor2`, `xtivreg2`/`ivreg2`, `xtpmg`, `spmap`, `shp2dta`, `spmat`) are reported by `which` and accepted by `ssc install`, which installs nothing. Other community packages are not downloaded.
 
 ---
 
@@ -312,6 +315,10 @@ cargo test --workspace
 - All statistical algorithms are textbook implementations (Wooldridge, Greene, Cameron & Trivedi, Hayashi, Pesaran–Shin–Smith, Kleibergen–Paap 2006, Cragg–Donald 1993) or standard numerical methods.
 - Weak-instrument critical values are transcribed from the tables published by Stock and Yogo (2005).
 - Community packages are reimplemented from their documentation and published papers, without copying their code. Where a package's licence permits it, its source was also consulted for algorithm details: `xtabond2` (D. Roodman, GPL-3.0-or-later), `reghdfe`/`ftools` (S. Correia, MIT), `gtools` (M. Caceres Bravo, MIT).
+- `rdrobust`/`rdbwselect`/`rdplot`: S. Calonico, M. D. Cattaneo, M. H. Farrell, R. Titiunik (GPL-3.0) — source consulted; methods from Calonico, Cattaneo & Titiunik (2014, 2015) and Calonico, Cattaneo & Farrell (2020).
+- `rddensity`/`rdbwdensity`: M. D. Cattaneo, M. Jansson, X. Ma (GPL-3.0) — source consulted; kernel constants recomputed by exact polynomial integration (Cattaneo, Jansson & Ma 2020).
+- `binscatter`: M. Stepner (CC0) — source consulted; method as in Cattaneo, Crump, Farrell & Feng (2024).
+- `ppmlhdfe`: S. Correia, P. Guimarães, T. Zylkin (MIT) — source consulted; Correia, Guimarães & Zylkin (2020).
 - Johansen cointegration critical values are transcribed from the published tables of Osterwald-Lenum (1992).
 - The logo is original artwork generated by `assets/make_logo.py`.
 - Every parser rule, AST node, and evaluation function is original code.
@@ -327,8 +334,8 @@ This project exists to ensure long-term accessibility of statistical datasets an
 Contributions are welcome! Priority areas:
 
 - [ ] Time series: `arch`/`garch`, `sspace`, `dfactor`, `ucm`, `mswitch`, `forecast`
-- [ ] Survey data: `svyset`, `svy:`
-- [ ] Multiple imputation: `mi`
+- [ ] Survey data: `svy:` with the remaining estimators, poststratification, `svy: margins`
+- [ ] Multiple imputation: `mi impute` with `by()`, truncreg/intreg/nbreg methods, `mi import`/`export`, `mi merge`/`append`/`reshape`
 - [ ] `heckman`, `clogit`, `xtlogit`, `mixed` and the other multilevel models
 - [ ] Mata: complex numbers, classes and views
 - [ ] Graph schemes and the remaining styling options
