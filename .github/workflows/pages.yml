@@ -21,9 +21,10 @@ permissions:
   pages: write
   id-token: write
 
+# only the latest deployment runs: a newer one cancels the older
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
