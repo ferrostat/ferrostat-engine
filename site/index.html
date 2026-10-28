@@ -9,12 +9,14 @@
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
+<a class="donate-banner" href="#donate">&#10084; Ferrostat is free and open source. Please keep it going &mdash; <b>donate Bitcoin or Ethereum</b> &rarr;</a>
 <header class="top">
   <a class="brand" href="./"><img src="icon-64.png" alt="" width="28" height="28"> Ferrostat</a>
   <nav>
     <a href="#download">Download</a>
     <a href="app/">Web app</a>
     <a href="@PROJECT_URL@">Source</a>
+    <a class="btn donate small-btn" href="#donate">&#10084; Donate</a>
   </nav>
 </header>
 
@@ -25,8 +27,33 @@
     <div class="cta">
       <a class="btn primary" id="cta-download" href="#download">Download</a>
       <a class="btn" href="app/">Open in the browser</a>
+      <a class="btn donate" href="#donate">&#10084; Donate</a>
     </div>
     <p class="muted small" id="release-line">Latest release</p>
+  </section>
+
+  <section id="donate" class="donate-section">
+    <h2>&#10084; Support Ferrostat</h2>
+    <p class="lead-left">Ferrostat is free software built in the open. If it saves you a licence fee or an afternoon, please consider a donation: it pays for development time, CI runners and code signing for the desktop builds.</p>
+    <div class="grid donate-grid">
+      <article class="card coin btc">
+        <h3>Bitcoin</h3>
+        <p class="muted">Native SegWit (bc1&hellip;)</p>
+        <code class="addr" id="addr-btc">bc1qapwnysw6djg0zscl7qlys5ed658xfna07pg4v4</code>
+        <button class="btn donate big" data-copy="addr-btc">Copy Bitcoin address</button>
+        <a class="btn" href="bitcoin:bc1qapwnysw6djg0zscl7qlys5ed658xfna07pg4v4">Open in my wallet</a>
+        <img class="qr" src="donate-btc.png" alt="Bitcoin address as a QR code" width="150" height="150">
+      </article>
+      <article class="card coin eth">
+        <h3>Ethereum</h3>
+        <p class="muted">ETH and ERC-20 tokens</p>
+        <code class="addr" id="addr-eth">0xbF5a5803a4931de99D40f8cec7bE6cd04828a2F8</code>
+        <button class="btn donate big" data-copy="addr-eth">Copy Ethereum address</button>
+        <a class="btn" href="ethereum:0xbF5a5803a4931de99D40f8cec7bE6cd04828a2F8">Open in my wallet</a>
+        <img class="qr" src="donate-eth.png" alt="Ethereum address as a QR code" width="150" height="150">
+      </article>
+    </div>
+    <p class="muted small">&ldquo;Open in my wallet&rdquo; works with desktop wallets that handle <code>bitcoin:</code> / <code>ethereum:</code> links (e.g. Electrum, Sparrow, MetaMask); otherwise copy the address. Always check the address in your wallet before sending.</p>
   </section>
 
   <section id="download">
@@ -125,6 +152,20 @@ $ ./ferrostat-linux-x86_64
 
 <script>
 (function () {
+  // donate: copy an address to the clipboard
+  document.querySelectorAll("[data-copy]").forEach(function (b) {
+    var label = b.textContent;
+    b.addEventListener("click", function () {
+      var text = document.getElementById(b.dataset.copy).textContent.trim();
+      var done = function () { b.textContent = "Copied! Thank you \u2764"; setTimeout(function () { b.textContent = label; }, 2500); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { window.prompt("Copy the address:", text); });
+      } else {
+        window.prompt("Copy the address:", text);
+      }
+    });
+  });
+
   // The pages job of either forge fills these in; release URLs differ.
   var project = "@PROJECT_URL@";
   var github = "@FORGE@" === "github";

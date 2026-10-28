@@ -1,6 +1,6 @@
 // Service worker that makes the page cross-origin isolated, which the
 // browser requires before workers may share memory (parallel replications).
-// Static hosts such as GitLab and GitHub Pages cannot send the needed
+// Static hosts such as GitHub Pages cannot send the needed
 // headers themselves, so they are added here to every same-origin response.
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));

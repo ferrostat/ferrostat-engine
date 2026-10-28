@@ -1,9 +1,9 @@
 name: Release
 
-# Mirrors the build/release jobs of .gitlab-ci.yml. Pushes to main build the
-# release files as workflow artifacts (kept 30 days); tags v* also publish
-# them as a GitHub release. ci/package.sh names the files, so both forges
-# publish the same assets.
+# Pushes to main build the release files as workflow artifacts (kept 30
+# days); tags v* also publish them as a GitHub release. ci/package.sh names
+# the files without a version, so
+# <repo>/releases/latest/download/<file> always points at the newest one.
 #
 # Linux builds run in Debian bookworm (glibc 2.36) so the programs also run on
 # older distributions, including Raspberry Pi OS bookworm. The Raspberry Pi
@@ -49,7 +49,7 @@ jobs:
         run: cargo build --release -p ferrostat-repl -p ferrostat-gui --target ${{ matrix.target }}
       - name: Package
         run: |
-          # same as GitLab: the tag, or <branch>-<short sha>
+          # the tag, or <branch>-<short sha>
           VERSION=$GITHUB_REF_NAME; [ "$GITHUB_REF_TYPE" = tag ] || VERSION=$GITHUB_REF_NAME-${GITHUB_SHA::8}
           ci/package.sh ${{ matrix.target }} "$VERSION"
       - uses: actions/upload-artifact@v4
@@ -81,7 +81,7 @@ jobs:
         run: cargo build --release -p ferrostat-repl -p ferrostat-gui --target ${{ matrix.target }}
       - name: Package
         run: |
-          # same as GitLab: the tag, or <branch>-<short sha>
+          # the tag, or <branch>-<short sha>
           VERSION=$GITHUB_REF_NAME; [ "$GITHUB_REF_TYPE" = tag ] || VERSION=$GITHUB_REF_NAME-${GITHUB_SHA::8}
           ci/package.sh ${{ matrix.target }} "$VERSION"
       - uses: actions/upload-artifact@v4
@@ -113,7 +113,7 @@ jobs:
         run: ./ferrostat-wasm/build.sh
       - name: Package
         run: |
-          # same as GitLab: the tag, or <branch>-<short sha>
+          # the tag, or <branch>-<short sha>
           VERSION=$GITHUB_REF_NAME; [ "$GITHUB_REF_TYPE" = tag ] || VERSION=$GITHUB_REF_NAME-${GITHUB_SHA::8}
           ci/package.sh wasm32-web "$VERSION"
       - uses: actions/upload-artifact@v4

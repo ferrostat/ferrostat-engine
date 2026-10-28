@@ -7,7 +7,7 @@
 //!
 //! Each record contributes `d ln h(t) - H(t) + H(t0)`; with frailty the
 //! cumulative hazards of a group are integrated over the frailty
-//! distribution (Gutierrez 2002, *Stata Journal* 2: 22-44 gives the
+//! distribution (Gutierrez 2002, 2: 22-44, gives the
 //! closed forms). Derivatives with respect to each record's linear
 //! predictors are taken by Richardson-extrapolated central differences
 //! and chained to the coefficients analytically.

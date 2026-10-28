@@ -1,17 +1,49 @@
+<p align="center">
+  <a href="https://ferrostat.github.io/ferrostat-engine/#donate"><img alt="Donate Bitcoin" src="https://img.shields.io/badge/%E2%9D%A4%20DONATE-BITCOIN-F7931A?style=for-the-badge&logo=bitcoin&logoColor=white&labelColor=d14900" height="56"></a>
+  &nbsp;
+  <a href="https://ferrostat.github.io/ferrostat-engine/#donate"><img alt="Donate Ethereum" src="https://img.shields.io/badge/%E2%9D%A4%20DONATE-ETHEREUM-627EEA?style=for-the-badge&logo=ethereum&logoColor=white&labelColor=3c3c3d" height="56"></a>
+</p>
+
+<p align="center"><b>Ferrostat is free software built in the open. If it saves you a licence fee or an afternoon, please consider a donation — it keeps the project going.</b></p>
+
 <p align="center"><img src="assets/logo-wordmark.png" alt="Ferrostat" width="420"></p>
 
 # Ferrostat
 
 A statistical computing engine written in Rust. Ferrostat provides an environment for data manipulation, statistical estimation, and graphics, driven by a do-file command language compatible with the widely used `.do`/`.dta` ecosystem. It comes in three front ends sharing one engine: a terminal (CLI), a desktop application, and a browser version compiled to WebAssembly.
 
-[![CI](https://img.shields.io/badge/CI-linux%20%7C%20windows%20%7C%20macOS%20%7C%20wasm-blue.svg)](.github/workflows/ci.yml)
+
+## Support Ferrostat ❤️
+
+Donations fund development time, CI runners and code signing for the desktop builds. Every amount helps.
+
+| | Bitcoin (native SegWit) | Ethereum (and ERC-20) |
+|---|---|---|
+| **Address** | `bc1qapwnysw6djg0zscl7qlys5ed658xfna07pg4v4` | `0xbF5a5803a4931de99D40f8cec7bE6cd04828a2F8` |
+| **On a computer** | [**Copy address or open your wallet**](https://ferrostat.github.io/ferrostat-engine/#donate) | [**Copy address or open your wallet**](https://ferrostat.github.io/ferrostat-engine/#donate) |
+| **On a phone** | <img src="assets/donate-btc.png" alt="Bitcoin QR code" width="150"> | <img src="assets/donate-eth.png" alt="Ethereum QR code" width="150"> |
+
+```
+bc1qapwnysw6djg0zscl7qlys5ed658xfna07pg4v4
+```
+```
+0xbF5a5803a4931de99D40f8cec7bE6cd04828a2F8
+```
+
+
+[![CI](https://github.com/ferrostat/ferrostat-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/ferrostat/ferrostat-engine/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ferrostat/ferrostat-engine)](https://github.com/ferrostat/ferrostat-engine/releases/latest)
+[![Web app](https://img.shields.io/badge/try%20it-in%20the%20browser-brightgreen)](https://ferrostat.github.io/ferrostat-engine/app/)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
 
 ---
 
+---
+
 ## Table of Contents
 
+- [Support Ferrostat](#support-ferrostat-️)
 - [Overview](#overview)
 - [Features](#features)
 - [Quick Start](#quick-start)
@@ -163,7 +195,7 @@ cargo install wasm-bindgen-cli --version 0.2.129   # must match Cargo.lock
 python3 -m http.server -d ferrostat-wasm/web 8080   # open http://localhost:8080
 ```
 
-The page is static (HTML, CSS, JS and the `.wasm` module), so any static host works. CI publishes it under `/app/` of the project site, next to the download page in `site/`, on GitLab Pages (`.gitlab-ci.yml`) and GitHub Pages (`.github/workflows/pages.yml`) after every push to `main` and every release. Files live in an in-memory file system: upload or drop `.dta`, `.csv`, `.xlsx` and `.do` files into the session, and download anything the session writes (datasets, logs, tables, exported graphs). Differences from the native builds:
+The page is static (HTML, CSS, JS and the `.wasm` module), so any static host works. CI publishes it under `/app/` of the project site, next to the download page in `site/`, on GitHub Pages (`.github/workflows/pages.yml`, https://ferrostat.github.io/ferrostat-engine/) after every push to `main` and every release. Files live in an in-memory file system: upload or drop `.dta`, `.csv`, `.xlsx` and `.do` files into the session, and download anything the session writes (datasets, logs, tables, exported graphs). Differences from the native builds:
 
 - The engine runs in a Web Worker, so the page stays responsive; **Stop** cancels a long computation (the engine restarts with an empty dataset, files are kept).
 - Session files are saved in the browser's IndexedDB and restored on the next visit; *clear* in the Files panel deletes them.
@@ -176,15 +208,15 @@ The page is static (HTML, CSS, JS and the `.wasm` module), so any static host wo
 
 ### Pre-built binaries
 
-Tagged releases publish the `ferrostat` and `ferrostat-gui` binaries for Linux (x86_64), Raspberry Pi and other ARM Linux (64-bit aarch64 and 32-bit armv7), Windows (x86_64) and macOS (Apple Silicon and Intel), each as two single-file executables and as an archive, plus `ferrostat-web.zip`, the ready-to-serve browser version. Linux builds need glibc 2.36 or later (Debian 12, Ubuntu 22.10, Raspberry Pi OS bookworm). The file names carry no version, so `<project>/releases/latest/download/<file>` (GitHub) and `<project>/-/releases/permalink/latest/downloads/<file>` (GitLab) always fetch the newest release. GitLab (`.gitlab-ci.yml`) and GitHub (`.github/workflows/release.yml`) build the same files with `ci/package.sh`.
+Tagged releases publish the `ferrostat` and `ferrostat-gui` binaries for Linux (x86_64), Raspberry Pi and other ARM Linux (64-bit aarch64 and 32-bit armv7), Windows (x86_64) and macOS (Apple Silicon and Intel), each as two single-file executables and as an archive, plus `ferrostat-web.zip`, the ready-to-serve browser version. Linux builds need glibc 2.36 or later (Debian 12, Ubuntu 22.10, Raspberry Pi OS bookworm). The file names carry no version, so `https://github.com/ferrostat/ferrostat-engine/releases/latest/download/<file>` always fetches the newest release. `.github/workflows/release.yml` builds them with `ci/package.sh`.
 
 ### From Source
 
 Requires a stable Rust toolchain.
 
 ```bash
-git clone <repo-url>
-cd ferrostat
+git clone https://github.com/ferrostat/ferrostat-engine.git
+cd ferrostat-engine
 cargo build --release
 # Linux/macOS
 sudo cp target/release/ferrostat /usr/local/bin/
@@ -291,7 +323,7 @@ cargo test --workspace
 
 - `ferrostat-tests` drives the interpreter exactly as a user would and checks results against **independent reference values** computed by `ferrostat-tests/reference/reference.py`, a standard-library-only Python implementation of the textbook formulas (OLS, robust SEs, logit/probit/poisson MLE, t tests, chi-square, ANOVA, fixed effects, kernel density).
 - `ferrostat-tests/tests/gallery.rs` runs every example of the original graph gallery (109 graphs) on synthetic stand-ins for its datasets; the 5 examples needing VAR/VEC estimation are marked ignored.
-- CI builds and tests on Linux, Windows and macOS, and builds the WebAssembly version, on both GitLab (`.gitlab-ci.yml`) and GitHub (`.github/workflows/ci.yml`).
+- CI builds and tests on Linux, Windows and macOS, and builds the WebAssembly version, on GitHub Actions (`.github/workflows/ci.yml`).
 - Tutorial suites: the do-files of public courses (the Göttingen *Economic analysis* course, UCLA OARC data-analysis examples, Princeton tutorials, *The Mixtape*, *Mostly Harmless Econometrics*) are run as acceptance tests; their datasets are not redistributed.
 - Real-world validation: two research do-files (panel regressions, dynamic factor analysis, PMG/MG panel ARDL) were run unmodified apart from their machine-specific `cd`. Their results were compared with the logs of the original runs: all 686 coefficient rows of the regression tasks match (coefficient and standard error), as do the factor count and PMG/MG estimates and the Pesaran CD statistic.
 

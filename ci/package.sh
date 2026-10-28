@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Collects the release assets of one build into dist/. Shared by
-# .gitlab-ci.yml and .github/workflows/release.yml so both publish the same
-# files.
+# Collects the release assets of one build into dist/ (used by
+# .github/workflows/release.yml).
 #
 #   ci/package.sh <rust-target> <version>    after cargo build --release --target <rust-target>
 #   ci/package.sh wasm32-web <version>       after ferrostat-wasm/build.sh

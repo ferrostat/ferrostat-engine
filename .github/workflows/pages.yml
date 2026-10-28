@@ -1,6 +1,6 @@
 name: Pages
 
-# Mirrors the pages job of .gitlab-ci.yml: the home page (site/) with download
+# The home page (site/) with download
 # links to the latest release, and the browser build under /app/. Deployed on
 # every push to main and after each release. Needs Pages enabled for the
 # repository (Settings > Pages > Source: GitHub Actions).
@@ -56,7 +56,7 @@ jobs:
         run: |
           rm -rf public && mkdir public
           cp site/* public/
-          cp assets/icon-64.png assets/logo-wordmark.png public/
+          cp assets/icon-64.png assets/logo-wordmark.png assets/donate-btc.png assets/donate-eth.png public/
           sed -i -e "s|@PROJECT_URL@|$GITHUB_SERVER_URL/$GITHUB_REPOSITORY|g" -e "s|@FORGE@|github|g" public/index.html
           cp -r ferrostat-wasm/web public/app
           # Release metadata for the page (version, which assets exist); optional.
