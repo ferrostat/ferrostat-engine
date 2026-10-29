@@ -606,7 +606,7 @@ impl CommandHandler for Predictnl {
 // estimates save | use | describe | notes | title | dir | query
 // ---------------------------------------------------------------------------
 
-fn results_json(e: &Results) -> serde_json::Value {
+pub fn results_json(e: &Results) -> serde_json::Value {
     use serde_json::json;
     let mats: serde_json::Map<String, serde_json::Value> = e
         .matrices
@@ -622,7 +622,7 @@ fn results_json(e: &Results) -> serde_json::Value {
     json!({"scalars": sc, "macros": e.macros, "matrices": mats})
 }
 
-fn results_from_json(v: &serde_json::Value) -> Result<Results, String> {
+pub fn results_from_json(v: &serde_json::Value) -> Result<Results, String> {
     let bad = || rc_err(610, "file not in estimates format");
     let mut e = Results::new();
     for (k, x) in v["scalars"].as_object().ok_or_else(bad)? {

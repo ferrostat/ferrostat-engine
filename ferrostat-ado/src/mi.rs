@@ -74,6 +74,7 @@ pub(crate) fn intercept(me: &mut AdoInterpreter, verb_raw: &str, rest: &str, _te
 }
 
 fn mi_command(me: &mut AdoInterpreter, sub: &str, args: &str) -> Result<(), String> {
+    if let Some(r) = crate::mi_more::command(me, sub, args) { return r; }
     let is = |full: &str, min: usize| sub.len() >= min && full.starts_with(sub);
     if is("set", 3) {
         return mi_set(me, args);
@@ -181,13 +182,15 @@ pub(crate) struct MiData {
     pub base: DataSet,
     /// imputed and passive columns of imputations 1..M
     pub imp: Vec<BTreeMap<String, Vec<f64>>>,
+    /// flongsep data name
+    pub name: String,
 }
 
 fn char_words(ds: &DataSet, name: &str) -> Vec<String> {
     ds.characteristics.get("_dta").and_then(|c| c.get(name)).map(|s| s.split_whitespace().map(String::from).collect()).unwrap_or_default()
 }
 
-fn take_rows(ds: &DataSet, idx: &[usize]) -> DataSet {
+pub(crate) fn take_rows(ds: &DataSet, idx: &[usize]) -> DataSet {
     let mut out = crate::resample::empty_shell(ds);
     for (v, src) in out.vars.iter_mut().zip(&ds.vars) {
         v.data = idx.iter().map(|&i| src.data[i].clone()).collect();
@@ -196,7 +199,7 @@ fn take_rows(ds: &DataSet, idx: &[usize]) -> DataSet {
     out
 }
 
-fn set_num_col(ds: &mut DataSet, name: &str, vals: &[f64]) -> Result<(), String> {
+pub(crate) fn set_num_col(ds: &mut DataSet, name: &str, vals: &[f64]) -> Result<(), String> {
     if !ds.var_index.contains_key(name) {
         let mut v = Variable::new(name.to_string(), VarType::Double);
         v.data = vals.iter().map(|&x| util::typed_value(VarType::Double, x)).collect();
@@ -218,7 +221,7 @@ fn set_num_col(ds: &mut DataSet, name: &str, vals: &[f64]) -> Result<(), String>
     Ok(())
 }
 
-fn col(ds: &DataSet, name: &str) -> Vec<f64> {
+pub(crate) fn col(ds: &DataSet, name: &str) -> Vec<f64> {
     match ds.get_var(name) {
         Some(v) => (0..ds.n_obs).map(|i| v.num(i)).collect(),
         None => vec![SYSMISS; ds.n_obs],
@@ -284,9 +287,11 @@ impl MiData {
                 }
                 base
             }
+            "flongsep" => crate::mi_more::flongsep_load(ds, &ipv, m, &mut imp)?,
             s => return Err(rc_err(198, format!("mi style {s} not supported"))),
         };
-        let mut md = MiData { style, m, ivars, pvars, rvars, base, imp };
+        let name = c.get("_mi_name").cloned().unwrap_or_default();
+        let mut md = MiData { style, m, ivars, pvars, rvars, base, imp, name };
         md.base.characteristics.entry("_dta".into()).or_default().retain(|k, _| !k.starts_with("_mi_"));
         md.fill_complete();
         Ok(md)
@@ -310,7 +315,7 @@ impl MiData {
         if let Some(c) = base.characteristics.get_mut("_dta") {
             c.retain(|k, _| !k.starts_with("_mi_"));
         }
-        MiData { style: style.into(), m: 0, ivars: vec![], pvars: vec![], rvars: vec![], base, imp: vec![] }
+        MiData { style: style.into(), m: 0, ivars: vec![], pvars: vec![], rvars: vec![], base, imp: vec![], name: String::new() }
     }
 
     /// Incomplete observations: any imputed variable missing in m = 0.
@@ -412,10 +417,14 @@ impl MiData {
                 ds.sort_by = vec!["_mi_m".into(), "_mi_id".into()];
                 ds
             }
+            "flongsep" => crate::mi_more::flongsep_store(self, &miss)?,
             s => return Err(rc_err(198, format!("style {s} invalid"))),
         };
         let c = ds.characteristics.entry("_dta".into()).or_default();
         c.retain(|k, _| !k.starts_with("_mi_"));
+        if style == "flongsep" {
+            c.insert("_mi_name".into(), self.name.clone());
+        }
         c.insert("_mi_style".into(), style.into());
         c.insert("_mi_M".into(), self.m.to_string());
         c.insert("_mi_N".into(), n.to_string());
@@ -634,7 +643,7 @@ fn mi_passive(me: &mut AdoInterpreter, args: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_numlist_m(s: &str, m: usize) -> Result<Vec<usize>, String> {
+pub(crate) fn parse_numlist_m(s: &str, m: usize) -> Result<Vec<usize>, String> {
     let s = s.trim();
     if s.is_empty() {
         return Ok((0..=m).collect());
@@ -806,14 +815,23 @@ pub fn mi_ftest(r: &Rubin, idx: &[usize], m: usize, dfc: Option<f64>) -> Option<
 }
 
 fn mi_estimate(me: &mut AdoInterpreter, args: &str) -> Result<(), String> {
-    let colon = find_top_level(args, ':').ok_or_else(|| rc_err(198, "mi estimate: colon followed by an estimation command required"))?;
-    let head = args[..colon].trim().trim_start_matches(',');
-    let opts: Opts = split_options(head);
-    let command = args[colon + 1..].trim().to_string();
+    // `mi estimate using file`: estimates saved by `mi estimate, saving()`
+    let pre = crate::mi_more::estimate_using(args)?;
+    let (head, command) = match &pre {
+        Some(p) => (p.opts.clone(), p.command.clone()),
+        None => {
+            let colon = find_top_level(args, ':').ok_or_else(|| rc_err(198, "mi estimate: colon followed by an estimation command required"))?;
+            (args[..colon].trim().trim_start_matches(',').to_string(), args[colon + 1..].trim().to_string())
+        }
+    };
+    let opts: Opts = split_options(&head);
     if command.is_empty() {
         return Err(rc_err(198, "estimation command required"));
     }
-    let md = load_or_err(me)?;
+    let md = match &pre {
+        Some(p) => MiData { m: p.ests.len(), ..MiData::new(DataSet::new(), "mlong") },
+        None => load_or_err(me)?,
+    };
     if md.m == 0 {
         return Err(rc_err(2000, "no imputations"));
     }
@@ -839,7 +857,11 @@ fn mi_estimate(me: &mut AdoInterpreter, args: &str) -> Result<(), String> {
     let mut first_e: Option<Results> = None;
     let mut ns = Vec::new();
     let mut marks = String::new();
+    let mut all_e: Vec<Results> = Vec::new();
     for &k in &list {
+        let e = if let Some(p) = &pre {
+            p.ests[k - 1].clone()
+        } else {
         me.engine.dataset = md.extract(k);
         me.engine.store.e = Results::new();
         let r = run_cmd(me, &command, noisily);
@@ -848,7 +870,9 @@ fn mi_estimate(me: &mut AdoInterpreter, args: &str) -> Result<(), String> {
             me.engine.store.data_changed = saved_changed;
             return Err(rc_err(crate::interpreter::rc_of(&e), format!("{}\nan error occurred when mi estimate executed {} on m={k}", crate::interpreter::err_message(&e), split_verb(&command).0)));
         }
-        let e = me.engine.store.e.clone();
+        me.engine.store.e.clone()
+        };
+        all_e.push(e.clone());
         let b = e.matrices.get("b").ok_or_else(|| rc_err(301, "estimation command did not post e(b)"))?;
         let v = e.matrices.get("V").ok_or_else(|| rc_err(301, "estimation command did not post e(V)"))?;
         if names.is_empty() {
@@ -875,6 +899,9 @@ fn mi_estimate(me: &mut AdoInterpreter, args: &str) -> Result<(), String> {
     }
     me.engine.dataset = saved;
     me.engine.store.data_changed = saved_changed;
+    if let Some(sv) = arg(&opts, "saving", 3) {
+        crate::mi_more::save_estimates(&sv, &list, &all_e, &command)?;
+    }
     let e0 = first_e.unwrap();
     let dfc = e0.get("df_r");
     let mlen = bs.len();

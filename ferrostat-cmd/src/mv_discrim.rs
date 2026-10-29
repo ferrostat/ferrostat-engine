@@ -883,7 +883,7 @@ pub fn estat(ds: &mut DataSet, st: &mut Store, sub: &str, cmd: &Command) -> Opti
     })();
     match r {
         Ok(Some(s)) => Some(Ok(s)),
-        Ok(None) => Some(Err(rc_err(321, format!("estat {sub} not implemented after discrim")))),
+        Ok(None) => Some(crate::mv_w5::discrim_estat(ds, st, sub, cmd).unwrap_or_else(|| Err(rc_err(321, format!("estat {sub} not implemented after discrim"))))),
         Err(e) => Some(Err(e)),
     }
 }

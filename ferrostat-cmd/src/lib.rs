@@ -52,6 +52,7 @@ pub mod mv_cluster;
 pub mod mv_mds;
 pub mod mv_discrim;
 pub mod mv_misc;
+pub mod mv_w5;
 pub mod melogit;
 pub mod choice_mixed;
 pub mod heckman;

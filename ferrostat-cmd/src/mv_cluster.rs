@@ -436,13 +436,13 @@ impl ClObj {
     }
 }
 
-fn load_objs(ds: &DataSet) -> Vec<ClObj> {
+pub(crate) fn load_objs(ds: &DataSet) -> Vec<ClObj> {
     let Some(ch) = ds.characteristics.get("_dta") else { return vec![] };
     let names = ch.get("_cl_list").cloned().unwrap_or_default();
     names.split_whitespace().filter_map(|n| ch.get(&format!("_cl_{n}")).map(|s| ClObj::decode(n, s))).collect()
 }
 
-fn save_objs(ds: &mut DataSet, objs: &[ClObj]) {
+pub(crate) fn save_objs(ds: &mut DataSet, objs: &[ClObj]) {
     let ch = ds.characteristics.entry("_dta".into()).or_default();
     ch.retain(|k, _| !k.starts_with("_cl_"));
     if objs.is_empty() {
@@ -982,6 +982,7 @@ impl CommandHandler for Cluster {
         if let Some(link) = Linkage::from_sub(&subl) {
             return self.linkage(ds, st, cmd, link, &rest);
         }
+        if let Some(r) = crate::mv_w5::cluster_more(ds, st, cmd, &subl, &rest) { return r; }
         Err(rc_err(199, format!("unknown cluster subcommand {sub}")))
     }
 }

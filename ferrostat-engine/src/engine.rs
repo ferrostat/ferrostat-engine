@@ -354,6 +354,7 @@ impl Engine {
             ("ca", Box::new(ferrostat_cmd::mv_mds::Ca)),
             ("camat", Box::new(ferrostat_cmd::mv_mds::Camat)),
             ("cabiplot", Box::new(ferrostat_cmd::mv_mds::Cabiplot)),
+            ("caprojection", Box::new(ferrostat_cmd::mv_w5::Caprojection)), ("mcaplot", Box::new(ferrostat_cmd::mv_w5::Mcaplot)), ("mcaprojection", Box::new(ferrostat_cmd::mv_w5::Mcaprojection)), ("mdsshepard", Box::new(ferrostat_cmd::mv_w5::Mdsshepard)),
             ("mca", Box::new(ferrostat_cmd::mv_mds::Mca)),
             ("biplot", Box::new(ferrostat_cmd::mv_mds::Biplot)),
             ("discrim", Box::new(ferrostat_cmd::mv_discrim::Discrim { candisc: false })),

@@ -388,6 +388,7 @@ impl AdoInterpreter {
             if let Some(f) = crate::mi::intercept(self, &verb_raw, &rest, text)? {
                 return Ok(f);
             }
+            if let Some(f) = crate::sp_user::intercept(self, &verb_raw, &rest, text)? { return Ok(f); }
         }
         if let Some(b) = body {
             // a bare block such as `{ ... }` after other text

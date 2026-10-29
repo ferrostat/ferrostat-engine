@@ -294,6 +294,7 @@ pub(crate) fn impute(me: &mut AdoInterpreter, args: &str) -> Result<(), String> 
     let a = args.trim();
     let (meth, rest) = a.split_once(char::is_whitespace).ok_or_else(|| rc_err(198, "mi impute: method required"))?;
     let meth = meth.to_lowercase();
+    if matches!(meth.as_str(), "intreg" | "nbreg" | "truncreg") { return crate::mi_more::impute_extra(me, &meth, rest); }
     let (main, opts): (String, Opts) = match find_top_level_outside_parens(rest) {
         Some(i) => (rest[..i].to_string(), split_options(&rest[i + 1..])),
         None => (rest.to_string(), Vec::new()),
@@ -433,6 +434,7 @@ pub(crate) fn impute(me: &mut AdoInterpreter, args: &str) -> Result<(), String> 
     let mut burnin_mvn = 0usize;
     let mut between_mvn = 0usize;
     let mut mvn_iters = 0usize;
+    let mut trace: Vec<(usize, usize, Vec<Vec<f64>>, Matrix)> = Vec::new();
     {
         let mut rng = me.engine.store.rng.borrow_mut();
         let rng: &mut Rng = &mut rng;
@@ -469,6 +471,7 @@ pub(crate) fn impute(me: &mut AdoInterpreter, args: &str) -> Result<(), String> 
                     beta = b2;
                     sigma = s2;
                     mvn_iters += 1;
+                    trace.push((m, mvn_iters, beta.clone(), sigma.clone()));
                 }
                 // imputations from the current parameters
                 let mut yi = y.clone();
@@ -561,6 +564,10 @@ pub(crate) fn impute(me: &mut AdoInterpreter, args: &str) -> Result<(), String> 
         }
     }
     save(me, &md)?;
+    if let Some(f) = arg(&opts, "savetrace", 5) {
+        let xn: Vec<String> = pcols.iter().map(|(v, l)| match l { Some(l) => format!("{}.{v}", ferrostat_cmd::format::fmt_g(*l, 8)), None => v.clone() }).chain((!noconstant).then(|| "_cons".to_string())).collect();
+        crate::mi_more::write_trace(&f, &targets.iter().map(|t| t.var.clone()).collect::<Vec<_>>(), &xn, &trace)?;
+    }
 
     // ---- output
     let added = if replace && add.is_none() { 0 } else { ims.len() };
