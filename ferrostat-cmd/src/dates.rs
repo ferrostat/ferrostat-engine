@@ -352,6 +352,7 @@ pub fn format_date(v: f64, fmt: &str) -> String {
             format!("{}w{}", 1960 + t.div_euclid(52), t.rem_euclid(52) + 1)
         }
         'y' => format!("{}", v.floor() as i64),
+        'b' => crate::dm_w3::bcal::format_b(v, custom),
         _ => format!("{v}"),
     }
 }

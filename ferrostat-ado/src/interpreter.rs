@@ -360,6 +360,7 @@ impl AdoInterpreter {
                 return self.exec_text(&command, body);
             }
             "class" if body.is_some() => return crate::progclass::class_block(self, &rest, body.unwrap_or_default()),
+            "dyngen" if body.is_some() => return crate::dm_w3::dyngen(self, &rest, body.unwrap_or_default()),
             "by" | "bysort" => return self.by_prefix(&verb, &rest),
             "foreach" => return self.foreach(&rest, body.ok_or_else(|| rc_err(198, "foreach requires {"))?),
             "forvalues" => return self.forvalues(&rest, body.ok_or_else(|| rc_err(198, "forvalues requires {"))?),

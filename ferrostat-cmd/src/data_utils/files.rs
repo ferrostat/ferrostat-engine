@@ -523,6 +523,39 @@ impl CommandHandler for Unicode {
                 st.begin_r().set("N_needs_translation", bad as f64);
                 Ok(out.join("\n"))
             }
+            // translate again from the backup with another encoding / put the backup back
+            "retranslate" | "restore" => {
+                let src = cmd.opt("encoding", 3).map(|s| s.trim().to_lowercase()).unwrap_or_else(|| "latin1".into());
+                let mut out = Vec::new();
+                for f in super::vars::split_words(rest) {
+                    let bak = format!("{f}.bak");
+                    let data = read_file(&bak).map_err(|_| rc_err(601, format!("{f}: no backup {bak} found; nothing to {sub}")))?;
+                    if sub == "restore" {
+                        write_file(&f, &data)?;
+                        out.push(format!("  {f}: restored from {bak}"));
+                    } else {
+                        let text = to_utf8(&data, &src)?;
+                        write_file(&f, text.as_bytes())?;
+                        out.push(format!("  {f}: retranslated from {src} to UTF-8 using {bak}"));
+                    }
+                }
+                Ok(out.join("\n"))
+            }
+            "erasebackups" => {
+                if !cmd.has_opt("badidea", 7) {
+                    return Err(rc_err(198, "option badidea required"));
+                }
+                let mut n = 0;
+                if let Ok(list) = ferrostat_core::vfs::list(".") {
+                    for (f, is_dir) in list {
+                        if !is_dir && f.ends_with(".bak") {
+                            let _ = ferrostat_core::vfs::remove(&f);
+                            n += 1;
+                        }
+                    }
+                }
+                Ok(format!("  ({n} backup file{} erased)", if n == 1 { "" } else { "s" }))
+            }
             "translate" => {
                 let src = cmd.opt("encoding", 3).map(|s| s.trim().to_lowercase()).unwrap_or_else(|| "latin1".into());
                 let mut out = Vec::new();
@@ -557,8 +590,23 @@ impl CommandHandler for Unicode {
                 if what != "list" && what != "" && !(sub == "encoding" && (what == "set" || what == "alias")) {
                     return Err(rc_err(198, format!("unicode {sub} {what}: invalid subcommand")));
                 }
-                if what == "set" || what == "alias" {
+                if what == "set" {
                     return Ok(String::new());
+                }
+                if what == "alias" {
+                    // canonical name of an encoding
+                    let name = rest[5..].trim().to_lowercase().replace(['-', '_'], "");
+                    let canon = match name.as_str() {
+                        "utf8" => "utf-8",
+                        "ascii" | "usascii" => "us-ascii",
+                        "latin1" | "iso88591" | "l1" => "iso-8859-1",
+                        "cp1252" | "windows1252" => "windows-1252",
+                        "utf16le" => "utf-16le",
+                        "utf16be" => "utf-16be",
+                        _ => return Err(rc_err(198, format!("encoding {} not known", rest[5..].trim()))),
+                    };
+                    st.begin_r().set_str("encoding", canon);
+                    return Ok(format!("  {} is an alias of {canon}", rest[5..].trim()));
                 }
                 let items: &[&str] = match sub {
                     "collator" => &["root"],

@@ -1,6 +1,8 @@
 pub mod collect;
 pub mod docx;
 pub mod dyndoc;
+// dyngen blocks, putmata / getmata
+pub mod dm_w3;
 pub mod estout;
 pub mod interpreter;
 pub mod macros;

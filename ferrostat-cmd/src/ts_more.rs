@@ -29,6 +29,7 @@ pub fn handlers() -> Vec<(&'static str, Box<dyn CommandHandler>)> {
         ("tsreport", Box::new(crate::tsutil::Tsreport)),
         ("tsrevar", Box::new(crate::tsutil::Tsrevar)),
         ("psdensity", Box::new(crate::tsutil::Psdensity)),
+        ("varbasic", Box::new(crate::ts_rest::Varbasic)),
     ]
 }
 
@@ -53,6 +54,9 @@ pub fn estat(ds: &mut DataSet, st: &mut Store, sub: &str, cmd: &Command) -> Opti
         return Some(r);
     }
     if let Some(r) = crate::mswitch::estat(st, sub) {
+        return Some(r);
+    }
+    if let Some(r) = crate::ts_rest::estat(ds, st, sub, cmd) {
         return Some(r);
     }
     None

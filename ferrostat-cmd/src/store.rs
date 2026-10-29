@@ -157,6 +157,8 @@ pub struct Store {
     pub settings: BTreeMap<String, String>,
     /// Result collections (`collect`, `table`, `dtable`, `etable`).
     pub collect: crate::collect::Collections,
+    /// Copies of the data saved by `snapshot save`.
+    pub snapshots: Vec<crate::dm_w3::memsnap::Snapshot>,
 }
 
 impl Default for Store {
@@ -197,6 +199,7 @@ impl Default for Store {
             cur_frame: crate::frames::DEFAULT_FRAME.to_string(),
             settings: BTreeMap::new(),
             collect: Default::default(),
+            snapshots: Vec::new(),
         }
     }
 }

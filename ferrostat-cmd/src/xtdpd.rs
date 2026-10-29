@@ -27,7 +27,7 @@ use crate::util;
 use crate::xtnl::{hl, hv};
 
 pub fn handlers() -> Vec<(&'static str, Box<dyn CommandHandler>)> {
-    vec![("xtabond", Box::new(Dpd { verb: "xtabond" })), ("xtdpdsys", Box::new(Dpd { verb: "xtdpdsys" })), ("xtabond2", Box::new(Dpd { verb: "xtabond2" }))]
+    vec![("xtabond", Box::new(Dpd { verb: "xtabond" })), ("xtdpdsys", Box::new(Dpd { verb: "xtdpdsys" })), ("xtabond2", Box::new(Dpd { verb: "xtabond2" })), ("xtdpd", Box::new(Dpd { verb: "xtdpd" }))]
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +422,15 @@ fn dname(v: &str) -> String {
 impl Dpd {
     fn spec(&self, ds: &DataSet, cmd: &Command) -> Result<Spec, String> {
         let main = cmd.main.trim();
+        if self.verb == "xtdpd" {
+            let all = terms(ds, main)?;
+            let dep = all.first().cloned().ok_or_else(|| rc_err(100, "varlist required"))?;
+            let dep = dep.strip_prefix("L0.").map(String::from).unwrap_or(dep);
+            if dep.contains('.') {
+                return Err(rc_err(198, "depvar may not contain time-series operators"));
+            }
+            return self.spec_general(ds, cmd, dep, &all[1..].join(" "));
+        }
         let (dep, rest) = main.split_once(char::is_whitespace).map(|(a, b)| (a.to_string(), b.trim().to_string())).unwrap_or((main.to_string(), String::new()));
         if dep.is_empty() {
             return Err(rc_err(100, "varlist required"));
@@ -539,6 +548,85 @@ impl Dpd {
             }
         } else if cons {
             iv.push(IvSpec { vars: vec!["_cons".into()], eq: Eqs::Diff, passthru: true });
+        }
+        Ok(Spec { dep, regs, cons, gmm, iv, system, level_rows_follow_diff: true, diff_cons: cons && !system })
+    }
+}
+
+impl Dpd {
+    /// `xtdpd depvar indepvars, dgmmiv() lgmmiv() iv() div() liv()`: the
+    /// regressors (including lags of depvar) are given explicitly.
+    fn spec_general(&self, ds: &DataSet, cmd: &Command, dep: String, rest: &str) -> Result<Spec, String> {
+        let regs = terms(ds, rest)?;
+        if cmd.has_opt("fodeviation", 3) {
+            return Err(rc_err(198, "option fodeviation not supported"));
+        }
+        let all = |name: &str, min: usize| -> Vec<String> {
+            cmd.opts
+                .iter()
+                .filter(|(n, _)| {
+                    let n = n.to_lowercase();
+                    n.len() >= min && name.starts_with(n.as_str())
+                })
+                .map(|(_, a)| a.clone().unwrap_or_default())
+                .collect()
+        };
+        let mut gmm = Vec::new();
+        for a in all("dgmmiv", 6) {
+            let (vl, subs) = split_sub(&a);
+            let vars = terms(ds, &vl)?;
+            let (mut lo, mut hi) = (2i64, None);
+            if let Some(Some(l)) = sub_has(&subs, "lagrange", 4) {
+                let w: Vec<&str> = l.split_whitespace().collect();
+                lo = w.first().and_then(|s| s.parse().ok()).ok_or_else(|| rc_err(198, "lagrange() invalid"))?;
+                hi = match w.get(1) {
+                    Some(&".") | None => None,
+                    Some(s) => Some(s.parse().map_err(|_| rc_err(198, "lagrange() invalid"))?),
+                };
+                if lo < 1 || hi.is_some_and(|h| h < lo) {
+                    return Err(rc_err(198, "lagrange() invalid"));
+                }
+            }
+            for v in vars {
+                gmm.push(GmmSpec { vars: vec![v.clone()], lo, hi, collapse: false, eq: Eqs::Diff, display: v });
+            }
+        }
+        let lg = all("lgmmiv", 6);
+        for a in &lg {
+            let (vl, subs) = split_sub(a);
+            let vars = terms(ds, &vl)?;
+            let lag = match sub_has(&subs, "lag", 3) {
+                Some(Some(l)) => l.trim().parse::<i64>().map_err(|_| rc_err(198, "lag() invalid"))?,
+                _ => 1,
+            };
+            for v in vars {
+                gmm.push(GmmSpec { vars: vec![v.clone()], lo: lag + 1, hi: Some(lag + 1), collapse: false, eq: Eqs::Level, display: v });
+            }
+        }
+        let liv = all("liv", 3);
+        let system = !lg.is_empty() || !liv.is_empty();
+        let mut iv = Vec::new();
+        for a in all("iv", 2) {
+            let (vl, subs) = split_sub(&a);
+            let vars = terms(ds, &vl)?;
+            let nodiff = sub_has(&subs, "nodifference", 4).is_some();
+            iv.push(IvSpec { vars, eq: if system { Eqs::Both } else { Eqs::Diff }, passthru: nodiff });
+        }
+        for a in all("div", 3) {
+            let (vl, subs) = split_sub(&a);
+            let vars = terms(ds, &vl)?;
+            iv.push(IvSpec { vars, eq: Eqs::Diff, passthru: sub_has(&subs, "nodifference", 4).is_some() });
+        }
+        for a in &liv {
+            let (vl, _) = split_sub(a);
+            iv.push(IvSpec { vars: terms(ds, &vl)?, eq: Eqs::Level, passthru: true });
+        }
+        if gmm.is_empty() && iv.is_empty() {
+            return Err(rc_err(198, "no instruments specified; use dgmmiv(), lgmmiv(), iv(), div() or liv()"));
+        }
+        let cons = !cmd.has_opt("noconstant", 3) && !cmd.has_opt("hascons", 4);
+        if cons {
+            iv.push(IvSpec { vars: vec!["_cons".into()], eq: if system { Eqs::Level } else { Eqs::Diff }, passthru: true });
         }
         Ok(Spec { dep, regs, cons, gmm, iv, system, level_rows_follow_diff: true, diff_cons: cons && !system })
     }
@@ -1003,7 +1091,7 @@ impl CommandHandler for Dpd {
                 out.push("  (Robust, but weakened by many instruments.)".into());
             }
         } else {
-            let title = if spec.system { "System dynamic panel-data estimation" } else { "Arellano\u{2013}Bond dynamic panel-data estimation" };
+            let title = if self.verb == "xtdpd" { "Dynamic panel-data estimation" } else if spec.system { "System dynamic panel-data estimation" } else { "Arellano\u{2013}Bond dynamic panel-data estimation" };
             let mut h = vec![hl(""), hv(title, "Number of obs", util::commas(n_main)), hv(&format!("Group variable: {ivar}"), "Number of groups", util::commas(ng)), hl(&format!("Time variable: {tvar}"))];
             h.push(hv("", "Obs per group:", String::new()));
             h.push(hv("", &format!("{:>16}", "min"), util::commas(gmin)));
@@ -1116,7 +1204,7 @@ impl CommandHandler for Dpd {
 /// None for other subcommands or estimators.
 pub fn estat(st: &mut Store, sub: &str, cmd: &Command) -> Option<Result<String, String>> {
     let ecmd = st.e.macros.get("cmd").cloned().unwrap_or_default();
-    if !matches!(ecmd.as_str(), "xtabond" | "xtdpdsys" | "xtabond2") {
+    if !matches!(ecmd.as_str(), "xtabond" | "xtdpdsys" | "xtabond2" | "xtdpd") {
         return None;
     }
     match sub {

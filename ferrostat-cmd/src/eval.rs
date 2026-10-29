@@ -1464,6 +1464,9 @@ fn call_function(env: &Env, name: &str, v: &[Val]) -> Result<Val, String> {
             num(dates::mdy(now.month() as f64, now.day() as f64, now.year() as f64))
         }
         "pi" => num(consts::PI),
+        // business calendars
+        "bofd" => num(crate::dm_w3::bcal::function("bofd", s(v, 0)?, n(v, 1)?)?),
+        "dofb" => num(crate::dm_w3::bcal::function("dofb", s(v, 1)?, n(v, 0)?)?),
         _ => Err(rc_err(133, format!("unknown function {name}()"))),
     }
 }

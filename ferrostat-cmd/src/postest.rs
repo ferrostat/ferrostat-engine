@@ -1220,6 +1220,9 @@ impl CommandHandler for Estat {
         if let Some(r) = crate::xtdpd::estat(st, sub.as_str(), cmd) {
             return r;
         }
+        if let Some(r) = crate::st_rest::estat(ds, st, sub.as_str(), cmd) {
+            return r;
+        }
         if let Some(r) = crate::stcox::estat(ds, st, sub.as_str(), cmd) {
             return r;
         }

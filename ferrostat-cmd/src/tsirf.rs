@@ -1232,12 +1232,38 @@ impl CommandHandler for Irf {
             }
             "add" => {
                 let (path, mut file) = load_for(st, cmd)?;
-                let src = cmd.using.as_ref().map(|u| irf_path(u)).ok_or_else(|| rc_err(100, "using required"))?;
+                let src = match (cmd.opt("using", 1), &cmd.using) {
+                    (Some(u), _) => irf_path(u),
+                    (None, Some(u)) => irf_path(u),
+                    _ => return Err(rc_err(100, "using() required")),
+                };
                 let other = IrfFile::load(&src)?;
-                let names: Vec<String> = rest.split_whitespace().map(String::from).collect();
+                // tokens: `name`, `_all`, or `newname = oldname`
+                let spaced = rest.replace('=', " = ");
+                let toks: Vec<&str> = spaced.split_whitespace().collect();
+                let mut pairs: Vec<(String, String)> = Vec::new(); // (old, new)
+                let mut i = 0;
+                while i < toks.len() {
+                    if i + 2 < toks.len() && toks[i + 1] == "=" {
+                        pairs.push((toks[i + 2].to_string(), toks[i].to_string()));
+                        i += 3;
+                    } else {
+                        pairs.push((toks[i].to_string(), toks[i].to_string()));
+                        i += 1;
+                    }
+                }
+                let all = pairs.is_empty() || pairs.iter().any(|(o, _)| o == "_all");
                 let mut n = 0;
+                for (old, _) in &pairs {
+                    if old != "_all" && !other.results.iter().any(|r| &r.name == old) {
+                        return Err(rc_err(111, format!("irfname {old} not found in {src}")));
+                    }
+                }
                 for r in other.results {
-                    if names.is_empty() || names.contains(&r.name) || names.iter().any(|x| x == "_all") {
+                    let target = if all { Some(r.name.clone()) } else { pairs.iter().find(|(o, _)| *o == r.name).map(|(_, nw)| nw.clone()) };
+                    if let Some(nm) = target {
+                        let mut r = r;
+                        r.name = nm;
                         file.results.retain(|q| q.name != r.name);
                         file.results.push(r);
                         n += 1;

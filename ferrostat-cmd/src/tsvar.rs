@@ -480,10 +480,12 @@ pub fn spec_from_e(e: &Results) -> Result<Spec, String> {
 /// Refit the VAR stored in `e` on its estimation sample.
 pub fn fit_from_e(ds: &DataSet, st: &Store, e: &Results) -> Result<Fit, String> {
     let spec = spec_from_e(e)?;
-    let mask = e.sample.clone().ok_or_else(|| rc_err(301, "estimation sample not found"))?;
-    if mask.len() != ds.n_obs {
+    let mut mask = e.sample.clone().ok_or_else(|| rc_err(301, "estimation sample not found"))?;
+    if mask.len() > ds.n_obs {
         return Err(rc_err(459, "data have changed since estimation"));
     }
+    // observations appended after estimation (e.g. forecast rows) are outside the sample
+    mask.resize(ds.n_obs, false);
     let tsd = ts(ds, st)?;
     let data = build(ds, st, &tsd, &spec, &mask, 0)?;
     fit_data(&spec, data)

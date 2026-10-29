@@ -275,6 +275,8 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
         "dtable" | "etable" => crate::collect::dtable_etable(me, verb, full)?,
         "mata" | "mata:" => crate::mata::run_line(me, r)?,
         "python" => crate::python::command(me, r)?,
+        "putmata" => crate::dm_w3::putmata(me, r)?,
+        "getmata" => crate::dm_w3::getmata(me, r)?,
         "set" if crate::python::is_set_python(r) => crate::python::set_option(me, r)?,
         _ => return crate::progtools::command(me, verb, rest, full),
     }))
@@ -412,6 +414,7 @@ pub const INTERP_COMMANDS: &[&str] = &[
     "wyoung", "local", "global", "macro", "display", "cls", "notes", "note", "char", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit", "collect", "dtable", "etable", "lint",
     // progtools
     "file", "postfile", "post", "postclose", "postutil", "serset", "sysdir", "personal", "findfile", "tabdisp", "mark", "markin", "fvexpand", "_rmcoll", "rmcoll", "_rmdcoll", "makecns", "matcproc",
+    "putmata", "getmata", "dyngen",
     "signestimationsample", "checkestimationsample", "viewsource", "class", "classutil", "classexit", "unabcmd", "discard", "pause", "adopath", "tsunab", "fvunab",
 ];
 

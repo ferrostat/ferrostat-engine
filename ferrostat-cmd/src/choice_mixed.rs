@@ -44,6 +44,9 @@ pub fn predict(ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<Option
 
 /// `estat` after the commands of this family (None: not ours).
 pub fn estat(ds: &mut DataSet, st: &mut Store, sub: &str, cmd: &Command) -> Option<Result<String, String>> {
+    if let Some(r) = crate::menl::estat_mixed(ds, st, sub, cmd) {
+        return Some(r);
+    }
     let ecmd = st.e.macros.get("cmd").cloned().unwrap_or_default();
     match (ecmd.as_str(), sub) {
         ("mixed", "icc") | ("mixed", "recovariance") | ("mixed", "group") | ("mixed", "sd") => Some(crate::mixed::estat(ds, st, sub, cmd)),

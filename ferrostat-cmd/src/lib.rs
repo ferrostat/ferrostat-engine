@@ -125,6 +125,13 @@ pub mod tsreg;
 pub mod arima;
 pub mod ts_ml;
 pub mod ts_more;
+pub mod ts_rest;
+pub mod xt_coint;
+pub mod xt_rest;
+pub mod erm;
+pub mod xt_mvar;
+pub mod st_rest;
+pub mod menl;
 pub mod arch;
 pub mod ts_kalman;
 pub mod sspace;
@@ -174,6 +181,8 @@ pub mod r_trunc;
 pub mod r_ord;
 pub mod r_tools;
 pub mod r_more;
+// remaining data-management commands (icd, vl, bcal, memory, snapshot, frame sets, ...)
+pub mod dm_w3;
 
 pub use commands::CommandHandler;
 pub use store::Store;

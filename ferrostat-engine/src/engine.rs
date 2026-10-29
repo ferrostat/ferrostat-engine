@@ -444,6 +444,7 @@ impl Engine {
         list.extend(ferrostat_cmd::basetools::handlers());
         list.extend(ferrostat_cmd::data_utils::handlers());
         list.extend(ferrostat_cmd::did::handlers());
+        list.extend(ferrostat_cmd::dm_w3::handlers());
         let mut handlers = HashMap::new();
         for (n, h) in list {
             handlers.insert(n, h);
@@ -542,22 +543,7 @@ impl Engine {
                 Ok(String::new())
             }
             "set" => self.set(&cmd),
-            "sysuse" => {
-                let name = cmd.main.trim().trim_end_matches(".dta");
-                if name == "dir" {
-                    return Ok(String::new());
-                }
-                for dir in ["/usr/local/share/ferrostat", "."] {
-                    let p = format!("{dir}/{name}.dta");
-                    if let Ok(ds) = ferrostat_core::dta::DtaReader::open(&p) {
-                        self.dataset = ds;
-                        self.store.data_changed = false;
-                        self.store.filename = p;
-                        return Ok(String::new());
-                    }
-                }
-                Err(rc_err(601, format!("file \"{name}.dta\" not found")))
-            }
+            "sysuse" => ferrostat_cmd::dm_w3::memsnap::sysuse(&mut self.dataset, &mut self.store, &cmd),
             "describe" if cmd.main.trim().is_empty() && self.dataset.n_vars() == 0 && cmd.using.is_none() => {
                 Ok("Contains data\n Observations:             0\n    Variables:             0".into())
             }

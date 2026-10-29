@@ -44,6 +44,7 @@ pub fn handlers() -> Handlers {
     v.extend(crate::xt_lin::handlers());
     v.extend(crate::st_more::handlers());
     v.extend(crate::xt_unit::handlers());
+    v.extend(crate::xt_rest::handlers());
     v.extend(crate::xt_front::handlers());
     v.push(("xtgee", Box::new(crate::xt_gee::XtGee)));
     v
@@ -1390,6 +1391,9 @@ fn render(e: &Results, eform: bool, level: f64) -> String {
 
 /// `predict` after the commands of this module; None for other estimators.
 pub fn predict(ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<Option<String>, String> {
+    if let Some(r) = crate::xt_rest::predict(ds, st, cmd) {
+        return r.map(Some);
+    }
     let ecmd = st.e.macros.get("cmd").cloned().unwrap_or_default();
     let cmd2 = st.e.macros.get("cmd2").cloned().unwrap_or_default();
     let verb = if ecmd == "xtgee" && !cmd2.is_empty() { cmd2.clone() } else { ecmd.clone() };

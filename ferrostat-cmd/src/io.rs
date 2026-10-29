@@ -304,7 +304,7 @@ impl CommandHandler for Import {
                 st.data_changed = false;
                 Ok(msg)
             }
-            _ => crate::data_utils::formats::import_cmd(kind, rest, ds, st, cmd).or_else(|| crate::columnar::import_cmd(kind, rest, ds, st, cmd)).unwrap_or_else(|| Err(rc_err(198, format!("import {kind} not supported")))),
+            _ => crate::data_utils::formats::import_cmd(kind, rest, ds, st, cmd).or_else(|| crate::columnar::import_cmd(kind, rest, ds, st, cmd)).or_else(|| crate::dm_w3::import_cmd(kind, rest, ds, st, cmd)).unwrap_or_else(|| Err(rc_err(198, format!("import {kind} not supported")))),
         }
     }
 }
@@ -555,6 +555,9 @@ impl CommandHandler for Export {
             return r;
         }
         if let Some(r) = crate::columnar::export_cmd(kind, rest, ds, st, cmd) {
+            return r;
+        }
+        if let Some(r) = crate::dm_w3::export_cmd(kind, rest, ds, st, cmd) {
             return r;
         }
         if !matches!(kind, "delimited" | "delim" | "csv") {

@@ -35,7 +35,7 @@ pub struct ArmaSpec {
 }
 
 impl ArmaSpec {
-    fn n_coef(&self) -> usize {
+    pub(crate) fn n_coef(&self) -> usize {
         self.ar.len() + self.ma.len() + self.sar.iter().map(|g| g.1.len()).sum::<usize>() + self.sma.iter().map(|g| g.1.len()).sum::<usize>()
     }
 
@@ -68,7 +68,7 @@ impl ArmaSpec {
 
     /// Full AR coefficients a_1..a_P (u_t = sum a_l u_{t-l} + ...) and MA
     /// coefficients m_1..m_Q from the (multiplicative) parameters.
-    fn expand(&self, c: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    pub(crate) fn expand(&self, c: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let mut i = 0;
         let mut take = |lags: &[usize], sign: f64, step: usize| -> Vec<f64> {
             let max = lags.iter().max().copied().unwrap_or(0) * step;
@@ -103,7 +103,7 @@ impl ArmaSpec {
         parts.join("|")
     }
 
-    fn from_text(s: &str) -> ArmaSpec {
+    pub(crate) fn from_text(s: &str) -> ArmaSpec {
         let mut sp = ArmaSpec::default();
         for part in s.split('|') {
             let Some((k, v)) = part.split_once(':') else { continue };
