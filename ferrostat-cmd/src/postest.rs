@@ -151,6 +151,12 @@ impl CommandHandler for Predict {
         if let Some(out) = crate::mv_post::predict(ds, st, cmd)? {
             return Ok(out);
         }
+        if let Some(out) = crate::sp_reg::predict(ds, st, cmd)? {
+            return Ok(out);
+        }
+        if let Some(r) = crate::ts_more::predict(ds, st, cmd) {
+            return r;
+        }
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
         if ecmd == "arima" {
@@ -1194,8 +1200,14 @@ impl CommandHandler for Estat {
         if let Some(r) = crate::mv_post::estat(ds, st, sub.as_str(), cmd) {
             return r;
         }
+        if let Some(r) = crate::ts_more::estat(ds, st, sub.as_str(), cmd) {
+            return r;
+        }
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
+        if let Some(r) = crate::sp_reg::estat(ds, st, sub.as_str(), cmd) {
+            return r;
+        }
         if let Some(r) = crate::choice_mixed::estat(ds, st, sub.as_str(), cmd) {
             return r;
         }
@@ -1203,6 +1215,9 @@ impl CommandHandler for Estat {
             return r;
         }
         if let Some(r) = crate::stcox::estat(ds, st, sub.as_str(), cmd) {
+            return r;
+        }
+        if let Some(r) = crate::did::estat(ds, st, sub.as_str(), cmd) {
             return r;
         }
         if let Some(r) = crate::binpost::estat(ds, st, sub.as_str(), cmd) {

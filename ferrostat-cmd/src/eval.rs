@@ -564,6 +564,12 @@ pub fn find_coef(b: &crate::matrix::Matrix, name: &str) -> Option<usize> {
     if let Some(j) = b.col_index(name) {
         return Some(j);
     }
+    // `/name` is the free parameter stored as `/:name`
+    if let Some(r) = name.strip_prefix('/').filter(|r| !r.contains(':')) {
+        if let Some(j) = b.col_index(&format!("/:{r}")) {
+            return Some(j);
+        }
+    }
     let bare = name.rsplit(':').next().unwrap_or(name);
     // `eq:name`: only that equation's coefficients, when the equation exists
     if let Some((eq, rest)) = name.rsplit_once(':') {

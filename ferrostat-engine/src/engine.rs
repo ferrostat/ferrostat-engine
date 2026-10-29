@@ -247,6 +247,16 @@ impl Engine {
             ("svydescribe", Box::new(ferrostat_cmd::svy::Svydescribe)),
             ("svymarkout", Box::new(ferrostat_cmd::svy::Svymarkout)),
             ("teffects", Box::new(ferrostat_cmd::teffects::Teffects)),
+            ("tebalance", Box::new(ferrostat_cmd::te_match::Tebalance)),
+            ("teoverlap", Box::new(ferrostat_cmd::te_match::Teoverlap)),
+            ("psmatch2", Box::new(ferrostat_cmd::psmatch2::Psmatch2)),
+            ("pstest", Box::new(ferrostat_cmd::psmatch2::Pstest)),
+            ("psgraph", Box::new(ferrostat_cmd::psmatch2::Psgraph)),
+            ("cem", Box::new(ferrostat_cmd::cem::Cem)),
+            ("imb", Box::new(ferrostat_cmd::cem::Imb)),
+            ("ebalance", Box::new(ferrostat_cmd::ebalance::Ebalance)),
+            ("synth", Box::new(ferrostat_cmd::synth::Synth)),
+            ("boottest", Box::new(ferrostat_cmd::boottest::Boottest)),
             ("distinct", Box::new(ferrostat_cmd::community::Distinct)),
             ("mdesc", Box::new(ferrostat_cmd::community::Mdesc)),
             ("winsor2", Box::new(ferrostat_cmd::community::Winsor2)),
@@ -298,6 +308,17 @@ impl Engine {
             ("shp2dta", Box::new(ferrostat_cmd::spatial::Shp2dta)),
             ("spmat", Box::new(ferrostat_cmd::spatial::Spmat)),
             ("spmap", Box::new(ferrostat_cmd::spatial::Spmap)),
+            ("spset", Box::new(ferrostat_cmd::sp_data::Spset)),
+            ("spshape2dta", Box::new(ferrostat_cmd::sp_data::Spshape2dta)),
+            ("spbalance", Box::new(ferrostat_cmd::sp_data::Spbalance)),
+            ("spcompress", Box::new(ferrostat_cmd::sp_data::Spcompress)),
+            ("spdistance", Box::new(ferrostat_cmd::sp_data::Spdistance)),
+            ("spgenerate", Box::new(ferrostat_cmd::sp_data::Spgenerate)),
+            ("spmatrix", Box::new(ferrostat_cmd::sp_data::Spmatrix)),
+            ("grmap", Box::new(ferrostat_cmd::sp_data::Grmap)),
+            ("spregress", Box::new(ferrostat_cmd::sp_reg::Spregress { iv: false })),
+            ("spivregress", Box::new(ferrostat_cmd::sp_reg::Spregress { iv: true })),
+            ("spxtregress", Box::new(ferrostat_cmd::sp_reg::Spxtregress)),
             ("glm", Box::new(models::Glm)),
             ("qreg", Box::new(models::Qreg)),
             ("predict", Box::new(postest::Predict)),
@@ -414,11 +435,13 @@ impl Engine {
         ];
         list.extend(ferrostat_cmd::community_dm2::handlers());
         list.extend(ferrostat_cmd::tsvar::handlers());
+        list.extend(ferrostat_cmd::ts_more::handlers());
         list.extend(ferrostat_cmd::xtnl::handlers());
         list.extend(ferrostat_cmd::stcox::handlers());
         list.extend(ferrostat_cmd::choice_mixed::handlers());
         list.extend(ferrostat_cmd::basetools::handlers());
         list.extend(ferrostat_cmd::data_utils::handlers());
+        list.extend(ferrostat_cmd::did::handlers());
         let mut handlers = HashMap::new();
         for (n, h) in list {
             handlers.insert(n, h);
