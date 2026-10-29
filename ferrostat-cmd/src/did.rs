@@ -448,7 +448,7 @@ impl CommandHandler for Drdid {
         let e = st.begin_e();
         e.set("N", nobs);
         e.set_str("cmd", "drdid");
-        e.set_str("cmdline", format!("drdid {}", cmd.raw.trim()));
+        e.set_str("cmdline", cmd.raw.trim().to_string());
         e.set_str("depvar", yname.clone());
         e.set_str("properties", "b V");
         e.set_mat("b", named(Matrix::row_vector(&b), &["y1".into()], &names));
@@ -985,7 +985,7 @@ impl CommandHandler for Csdid {
         let e = st.begin_e();
         e.set("N", nobs);
         e.set_str("cmd", "csdid");
-        e.set_str("cmdline", format!("csdid {}", cmd.raw.trim()));
+        e.set_str("cmdline", cmd.raw.trim().to_string());
         e.set_str("depvar", yname.clone());
         e.set_str("properties", "b V");
         e.set_str("estat_cmd", "csdid_estat");
@@ -1138,6 +1138,7 @@ fn csdid_estat(st: &mut Store, sub: &str, cmd: &Command) -> Result<String, Strin
         r.set_mat("table", t);
     }
     r.set_str("agg", sub);
+    r.set("level", level);
     let skip = match sub {
         "group" | "calendar" => 1,
         "event" => 2.min(b.len()),
@@ -1153,9 +1154,6 @@ fn csdid_estat(st: &mut Store, sub: &str, cmd: &Command) -> Result<String, Strin
         }
         r.set_mat("bb", named(Matrix::row_vector(&b[skip..]), &["y1".into()], &rest));
         r.set_mat("vv", named(vv, &rest, &rest));
-    }
-    if let Some((t, l)) = table {
-        crate::est::stash_table(t, l);
     }
     let post = cmd.has_opt("post", 4);
     if post {

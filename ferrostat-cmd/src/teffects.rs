@@ -1,11 +1,15 @@
-//! `teffects ra|ipw|aipw` for a binary treatment: average treatment effects
-//! (ATE), effects on the treated (ATET) and potential-outcome means, with
-//! robust standard errors from the stacked estimating equations of the
-//! outcome models, the treatment model and the effects (M-estimation).
+//! `teffects ra|ipw|aipw|ipwra`: average treatment effects (ATE), effects
+//! on the treated (ATET) and potential-outcome means for binary and
+//! multivalued treatments, with robust standard errors from the stacked
+//! estimating equations of the outcome models, the treatment model and the
+//! effects (M-estimation). Outcome models may be linear, logit, probit or
+//! poisson; the treatment model is logit/probit (binary) or multinomial
+//! logit (multivalued). `nnmatch`, `psmatch` live in `te_match`.
 //!
-//!   teffects ra   (ovar omvarlist [, noconstant]) (tvar) [if] [in] [, ate|atet|pomeans level(#) aequations]
-//!   teffects ipw  (ovar) (tvar tmvarlist [, logit|probit noconstant]) [...]
-//!   teffects aipw (ovar omvarlist [, noconstant]) (tvar tmvarlist [, logit|probit noconstant]) [...]
+//!   teffects ra    (ovar omvarlist [, omodel noconstant]) (tvar) [if] [in] [, ate|atet|pomeans level(#) control(#) tlevel(#)]
+//!   teffects ipw   (ovar) (tvar tmvarlist [, logit|probit noconstant]) [...]
+//!   teffects aipw  (ovar omvarlist [, omodel]) (tvar tmvarlist [, logit|probit]) [...]
+//!   teffects ipwra (ovar omvarlist [, omodel]) (tvar tmvarlist [, logit|probit]) [...]
 
 use ferrostat_core::DataSet;
 use ferrostat_parser::parser::{parse_line, split_top_level_words};
@@ -25,23 +29,77 @@ enum Method {
     Ra,
     Ipw,
     Aipw,
+    Ipwra,
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Stat {
+pub(crate) enum Stat {
     Ate,
     Atet,
     Pomeans,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Link {
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Link {
     Logit,
     Probit,
 }
 
+/// Outcome-model families.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum OKind {
+    Linear,
+    Logit,
+    Probit,
+    Poisson,
+}
+
+impl OKind {
+    fn mean(self, z: f64) -> f64 {
+        match self {
+            OKind::Linear => z,
+            OKind::Logit => 1.0 / (1.0 + (-z).exp()),
+            OKind::Probit => dist::normal(z),
+            OKind::Poisson => z.min(700.0).exp(),
+        }
+    }
+    /// d log L / d xb.
+    fn score(self, y: f64, z: f64) -> f64 {
+        match self {
+            OKind::Linear => y - z,
+            OKind::Logit => y - self.mean(z),
+            OKind::Poisson => y - self.mean(z),
+            OKind::Probit => score(Link::Probit, y, z),
+        }
+    }
+    /// expected information weight (Fisher scoring).
+    fn info(self, z: f64) -> f64 {
+        match self {
+            OKind::Linear => 1.0,
+            OKind::Logit => {
+                let p = self.mean(z);
+                p * (1.0 - p)
+            }
+            OKind::Poisson => self.mean(z),
+            OKind::Probit => {
+                let p = dist::normal(z).clamp(1e-12, 1.0 - 1e-12);
+                let d = dist::normalden(z);
+                d * d / (p * (1.0 - p))
+            }
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            OKind::Linear => "linear",
+            OKind::Logit => "logit",
+            OKind::Probit => "probit",
+            OKind::Poisson => "Poisson",
+        }
+    }
+}
+
 /// `(ovar xvars [, opts])`: the words and the options of one model.
-fn model(text: &str) -> (Vec<String>, String) {
+pub(crate) fn model(text: &str) -> (Vec<String>, String) {
     let inner = text.trim().trim_start_matches('(').trim_end_matches(')');
     let (words, opts) = match inner.split_once(',') {
         Some((w, o)) => (w, o.trim().to_lowercase()),
@@ -51,7 +109,7 @@ fn model(text: &str) -> (Vec<String>, String) {
 }
 
 /// Variable names used by a factor-variable list (for marking out).
-fn base_vars(ds: &DataSet, terms: &[String]) -> Result<Vec<String>, String> {
+pub(crate) fn base_vars(ds: &DataSet, terms: &[String]) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for t in terms {
         for part in t.split('#') {
@@ -65,11 +123,11 @@ fn base_vars(ds: &DataSet, terms: &[String]) -> Result<Vec<String>, String> {
 }
 
 /// Solve `a x = b` by Gaussian elimination with partial pivoting.
-fn solve(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
+pub(crate) fn solve(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     let n = b.len();
     let mut m: Vec<Vec<f64>> = a.iter().zip(b).map(|(r, &v)| r.iter().copied().chain(std::iter::once(v)).collect()).collect();
     for c in 0..n {
-        let p = (c..n).max_by(|&i, &j| m[i][c].abs().partial_cmp(&m[j][c].abs()).unwrap())?;
+        let p = (c..n).max_by(|&i, &j| m[i][c].abs().total_cmp(&m[j][c].abs()))?;
         if m[p][c].abs() < 1e-300 {
             return None;
         }
@@ -88,7 +146,7 @@ fn solve(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     Some((0..n).map(|i| m[i][n] / m[i][i]).collect())
 }
 
-fn invert(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
+pub(crate) fn invert(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     let n = a.len();
     let mut cols = Vec::with_capacity(n);
     for j in 0..n {
@@ -98,92 +156,235 @@ fn invert(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     Some((0..n).map(|i| (0..n).map(|j| cols[j][i]).collect()).collect())
 }
 
-fn dot(a: &[f64], b: &[f64]) -> f64 {
+pub(crate) fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-/// OLS of `y` on the rows of `x` where `keep`.
-fn ols(x: &[Vec<f64>], y: &[f64], keep: &dyn Fn(usize) -> bool) -> Option<Vec<f64>> {
-    let k = x[0].len();
-    let mut xx = vec![vec![0.0; k]; k];
-    let mut xy = vec![0.0; k];
-    for i in 0..y.len() {
-        if keep(i) {
-            for a in 0..k {
-                xy[a] += x[i][a] * y[i];
-                for b in 0..k {
-                    xx[a][b] += x[i][a] * x[i][b];
-                }
-            }
-        }
-    }
-    solve(&xx, &xy)
-}
-
-fn cdf(link: Link, z: f64) -> f64 {
+pub(crate) fn cdf(link: Link, z: f64) -> f64 {
     match link {
         Link::Logit => 1.0 / (1.0 + (-z).exp()),
         Link::Probit => dist::normal(z),
     }
 }
 
-/// Score of the treatment model for one observation: d log L / d xb.
-fn score(link: Link, t: f64, z: f64) -> f64 {
-    let p = cdf(link, z).clamp(1e-12, 1.0 - 1e-12);
+/// Density of the link at the index (d p / d xb).
+pub(crate) fn pdf(link: Link, z: f64) -> f64 {
     match link {
-        Link::Logit => t - p,
-        Link::Probit => {
-            let d = (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt();
-            d * (t - p) / (p * (1.0 - p))
+        Link::Logit => {
+            let p = cdf(link, z);
+            p * (1.0 - p)
         }
+        Link::Probit => dist::normalden(z),
     }
 }
 
-/// Maximum-likelihood fit of the treatment model by Newton's method with a
-/// numerical Hessian of the score (the models are small).
-fn fit_binary(x: &[Vec<f64>], t: &[f64], link: Link) -> Result<Vec<f64>, String> {
+/// Score of the treatment model for one observation: d log L / d xb.
+pub(crate) fn score(link: Link, t: f64, z: f64) -> f64 {
+    let p = cdf(link, z).clamp(1e-12, 1.0 - 1e-12);
+    match link {
+        Link::Logit => t - p,
+        Link::Probit => pdf(link, z) * (t - p) / (p * (1.0 - p)),
+    }
+}
+
+/// Weighted GLM fit of `y` on the rows of `x` (Fisher scoring).
+pub(crate) fn fit_glm(x: &[Vec<f64>], y: &[f64], w: &[f64], kind: OKind) -> Result<Vec<f64>, String> {
     let k = x[0].len();
-    let mut g = vec![0.0; k];
-    let grad = |g: &[f64]| -> Vec<f64> {
+    let mut b = vec![0.0; k];
+    if kind == OKind::Poisson {
+        let (sw, sy) = w.iter().zip(y).fold((0.0, 0.0), |a, (wi, yi)| (a.0 + wi, a.1 + wi * yi));
+        if let Some(c) = (0..k).find(|&a| x.iter().zip(w).all(|(r, &wi)| wi == 0.0 || r[a] == 1.0)) {
+            b[c] = (sy / sw).max(1e-8).ln();
+        }
+    }
+    for it in 0..200 {
         let mut s = vec![0.0; k];
-        for (xi, &ti) in x.iter().zip(t) {
-            let sc = score(link, ti, dot(xi, g));
+        let mut h = vec![vec![0.0; k]; k];
+        for i in 0..y.len() {
+            if w[i] == 0.0 {
+                continue;
+            }
+            let z = dot(&x[i], &b);
+            let sc = w[i] * kind.score(y[i], z);
+            let iw = w[i] * kind.info(z);
             for a in 0..k {
-                s[a] += xi[a] * sc;
+                s[a] += x[i][a] * sc;
+                for c in 0..k {
+                    h[a][c] += iw * x[i][a] * x[i][c];
+                }
             }
         }
-        s
-    };
-    for _ in 0..100 {
-        let s = grad(&g);
-        let mut h = vec![vec![0.0; k]; k];
-        for (xi, &ti) in x.iter().zip(t) {
-            let z = dot(xi, &g);
-            let w = match link {
-                Link::Logit => {
-                    let p = cdf(link, z);
-                    p * (1.0 - p)
+        let step = solve(&h, &s).ok_or_else(|| rc_err(459, "outcome model: collinear covariates"))?;
+        let mx = step.iter().map(|v| v.abs()).fold(0.0, f64::max);
+        let damp = if mx > 5.0 && kind != OKind::Linear { 5.0 / mx } else { 1.0 };
+        for a in 0..k {
+            b[a] += damp * step[a];
+        }
+        if (kind == OKind::Linear && damp == 1.0) || mx < 1e-11 || (kind == OKind::Linear && it > 50) {
+            return Ok(b);
+        }
+    }
+    Err(rc_err(430, "outcome model: convergence not achieved"))
+}
+
+/// Maximum-likelihood fit of a binary treatment model (Fisher scoring).
+pub(crate) fn fit_binary(x: &[Vec<f64>], t: &[f64], link: Link) -> Result<Vec<f64>, String> {
+    let kind = if link == Link::Logit { OKind::Logit } else { OKind::Probit };
+    fit_glm(x, t, &vec![1.0; t.len()], kind).map_err(|_| rc_err(430, "treatment model: convergence not achieved"))
+}
+
+/// Multinomial logit with base level 0: coefficients of levels 1..L-1.
+fn fit_mlogit(x: &[Vec<f64>], lev: &[usize], nl: usize) -> Result<Vec<f64>, String> {
+    let k = x[0].len();
+    let np = (nl - 1) * k;
+    let mut g = vec![0.0; np];
+    for _ in 0..200 {
+        let mut s = vec![0.0; np];
+        let mut h = vec![vec![0.0; np]; np];
+        for i in 0..x.len() {
+            let p = mlogit_probs(&x[i], &g, nl);
+            for l in 1..nl {
+                let r = if lev[i] == l { 1.0 } else { 0.0 } - p[l];
+                for a in 0..k {
+                    s[(l - 1) * k + a] += x[i][a] * r;
                 }
-                Link::Probit => {
-                    let e = 1e-6;
-                    -(score(link, ti, z + e) - score(link, ti, z - e)) / (2.0 * e)
-                }
-            };
-            for a in 0..k {
-                for b in 0..k {
-                    h[a][b] += w * xi[a] * xi[b];
+                for m in 1..nl {
+                    let wlm = p[l] * (if l == m { 1.0 } else { 0.0 } - p[m]);
+                    for a in 0..k {
+                        for c in 0..k {
+                            h[(l - 1) * k + a][(m - 1) * k + c] += wlm * x[i][a] * x[i][c];
+                        }
+                    }
                 }
             }
         }
         let step = solve(&h, &s).ok_or_else(|| rc_err(430, "treatment model: convergence not achieved"))?;
-        for a in 0..k {
-            g[a] += step[a];
+        let mx = step.iter().map(|v| v.abs()).fold(0.0, f64::max);
+        let damp = if mx > 5.0 { 5.0 / mx } else { 1.0 };
+        for a in 0..np {
+            g[a] += damp * step[a];
         }
-        if step.iter().map(|v| v.abs()).fold(0.0, f64::max) < 1e-10 {
+        if mx < 1e-11 {
             return Ok(g);
         }
     }
     Err(rc_err(430, "treatment model: convergence not achieved"))
+}
+
+fn mlogit_probs(x: &[f64], g: &[f64], nl: usize) -> Vec<f64> {
+    let k = x.len();
+    let mut e = vec![0.0; nl];
+    for l in 1..nl {
+        e[l] = dot(x, &g[(l - 1) * k..l * k]);
+    }
+    let mx = e.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let ex: Vec<f64> = e.iter().map(|v| (v - mx).exp()).collect();
+    let s: f64 = ex.iter().sum();
+    ex.iter().map(|v| v / s).collect()
+}
+
+/// Rows of the active columns of a design.
+pub(crate) fn design_rows(d: &est::Design) -> Vec<Vec<f64>> {
+    let act = d.active();
+    (0..d.rows.len()).map(|i| act.iter().map(|&j| d.cols[j][i]).collect()).collect()
+}
+
+/// ` if ...` / ` in ...` of a command, to pass on to sub-commands.
+pub(crate) fn if_in_tail(cmd: &Command) -> String {
+    let mut s = String::new();
+    if let Some(i) = &cmd.if_raw {
+        s.push_str(&format!(" if {i}"));
+    }
+    if let Some(r) = &cmd.in_range {
+        s.push_str(&format!(" in {}", match r {
+            ferrostat_parser::InRange::Single(a) => a.to_string(),
+            ferrostat_parser::InRange::Range(a, b) => format!("{a}/{b}"),
+            ferrostat_parser::InRange::Rel(a, b) => format!("{a}/{b}"),
+            ferrostat_parser::InRange::First(b) => format!("f/{b}"),
+            ferrostat_parser::InRange::Last(a) => format!("-{a}/l"),
+        }));
+    }
+    s
+}
+
+/// Design of `dep indep` on the sample of `cmd`, with `extra` variables
+/// marked out too.
+pub(crate) fn sub_design(ds: &DataSet, st: &Store, cmd: &Command, dep: &str, indep: &[String], nocons: bool, extra: Vec<String>) -> Result<est::Design, String> {
+    let c = parse_line(&format!("regress {dep} {}{}", indep.join(" "), if_in_tail(cmd))).map_err(|e| rc_err(198, e.message))?;
+    est::build(ds, st, &c, DesignSpec { depvar: Some(dep), indep: &indep.join(" "), noconstant: nocons, weights: "", extra })
+}
+
+/// Label of treatment level `v`.
+pub(crate) fn level_label(ds: &DataSet, tvar: &str, v: f64) -> String {
+    let var = ds.get_var(tvar).unwrap();
+    ds.value_labels.get(&var.value_label_name).and_then(|vl| vl.lookup(v)).map(str::to_string).unwrap_or_else(|| fmt_g(v, 9))
+}
+
+/// One block of the coefficient table: header and rows (label lines, estimate, variance).
+pub(crate) struct Block {
+    pub title: String,
+    pub rows: Vec<(Vec<String>, f64, f64)>,
+}
+
+/// `(Treated vs Control)` wrapped into 12-character lines.
+pub(crate) fn wrap12(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    for w in text.split(' ') {
+        if !cur.is_empty() && cur.len() + 1 + w.len() > 12 {
+            lines.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        cur.push_str(w);
+    }
+    lines.push(cur);
+    lines
+}
+
+/// The coefficient table of the treatment-effects estimators.
+pub(crate) fn effects_table(out: &mut Vec<String>, ovar: &str, tvar: &str, vcetype: &str, level: f64, blocks: &[Block]) {
+    let crit = dist::invnormal(1.0 - (1.0 - level / 100.0) / 2.0);
+    let rule = "-".repeat(78);
+    out.push(rule.clone());
+    out.push(format!("{:>12} |{:>17}", "", vcetype));
+    out.push(format!("{:>12} | Coefficient  std. err.      z    P>|z|     [{}% conf. interval]", crate::summarize::abbrev(ovar, 12), fmt_g(level, 4)));
+    let row = |lab: &str, est: f64, var: f64| -> String {
+        let se = var.max(0.0).sqrt();
+        let z = est / se;
+        let p = 2.0 * (1.0 - dist::normal(z.abs()));
+        format!("{:>12} |  {:>9}  {:>9}  {:>7.2}   {:>5.3}    {:>9}   {:>9}", lab, fmt_g(est, 7), fmt_g(se, 7), z, p, fmt_g(est - crit * se, 7), fmt_g(est + crit * se, 7))
+    };
+    for b in blocks {
+        out.push(format!("{}+{}", "-".repeat(13), "-".repeat(64)));
+        out.push(format!("{:<12} |", b.title));
+        out.push(format!("{:>12} |", crate::summarize::abbrev(tvar, 12)));
+        for (lines, est, var) in &b.rows {
+            for l in &lines[..lines.len() - 1] {
+                out.push(format!("{:>12} |", l));
+            }
+            out.push(row(lines.last().unwrap(), *est, *var));
+        }
+    }
+    out.push(rule);
+}
+
+/// Parse `stat` options common to the estimators.
+pub(crate) fn parse_stat(cmd: &Command) -> Stat {
+    if cmd.has_opt("atet", 4) {
+        Stat::Atet
+    } else if cmd.has_opt("pomeans", 3) {
+        Stat::Pomeans
+    } else if let Some(s) = cmd.opt("stat", 4) {
+        match s.trim() {
+            "atet" => Stat::Atet,
+            "pomeans" => Stat::Pomeans,
+            _ => Stat::Ate,
+        }
+    } else {
+        Stat::Ate
+    }
 }
 
 pub struct Teffects;
@@ -200,7 +401,10 @@ impl CommandHandler for Teffects {
             "ra" => Method::Ra,
             "ipw" => Method::Ipw,
             "aipw" => Method::Aipw,
-            "psmatch" | "nnmatch" | "ipwra" | "overlap" => return Err(rc_err(199, format!("teffects {sub} is not implemented yet"))),
+            "ipwra" | "wra" => Method::Ipwra,
+            "nnmatch" | "nnm" => return crate::te_match::nnmatch(ds, st, cmd, rest),
+            "psmatch" | "psm" => return crate::te_match::psmatch(ds, st, cmd, rest),
+            "overlap" => return crate::te_match::teoverlap(ds, st, cmd),
             _ => return Err(rc_err(198, format!("teffects {sub}: unknown estimator"))),
         };
         let groups: Vec<String> = split_top_level_words(rest).into_iter().filter(|w| w.starts_with('(')).collect();
@@ -223,47 +427,36 @@ impl CommandHandler for Teffects {
         if topts.contains("hetprobit") {
             return Err(rc_err(198, "hetprobit treatment model not implemented"));
         }
-        if oopts.split_whitespace().any(|o| matches!(o, "logit" | "probit" | "poisson" | "flogit" | "fprobit" | "hetprobit")) {
-            return Err(rc_err(198, "only linear outcome models are implemented"));
-        }
-        let stat = if cmd.has_opt("atet", 4) {
-            Stat::Atet
-        } else if cmd.has_opt("pomeans", 3) {
-            Stat::Pomeans
-        } else {
-            Stat::Ate
+        let okind = {
+            let w: Vec<&str> = oopts.split_whitespace().collect();
+            if w.iter().any(|o| matches!(*o, "flogit" | "fprobit" | "hetprobit")) {
+                return Err(rc_err(198, "fractional and heteroskedastic outcome models are not implemented"));
+            }
+            if w.contains(&"logit") {
+                OKind::Logit
+            } else if w.contains(&"probit") {
+                OKind::Probit
+            } else if w.iter().any(|o| o.starts_with("pois")) {
+                OKind::Poisson
+            } else {
+                OKind::Linear
+            }
         };
+        if method == Method::Ipw && okind != OKind::Linear {
+            return Err(rc_err(198, "ipw takes no outcome-model type"));
+        }
+        let stat = parse_stat(cmd);
         if method == Method::Aipw && stat == Stat::Atet {
             return Err(rc_err(198, "atet is not allowed with aipw"));
         }
         let level = util::level(cmd, st)?;
 
-        // one estimation sample for both models
-        let tail = {
-            let mut s = String::new();
-            if let Some(i) = &cmd.if_raw {
-                s.push_str(&format!(" if {i}"));
-            }
-            if let Some(r) = &cmd.in_range {
-                s.push_str(&format!(" in {}", match r {
-                    ferrostat_parser::InRange::Single(a) => a.to_string(),
-                    ferrostat_parser::InRange::Range(a, b) => format!("{a}/{b}"),
-                    ferrostat_parser::InRange::Rel(a, b) => format!("{a}/{b}"),
-                    ferrostat_parser::InRange::First(b) => format!("f/{b}"),
-                    ferrostat_parser::InRange::Last(a) => format!("-{a}/l"),
-                }));
-            }
-            s
-        };
-        let sub_cmd = |dep: &str, x: &[String]| -> Result<Command, String> { parse_line(&format!("regress {dep} {}{tail}", x.join(" "))).map_err(|e| rc_err(198, e.message)) };
         let mut o_extra = vec![tvar.clone()];
         o_extra.extend(base_vars(ds, &tx)?);
         let mut t_extra = vec![ovar.clone()];
         t_extra.extend(base_vars(ds, &ox)?);
-        let ocmd = sub_cmd(&ovar, &ox)?;
-        let tcmd = sub_cmd(&tvar, &tx)?;
-        let od = est::build(ds, st, &ocmd, DesignSpec { depvar: Some(&ovar), indep: &ox.join(" "), noconstant: oopts.contains("nocons"), weights: "", extra: o_extra })?;
-        let td = est::build(ds, st, &tcmd, DesignSpec { depvar: Some(&tvar), indep: &tx.join(" "), noconstant: topts.contains("nocons"), weights: "", extra: t_extra })?;
+        let od = sub_design(ds, st, cmd, &ovar, &ox, oopts.contains("nocons"), o_extra)?;
+        let td = sub_design(ds, st, cmd, &tvar, &tx, topts.contains("nocons"), t_extra)?;
         if od.rows != td.rows {
             return Err(rc_err(459, "outcome and treatment models use different samples"));
         }
@@ -271,231 +464,238 @@ impl CommandHandler for Teffects {
         if n < 3 {
             return Err(rc_err(2001, "insufficient observations"));
         }
-        let t: Vec<f64> = td.y.clone();
-        let tvals: std::collections::BTreeSet<i64> = t.iter().map(|&v| v as i64).collect();
-        if t.iter().any(|v| v.fract() != 0.0) || tvals.len() != 2 || !tvals.contains(&0) {
-            return Err(rc_err(459, format!("{tvar} must be a binary 0/1 treatment variable")));
-        }
-        let t: Vec<f64> = t.iter().map(|&v| if v != 0.0 { 1.0 } else { 0.0 }).collect();
-        let y = od.y.clone();
-        let rows_of = |d: &est::Design| -> Vec<Vec<f64>> {
-            let act = d.active();
-            (0..n).map(|i| act.iter().map(|&j| d.cols[j][i]).collect()).collect()
+        // treatment levels
+        let traw = td.y.clone();
+        let vals: Vec<f64> = {
+            let s: std::collections::BTreeSet<i64> = traw.iter().map(|&v| v as i64).collect();
+            s.into_iter().map(|v| v as f64).collect()
         };
-        let xo = rows_of(&od);
-        let xt = rows_of(&td);
+        if traw.iter().any(|v| v.fract() != 0.0 || *v < 0.0) || vals.len() < 2 || vals.len() > 20 {
+            return Err(rc_err(459, format!("{tvar} must be a treatment variable with nonnegative integer levels")));
+        }
+        let nl = vals.len();
+        if nl > 2 && link == Link::Probit && method != Method::Ra {
+            return Err(rc_err(198, "probit treatment model requires a binary treatment"));
+        }
+        let ctrl_val = match util::opt_num(cmd, "control", 4)? {
+            Some(v) => v,
+            None => vals[0],
+        };
+        let ci = vals.iter().position(|&v| v == ctrl_val).ok_or_else(|| rc_err(459, "control() is not a treatment level"))?;
+        let tr_val = match util::opt_num(cmd, "tlevel", 4)? {
+            Some(v) => v,
+            None => *vals.iter().enumerate().filter(|(i, _)| *i != ci).map(|(_, v)| v).next_back().unwrap(),
+        };
+        let tri = vals.iter().position(|&v| v == tr_val).ok_or_else(|| rc_err(459, "tlevel() is not a treatment level"))?;
+        // level order: control first (base of the multinomial model)
+        let mut order: Vec<usize> = vec![ci];
+        order.extend((0..nl).filter(|&l| l != ci));
+        let lev: Vec<usize> = traw.iter().map(|v| order.iter().position(|&o| vals[o] == *v).unwrap()).collect();
+        let lvals: Vec<f64> = order.iter().map(|&o| vals[o]).collect();
+        let trl = order.iter().position(|&o| o == tri).unwrap();
+        let ind = |i: usize, l: usize| -> f64 { if lev[i] == l { 1.0 } else { 0.0 } };
+        let y = od.y.clone();
+        if okind != OKind::Linear && y.iter().any(|v| *v < 0.0) {
+            return Err(rc_err(459, format!("{ovar} must be nonnegative for a {} outcome model", okind.name())));
+        }
+        let xo = design_rows(&od);
+        let xt = design_rows(&td);
         let (ko, kt) = (xo[0].len(), xt[0].len());
-
-        // point estimates
-        let fit_o = |grp: f64| ols(&xo, &y, &|i| t[i] == grp).ok_or_else(|| rc_err(459, "outcome model: collinear covariates"));
-        let (b0, b1) = if method == Method::Ipw { (Vec::new(), Vec::new()) } else { (fit_o(0.0)?, fit_o(1.0)?) };
-        let gamma = if method == Method::Ra { Vec::new() } else { fit_binary(&xt, &t, link)? };
-        // parameter layout: b0 | b1 | gamma | pom0 | pom1
-        let (o0, o1, og, op) = (0, ko * usize::from(!b0.is_empty()), 2 * ko * usize::from(!b0.is_empty()), 2 * ko * usize::from(!b0.is_empty()) + gamma.len());
-        let np = op + 2;
+        let has_o = method != Method::Ipw;
+        let has_t = method != Method::Ra;
+        let kg = if nl == 2 { kt } else { (nl - 1) * kt };
         let atet = stat == Stat::Atet;
-        // moments of observation i at theta
+
+        // treatment model
+        let gamma = if has_t {
+            if nl == 2 {
+                let t01: Vec<f64> = lev.iter().map(|&l| l as f64).collect();
+                fit_binary(&xt, &t01, link)?
+            } else {
+                fit_mlogit(&xt, &lev, nl)?
+            }
+        } else {
+            Vec::new()
+        };
+        let probs = |g: &[f64], i: usize| -> Vec<f64> {
+            if nl == 2 {
+                let p = cdf(link, dot(&xt[i], g)).clamp(1e-12, 1.0 - 1e-12);
+                vec![1.0 - p, p]
+            } else {
+                mlogit_probs(&xt[i], g, nl)
+            }
+        };
+        // weights of the outcome-model fits (IPWRA)
+        let ipw_w = |p: &[f64], i: usize| -> f64 {
+            if method != Method::Ipwra {
+                return 1.0;
+            }
+            let l = lev[i];
+            if atet { p[trl] / p[l] } else { 1.0 / p[l] }
+        };
+        let mut bs: Vec<Vec<f64>> = Vec::new();
+        if has_o {
+            let w_all: Vec<f64> = (0..n).map(|i| if has_t { ipw_w(&probs(&gamma, i), i) } else { 1.0 }).collect();
+            for l in 0..nl {
+                let w: Vec<f64> = (0..n).map(|i| ind(i, l) * w_all[i]).collect();
+                bs.push(fit_glm(&xo, &y, &w, okind)?);
+            }
+        }
+        // parameter layout: b_0..b_{L-1} | gamma | pom_0..pom_{L-1}
+        let og = if has_o { nl * ko } else { 0 };
+        let op = og + if has_t { kg } else { 0 };
+        let np = op + nl;
         let moments = |th: &[f64], i: usize, m: &mut [f64]| {
-            let has_o = method != Method::Ipw;
-            let has_t = method != Method::Ra;
-            let mu0 = if has_o { dot(&xo[i], &th[o0..o0 + ko]) } else { 0.0 };
-            let mu1 = if has_o { dot(&xo[i], &th[o1..o1 + ko]) } else { 0.0 };
+            let p = if has_t { probs(&th[og..og + kg], i) } else { vec![1.0; nl] };
+            let mu: Vec<f64> = if has_o { (0..nl).map(|l| okind.mean(dot(&xo[i], &th[l * ko..(l + 1) * ko]))).collect() } else { vec![0.0; nl] };
             if has_o {
-                for a in 0..ko {
-                    m[o0 + a] = (1.0 - t[i]) * xo[i][a] * (y[i] - mu0);
-                    m[o1 + a] = t[i] * xo[i][a] * (y[i] - mu1);
-                }
-            }
-            let mut p = 0.5;
-            if has_t {
-                let z = dot(&xt[i], &th[og..og + kt]);
-                let sc = score(link, t[i], z);
-                for a in 0..kt {
-                    m[og + a] = xt[i][a] * sc;
-                }
-                p = cdf(link, z).clamp(1e-12, 1.0 - 1e-12);
-            }
-            let (pom0, pom1) = (th[op], th[op + 1]);
-            match method {
-                Method::Ra => {
-                    let s = if atet { t[i] } else { 1.0 };
-                    m[op] = s * (mu0 - pom0);
-                    m[op + 1] = s * (mu1 - pom1);
-                }
-                Method::Ipw => {
-                    if atet {
-                        m[op] = (1.0 - t[i]) * p / (1.0 - p) * (y[i] - pom0);
-                        m[op + 1] = t[i] * (y[i] - pom1);
-                    } else {
-                        m[op] = (1.0 - t[i]) / (1.0 - p) * (y[i] - pom0);
-                        m[op + 1] = t[i] / p * (y[i] - pom1);
+                let w = ipw_w(&p, i);
+                for l in 0..nl {
+                    let s = if lev[i] == l { w * okind.score(y[i], dot(&xo[i], &th[l * ko..(l + 1) * ko])) } else { 0.0 };
+                    for a in 0..ko {
+                        m[l * ko + a] = xo[i][a] * s;
                     }
                 }
-                Method::Aipw => {
-                    m[op] = mu0 + (1.0 - t[i]) * (y[i] - mu0) / (1.0 - p) - pom0;
-                    m[op + 1] = mu1 + t[i] * (y[i] - mu1) / p - pom1;
+            }
+            if has_t {
+                if nl == 2 {
+                    let sc = score(link, lev[i] as f64, dot(&xt[i], &th[og..og + kt]));
+                    for a in 0..kt {
+                        m[og + a] = xt[i][a] * sc;
+                    }
+                } else {
+                    for l in 1..nl {
+                        let r = ind(i, l) - p[l];
+                        for a in 0..kt {
+                            m[og + (l - 1) * kt + a] = xt[i][a] * r;
+                        }
+                    }
                 }
+            }
+            for l in 0..nl {
+                let pom = th[op + l];
+                m[op + l] = match method {
+                    Method::Ra | Method::Ipwra => {
+                        let s = if atet { ind(i, trl) } else { 1.0 };
+                        s * (mu[l] - pom)
+                    }
+                    Method::Ipw => {
+                        if atet {
+                            ind(i, l) * p[trl] / p[l] * (y[i] - pom)
+                        } else {
+                            ind(i, l) / p[l] * (y[i] - pom)
+                        }
+                    }
+                    Method::Aipw => mu[l] + ind(i, l) * (y[i] - mu[l]) / p[l] - pom,
+                };
             }
         };
         let mut theta = vec![0.0; np];
-        theta[o0..o0 + b0.len()].copy_from_slice(&b0);
-        theta[o1..o1 + b1.len()].copy_from_slice(&b1);
+        for (l, b) in bs.iter().enumerate() {
+            theta[l * ko..(l + 1) * ko].copy_from_slice(b);
+        }
         theta[og..og + gamma.len()].copy_from_slice(&gamma);
-        // the POMs solve their own moments given the other parameters
+        // the POMs solve their own moments, which are linear in each POM
         {
-            let mut num = [0.0; 2];
-            let mut den = [0.0; 2];
+            let mut num = vec![0.0; nl];
+            let mut den = vec![0.0; nl];
             let mut m = vec![0.0; np];
             for i in 0..n {
-                // the moments are linear in each POM with slope -(weight)
                 let mut th = theta.clone();
-                th[op] = 0.0;
-                th[op + 1] = 0.0;
+                th[op..].iter_mut().for_each(|v| *v = 0.0);
                 moments(&th, i, &mut m);
-                let (a0, a1) = (m[op], m[op + 1]);
-                th[op] = 1.0;
-                th[op + 1] = 1.0;
+                let a0: Vec<f64> = m[op..].to_vec();
+                th[op..].iter_mut().for_each(|v| *v = 1.0);
                 moments(&th, i, &mut m);
-                for (g, a) in [(0, a0), (1, a1)] {
-                    num[g] += a;
-                    den[g] += a - m[op + g];
+                for g in 0..nl {
+                    num[g] += a0[g];
+                    den[g] += a0[g] - m[op + g];
                 }
             }
-            theta[op] = num[0] / den[0];
-            theta[op + 1] = num[1] / den[1];
+            for g in 0..nl {
+                theta[op + g] = num[g] / den[g];
+            }
         }
 
-        // sandwich: A = d mean(m)/d theta, B = mean(m m')
-        let mean_m = |th: &[f64]| -> Vec<f64> {
-            let mut acc = vec![0.0; np];
-            let mut m = vec![0.0; np];
-            for i in 0..n {
-                moments(th, i, &mut m);
-                for a in 0..np {
-                    acc[a] += m[a];
-                }
-            }
-            acc.iter().map(|v| v / n as f64).collect()
-        };
-        let mut a_mat = vec![vec![0.0; np]; np];
-        for c in 0..np {
-            let h = 1e-6 * theta[c].abs().max(1e-3);
-            let mut tp = theta.clone();
-            tp[c] += h;
-            let up = mean_m(&tp);
-            tp[c] -= 2.0 * h;
-            let dn = mean_m(&tp);
-            for r in 0..np {
-                a_mat[r][c] = (up[r] - dn[r]) / (2.0 * h);
-            }
-        }
-        let mut b_mat = vec![vec![0.0; np]; np];
-        let mut m = vec![0.0; np];
-        for i in 0..n {
-            moments(&theta, i, &mut m);
-            for r in 0..np {
-                for c in 0..np {
-                    b_mat[r][c] += m[r] * m[c] / n as f64;
-                }
-            }
-        }
-        let ai = invert(&a_mat).ok_or_else(|| rc_err(459, "estimating equations are singular"))?;
-        let vfull: Vec<Vec<f64>> = (0..np)
-            .map(|r| (0..np).map(|c| (0..np).map(|k| (0..np).map(|l| ai[r][k] * b_mat[k][l] * ai[c][l]).sum::<f64>()).sum::<f64>() / n as f64).collect())
-            .collect();
-        let (v00, v11, v01) = (vfull[op][op], vfull[op + 1][op + 1], vfull[op][op + 1]);
-        let (pom0, pom1) = (theta[op], theta[op + 1]);
+        let vfull = sandwich_m(&theta, n, np, &moments)?;
+        let pom: Vec<f64> = theta[op..].to_vec();
+        let vp: Vec<Vec<f64>> = (0..nl).map(|r| (0..nl).map(|c| vfull[op + r][op + c]).collect()).collect();
 
-        // reported parameters
-        let tlab = |v: f64| -> String {
-            let var = ds.get_var(&tvar).unwrap();
-            ds.value_labels.get(&var.value_label_name).and_then(|vl| vl.lookup(v)).map(str::to_string).unwrap_or_else(|| fmt_g(v, 9))
-        };
+        // reported parameters: linear combinations of the POMs
         let eff = if atet { "ATET" } else { "ATE" };
-        let (names, b, v): (Vec<String>, Vec<f64>, [[f64; 2]; 2]) = match stat {
-            Stat::Pomeans => (vec![format!("POmeans:0.{tvar}"), format!("POmeans:1.{tvar}")], vec![pom0, pom1], [[v00, v01], [v01, v11]]),
-            _ => {
-                // (pom1 - pom0, pom0)
-                let ve = v11 + v00 - 2.0 * v01;
-                let c = v01 - v00;
-                (vec![format!("{eff}:r1vs0.{tvar}"), format!("POmean:0.{tvar}")], vec![pom1 - pom0, pom0], [[ve, c], [c, v00]])
+        let fmtv = |v: f64| fmt_g(v, 9).trim().to_string();
+        let mut names = Vec::new();
+        let mut cmat: Vec<Vec<f64>> = Vec::new();
+        let mut blocks = Vec::new();
+        match stat {
+            Stat::Pomeans => {
+                let mut b = Block { title: "POmeans".into(), rows: Vec::new() };
+                for l in 0..nl {
+                    names.push(format!("POmeans:{}.{tvar}", fmtv(lvals[l])));
+                    let mut c = vec![0.0; nl];
+                    c[l] = 1.0;
+                    cmat.push(c);
+                    b.rows.push((vec![crate::summarize::abbrev(&level_label(ds, &tvar, lvals[l]), 12)], 0.0, 0.0));
+                }
+                blocks.push(b);
             }
-        };
+            _ => {
+                let mut b = Block { title: eff.into(), rows: Vec::new() };
+                for l in 1..nl {
+                    names.push(format!("{eff}:r{}vs{}.{tvar}", fmtv(lvals[l]), fmtv(lvals[0])));
+                    let mut c = vec![0.0; nl];
+                    c[l] = 1.0;
+                    c[0] = -1.0;
+                    cmat.push(c);
+                    b.rows.push((wrap12(&format!("({} vs {})", level_label(ds, &tvar, lvals[l]), level_label(ds, &tvar, lvals[0]))), 0.0, 0.0));
+                }
+                blocks.push(b);
+                names.push(format!("POmean:{}.{tvar}", fmtv(lvals[0])));
+                let mut c = vec![0.0; nl];
+                c[0] = 1.0;
+                cmat.push(c);
+                blocks.push(Block { title: "POmean".into(), rows: vec![(vec![crate::summarize::abbrev(&level_label(ds, &tvar, lvals[0]), 12)], 0.0, 0.0)] });
+            }
+        }
+        let k = cmat.len();
+        let b: Vec<f64> = cmat.iter().map(|c| dot(c, &pom)).collect();
+        let v: Vec<Vec<f64>> = (0..k).map(|r| (0..k).map(|c| (0..nl).map(|a| (0..nl).map(|bb| cmat[r][a] * vp[a][bb] * cmat[c][bb]).sum::<f64>()).sum()).collect()).collect();
+        let mut idx = 0;
+        for bl in blocks.iter_mut() {
+            for r in bl.rows.iter_mut() {
+                r.1 = b[idx];
+                r.2 = v[idx][idx];
+                idx += 1;
+            }
+        }
 
-        let crit = dist::invnormal(1.0 - (1.0 - level / 100.0) / 2.0);
         let est_name = match method {
             Method::Ra => "regression adjustment",
             Method::Ipw => "inverse-probability weights",
             Method::Aipw => "augmented IPW",
+            Method::Ipwra => "IPW regression adjustment",
         };
-        let tm_name = match (method, link) {
-            (Method::Ra, _) => "none",
-            (_, Link::Logit) => "logit",
-            (_, Link::Probit) => "probit",
+        let tm_name = match (method, link, nl) {
+            (Method::Ra, _, _) => "none",
+            (_, _, l) if l > 2 => "(multinomial) logit",
+            (_, Link::Logit, _) => "logit",
+            (_, Link::Probit, _) => "probit",
         };
         let mut out = Vec::new();
         out.push(format!("{:<48}Number of obs     = {:>10}", "Treatment-effects estimation", util::commas(n)));
         out.push(format!("Estimator      : {est_name}"));
         out.push(format!("Outcome model  : {}", match method {
-            Method::Ra => "linear",
-            Method::Ipw => "weighted mean",
-            Method::Aipw => "linear by ML",
+            Method::Ipw => "weighted mean".to_string(),
+            Method::Aipw => format!("{} by ML", okind.name()),
+            _ => okind.name().to_string(),
         }));
         out.push(format!("Treatment model: {tm_name}"));
-        let rule = "-".repeat(78);
-        out.push(rule.clone());
-        out.push(format!("{:>12} |{:>17}", "", "Robust"));
-        out.push(format!("{:>12} | Coefficient  std. err.      z    P>|z|     [{}% conf. interval]", crate::summarize::abbrev(&ovar, 12), fmt_g(level, 4)));
-        out.push(format!("{}+{}", "-".repeat(13), "-".repeat(64)));
-        let row = |lab: &str, est: f64, var: f64| -> String {
-            let se = var.max(0.0).sqrt();
-            let z = est / se;
-            let p = 2.0 * (1.0 - dist::normal(z.abs()));
-            format!("{:>12} |  {:>9}  {:>9}  {:>7.2}   {:>5.3}    {:>9}   {:>9}", lab, fmt_g(est, 7), fmt_g(se, 7), z, p, fmt_g(est - crit * se, 7), fmt_g(est + crit * se, 7))
-        };
-        // `(Treated vs Control)` wrapped into 12-character lines
-        let wrap = |text: &str| -> Vec<String> {
-            let mut lines = Vec::new();
-            let mut cur = String::new();
-            for w in text.split(' ') {
-                if !cur.is_empty() && cur.len() + 1 + w.len() > 12 {
-                    lines.push(std::mem::take(&mut cur));
-                }
-                if !cur.is_empty() {
-                    cur.push(' ');
-                }
-                cur.push_str(w);
-            }
-            lines.push(cur);
-            lines
-        };
-        match stat {
-            Stat::Pomeans => {
-                out.push(format!("{:<12} |", "POmeans"));
-                out.push(format!("{:>12} |", crate::summarize::abbrev(&tvar, 12)));
-                out.push(row(&crate::summarize::abbrev(&tlab(0.0), 12), b[0], v[0][0]));
-                out.push(row(&crate::summarize::abbrev(&tlab(1.0), 12), b[1], v[1][1]));
-            }
-            _ => {
-                out.push(format!("{:<12} |", eff));
-                out.push(format!("{:>12} |", crate::summarize::abbrev(&tvar, 12)));
-                let lines = wrap(&format!("({} vs {})", tlab(1.0), tlab(0.0)));
-                for l in &lines[..lines.len() - 1] {
-                    out.push(format!("{:>12} |", l));
-                }
-                out.push(row(lines.last().unwrap(), b[0], v[0][0]));
-                out.push(format!("{}+{}", "-".repeat(13), "-".repeat(64)));
-                out.push(format!("{:<12} |", "POmean"));
-                out.push(format!("{:>12} |", crate::summarize::abbrev(&tvar, 12)));
-                out.push(row(&crate::summarize::abbrev(&tlab(0.0), 12), b[1], v[1][1]));
-            }
-        }
-        out.push(rule);
+        effects_table(&mut out, &ovar, &tvar, "Robust", level, &blocks);
 
         let bm = Matrix::row_vector(&b).with_names(vec!["y1".into()], names.clone());
-        let mut vm = Matrix::zeros(2, 2);
-        for r in 0..2 {
-            for c in 0..2 {
+        let mut vm = Matrix::zeros(k, k);
+        for r in 0..k {
+            for c in 0..k {
                 vm[(r, c)] = v[r][c];
             }
         }
@@ -504,9 +704,37 @@ impl CommandHandler for Teffects {
         for &r in &od.rows {
             sample[r] = true;
         }
+        // state for tebalance / teoverlap
+        if has_t {
+            let ps: Vec<Vec<f64>> = (0..n).map(|i| probs(&gamma, i)).collect();
+            let w: Vec<f64> = (0..n)
+                .map(|i| {
+                    let l = lev[i];
+                    if atet { ps[i][trl] / ps[i][l] } else { 1.0 / ps[i][l] }
+                })
+                .collect();
+            crate::te_match::set_state(crate::te_match::TeState {
+                rows: od.rows.clone(),
+                lev: lev.clone(),
+                lvals: lvals.clone(),
+                ps,
+                w,
+                tvars: base_vars(ds, &tx)?,
+                tx_terms: tx.clone(),
+                link: if nl == 2 { Some(link) } else { None },
+                xt: xt.clone(),
+                atet,
+                trl,
+            });
+        } else {
+            crate::te_match::clear_state();
+        }
         let e = st.begin_e();
         e.set("N", n as f64);
         e.set("level", level);
+        e.set("k_levels", nl as f64);
+        e.set("control", lvals[0]);
+        e.set("treated", lvals[trl]);
         e.set_str("cmd", "teffects");
         e.set_str("subcmd", sub);
         e.set_str("stat", match stat {
@@ -516,6 +744,8 @@ impl CommandHandler for Teffects {
         });
         e.set_str("depvar", ovar.clone());
         e.set_str("tvar", tvar.clone());
+        e.set_str("tmodel", tm_name);
+        e.set_str("omodel", okind.name().to_lowercase());
         e.set_str("title", "Treatment-effects estimation");
         e.set_str("vce", "robust");
         e.set_str("vcetype", "Robust");
@@ -524,4 +754,44 @@ impl CommandHandler for Teffects {
         e.sample = Some(sample);
         Ok(out.join("\n"))
     }
+}
+
+/// M-estimation sandwich A^-1 B A^-T / n with a numerical Jacobian.
+fn sandwich_m(theta: &[f64], n: usize, np: usize, moments: &dyn Fn(&[f64], usize, &mut [f64])) -> Result<Vec<Vec<f64>>, String> {
+    let mean_m = |th: &[f64]| -> Vec<f64> {
+        let mut acc = vec![0.0; np];
+        let mut m = vec![0.0; np];
+        for i in 0..n {
+            moments(th, i, &mut m);
+            for a in 0..np {
+                acc[a] += m[a];
+            }
+        }
+        acc.iter().map(|v| v / n as f64).collect()
+    };
+    let mut a_mat = vec![vec![0.0; np]; np];
+    for c in 0..np {
+        let h = 1e-6 * theta[c].abs().max(1e-3);
+        let mut tp = theta.to_vec();
+        tp[c] += h;
+        let up = mean_m(&tp);
+        tp[c] -= 2.0 * h;
+        let dn = mean_m(&tp);
+        for r in 0..np {
+            a_mat[r][c] = (up[r] - dn[r]) / (2.0 * h);
+        }
+    }
+    let mut b_mat = vec![vec![0.0; np]; np];
+    let mut m = vec![0.0; np];
+    for i in 0..n {
+        moments(theta, i, &mut m);
+        for r in 0..np {
+            for c in 0..np {
+                b_mat[r][c] += m[r] * m[c] / n as f64;
+            }
+        }
+    }
+    let ai = invert(&a_mat).ok_or_else(|| rc_err(459, "estimating equations are singular"))?;
+    let tmp: Vec<Vec<f64>> = (0..np).map(|r| (0..np).map(|l| (0..np).map(|k| ai[r][k] * b_mat[k][l]).sum()).collect()).collect();
+    Ok((0..np).map(|r| (0..np).map(|c| (0..np).map(|l| tmp[r][l] * ai[c][l]).sum::<f64>() / n as f64).collect()).collect())
 }

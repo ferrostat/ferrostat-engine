@@ -14,7 +14,7 @@ use crate::interpreter::{err_message, AdoInterpreter};
 use crate::macros::{self, macro_number, unquote};
 
 /// SSC packages whose functionality Ferrostat provides natively.
-pub const NATIVE_PACKAGES: &[&str] = &["outreg2", "xtpmg", "spmap", "shp2dta", "sppack", "spmat", "xtivreg2", "ivreg2", "ranktest", "unique", "frmttable", "outreg", "reghdfe", "ivreghdfe", "ftools", "distinct", "mdesc", "winsor2", "gtools", "gcollapse", "gegen", "gquantiles", "fasterxtile", "gstats", "gtop", "gtoplevelsof", "gunique", "gdistinct", "glevelsof", "gisid", "gduplicates", "hashsort", "greshape", "fcollapse", "fegen", "fisid", "fsort", "join", "flevelsof", "fre", "sumup", "tabout", "egenmore", "rangestat", "carryforward", "labutil", "labmask", "labvalch", "labvalclone", "labvarch", "rdrobust", "rdbwselect", "rdplot", "rddensity", "rdbwdensity", "binscatter", "ppmlhdfe", "drdid", "csdid", "did_imputation", "event_plot", "eventstudyinteract"];
+pub const NATIVE_PACKAGES: &[&str] = &["outreg2", "xtpmg", "spmap", "shp2dta", "sppack", "spmat", "xtivreg2", "ivreg2", "ranktest", "unique", "frmttable", "outreg", "reghdfe", "ivreghdfe", "ftools", "distinct", "mdesc", "winsor2", "gtools", "gcollapse", "gegen", "gquantiles", "fasterxtile", "gstats", "gtop", "gtoplevelsof", "gunique", "gdistinct", "glevelsof", "gisid", "gduplicates", "hashsort", "greshape", "fcollapse", "fegen", "fisid", "fsort", "join", "flevelsof", "fre", "sumup", "tabout", "egenmore", "rangestat", "carryforward", "labutil", "labmask", "labvalch", "labvalclone", "labvarch", "rdrobust", "rdbwselect", "rdplot", "rddensity", "rdbwdensity", "binscatter", "ppmlhdfe", "drdid", "csdid", "did_imputation", "event_plot", "eventstudyinteract", "psmatch2", "cem", "ebalance", "synth", "boottest", "wyoung"];
 
 /// Community packages whose commands have a different name from the package,
 /// as (package, commands it provides).
@@ -30,6 +30,8 @@ const PACKAGE_COMMANDS: &[(&str, &[&str])] = &[
     ("rddensity", &["rddensity", "rdbwdensity"]),
     ("csdid", &["csdid", "csdid_plot"]),
     ("did_imputation", &["did_imputation", "event_plot"]),
+    ("psmatch2", &["psmatch2", "pstest", "psgraph"]),
+    ("cem", &["cem", "imb"]),
 ];
 
 /// Packages accepted without providing commands (helpers whose features are
@@ -419,7 +421,7 @@ fn dir_listing(r: &str) -> Result<String, String> {
 
 /// Commands handled by the interpreter itself rather than the engine.
 pub const INTERP_COMMANDS: &[&str] = &[
-    "local", "global", "macro", "display", "cls", "notes", "note", "char", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit", "collect", "dtable", "etable", "lint",
+    "wyoung", "local", "global", "macro", "display", "cls", "notes", "note", "char", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit", "collect", "dtable", "etable", "lint",
 ];
 
 fn is_interp_command(n: &str) -> bool {

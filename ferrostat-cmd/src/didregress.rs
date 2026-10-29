@@ -218,7 +218,7 @@ impl CommandHandler for Didregress {
         e.set_mat("b", Matrix::row_vector(&[atet]).with_names(vec!["y1".into()], bname.clone()));
         e.set_mat("V", v1.with_names(bname.clone(), bname));
         e.set_str("cmd", verb);
-        e.set_str("cmdline", format!("{verb} {}", cmd.raw.trim()));
+        e.set_str("cmdline", cmd.raw.trim().to_string());
         e.set_str("title", "Difference-in-differences regression");
         e.set_str("depvar", y.clone());
         e.set_str("treatment", tvar.clone());

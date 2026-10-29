@@ -154,6 +154,9 @@ impl CommandHandler for Predict {
         if let Some(out) = crate::sp_reg::predict(ds, st, cmd)? {
             return Ok(out);
         }
+        if let Some(r) = crate::ts_more::predict(ds, st, cmd) {
+            return r;
+        }
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
         if ecmd == "arima" {
@@ -1195,6 +1198,9 @@ impl CommandHandler for Estat {
     fn execute(&self, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Result<String, String> {
         let sub = cmd.main.split_whitespace().next().unwrap_or("").to_lowercase();
         if let Some(r) = crate::mv_post::estat(ds, st, sub.as_str(), cmd) {
+            return r;
+        }
+        if let Some(r) = crate::ts_more::estat(ds, st, sub.as_str(), cmd) {
             return r;
         }
         let (b, v, ecmd) = need_e(st)?;

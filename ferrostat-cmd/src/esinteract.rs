@@ -229,7 +229,7 @@ impl CommandHandler for EventStudyInteract {
             m.rownames = rename(&m.rownames);
         }
         e.set_str("cmd", "eventstudyinteract");
-        e.set_str("cmdline", format!("eventstudyinteract {}", cmd.raw.trim()));
+        e.set_str("cmdline", cmd.raw.trim().to_string());
         e.set_str("title", "IW estimates for dynamic effects");
         e.set_mat("b_iw", Matrix::row_vector(&b_iw).with_names(vec!["y1".into()], relv.clone()));
         e.set_mat("V_iw", v_iw.with_names(relv.clone(), relv.clone()));

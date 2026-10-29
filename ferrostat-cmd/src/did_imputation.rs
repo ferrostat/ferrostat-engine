@@ -711,7 +711,7 @@ impl CommandHandler for DidImputation {
         e.set("N", nall);
         e.set("Nc", nc);
         e.set_str("cmd", "did_imputation");
-        e.set_str("cmdline", format!("did_imputation {}", cmd.raw.trim()));
+        e.set_str("cmdline", cmd.raw.trim().to_string());
         e.set_str("depvar", yv.clone());
         e.set_str("properties", "b V");
         e.set_mat("b", Matrix::row_vector(&ball).with_names(vec!["y1".into()], names.clone()));

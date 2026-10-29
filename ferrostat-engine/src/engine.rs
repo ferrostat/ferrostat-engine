@@ -247,6 +247,16 @@ impl Engine {
             ("svydescribe", Box::new(ferrostat_cmd::svy::Svydescribe)),
             ("svymarkout", Box::new(ferrostat_cmd::svy::Svymarkout)),
             ("teffects", Box::new(ferrostat_cmd::teffects::Teffects)),
+            ("tebalance", Box::new(ferrostat_cmd::te_match::Tebalance)),
+            ("teoverlap", Box::new(ferrostat_cmd::te_match::Teoverlap)),
+            ("psmatch2", Box::new(ferrostat_cmd::psmatch2::Psmatch2)),
+            ("pstest", Box::new(ferrostat_cmd::psmatch2::Pstest)),
+            ("psgraph", Box::new(ferrostat_cmd::psmatch2::Psgraph)),
+            ("cem", Box::new(ferrostat_cmd::cem::Cem)),
+            ("imb", Box::new(ferrostat_cmd::cem::Imb)),
+            ("ebalance", Box::new(ferrostat_cmd::ebalance::Ebalance)),
+            ("synth", Box::new(ferrostat_cmd::synth::Synth)),
+            ("boottest", Box::new(ferrostat_cmd::boottest::Boottest)),
             ("distinct", Box::new(ferrostat_cmd::community::Distinct)),
             ("mdesc", Box::new(ferrostat_cmd::community::Mdesc)),
             ("winsor2", Box::new(ferrostat_cmd::community::Winsor2)),
@@ -425,6 +435,7 @@ impl Engine {
         ];
         list.extend(ferrostat_cmd::community_dm2::handlers());
         list.extend(ferrostat_cmd::tsvar::handlers());
+        list.extend(ferrostat_cmd::ts_more::handlers());
         list.extend(ferrostat_cmd::xtnl::handlers());
         list.extend(ferrostat_cmd::stcox::handlers());
         list.extend(ferrostat_cmd::choice_mixed::handlers());

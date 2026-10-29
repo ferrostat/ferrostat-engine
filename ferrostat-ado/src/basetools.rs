@@ -60,6 +60,9 @@ pub(crate) fn intercept(me: &mut AdoInterpreter, verb_raw: &str, rest: &str, _te
     if let Some(f) = crate::mlprog::intercept(me, &v, rest)? {
         return Ok(Some(f));
     }
+    if let Some(f) = crate::wyoung::intercept(me, &v, rest)? {
+        return Ok(Some(f));
+    }
     if let Some(f) = crate::fracpoly::intercept(me, &v, rest)? {
         return Ok(Some(f));
     }

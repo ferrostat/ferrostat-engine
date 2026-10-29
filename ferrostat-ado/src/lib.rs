@@ -16,6 +16,7 @@ pub mod putexcel;
 pub mod resample;
 // jackknife, statsby, rolling, nestreg, stepwise, linktest, ml, fp
 pub mod basetools;
+pub mod wyoung;
 pub mod fracpoly;
 pub mod mlprog;
 pub mod parallel;
