@@ -27,10 +27,10 @@ pub fn handlers() -> Vec<(&'static str, Box<dyn CommandHandler>)> {
 
 /// Parameters shared by all expressions of a model.
 #[derive(Default, Clone)]
-struct Params {
+pub(crate) struct Params {
     /// coefficient names: `b0` for scalars (shown as `/b0`), `xb:x1` for combinations
-    names: Vec<String>,
-    init: Vec<f64>,
+    pub(crate) names: Vec<String>,
+    pub(crate) init: Vec<f64>,
     /// linear combinations already defined: name -> expression text
     combos: BTreeMap<String, String>,
 }
@@ -52,7 +52,7 @@ impl Params {
     }
 
     /// Replace the `{...}` parameters of `text` by placeholder names.
-    fn rewrite(&mut self, ds: &DataSet, text: &str) -> Result<String, String> {
+    pub(crate) fn rewrite(&mut self, ds: &DataSet, text: &str) -> Result<String, String> {
         let mut out = String::new();
         let mut rest = text;
         while let Some(i) = rest.find('{') {
@@ -99,18 +99,18 @@ impl Params {
     }
 
     /// Display names: `/b0` for scalar parameters.
-    fn display(&self) -> Vec<String> {
+    pub(crate) fn display(&self) -> Vec<String> {
         self.names.iter().map(|n| if n.contains(':') { n.clone() } else { format!("/{n}") }).collect()
     }
 
     /// Names in e(b): `b0:_cons` for scalar parameters.
-    fn stored(&self) -> Vec<String> {
+    pub(crate) fn stored(&self) -> Vec<String> {
         self.names.iter().map(|n| if n.contains(':') { n.clone() } else { format!("{n}:_cons") }).collect()
     }
 }
 
 /// Substitute parameter values into a parsed expression.
-fn subst(e: &Expr, b: &[f64]) -> Expr {
+pub(crate) fn subst(e: &Expr, b: &[f64]) -> Expr {
     match e {
         Expr::Var(n) => match n.strip_prefix("__nlp").and_then(|k| k.parse::<usize>().ok()) {
             Some(k) if k < b.len() => Expr::Number(b[k]),
@@ -126,7 +126,7 @@ fn subst(e: &Expr, b: &[f64]) -> Expr {
 }
 
 /// Values of `e` at parameters `b` for the given rows.
-fn values(ds: &DataSet, st: &Store, e: &Expr, b: &[f64], rows: &[usize]) -> Result<Vec<f64>, String> {
+pub(crate) fn values(ds: &DataSet, st: &Store, e: &Expr, b: &[f64], rows: &[usize]) -> Result<Vec<f64>, String> {
     let s = subst(e, b);
     let env = Env::with_store(ds, st);
     rows.iter().map(|&r| env.eval(&s, r).and_then(|v| v.num())).collect()
@@ -137,7 +137,7 @@ fn step(b: f64) -> f64 {
 }
 
 /// Jacobian columns d values / d b_k (central differences).
-fn jacobian(ds: &DataSet, st: &Store, e: &Expr, b: &[f64], rows: &[usize]) -> Result<Vec<Vec<f64>>, String> {
+pub(crate) fn jacobian(ds: &DataSet, st: &Store, e: &Expr, b: &[f64], rows: &[usize]) -> Result<Vec<Vec<f64>>, String> {
     let mut out = Vec::new();
     for k in 0..b.len() {
         let h = step(b[k]);
@@ -152,7 +152,7 @@ fn jacobian(ds: &DataSet, st: &Store, e: &Expr, b: &[f64], rows: &[usize]) -> Re
 }
 
 /// Estimation sample: if/in, weights, nonmissing variables of the expressions.
-fn sample(ds: &DataSet, st: &Store, cmd: &Command, exprs: &[&Expr], init: &[f64]) -> Result<(Vec<bool>, Option<util::Weights>), String> {
+pub(crate) fn sample(ds: &DataSet, st: &Store, cmd: &Command, exprs: &[&Expr], init: &[f64]) -> Result<(Vec<bool>, Option<util::Weights>), String> {
     let mut mask = util::touse(ds, st, cmd)?;
     let w = util::weights(ds, st, cmd, &mut mask, "fai")?;
     let env = Env::with_store(ds, st);

@@ -165,6 +165,9 @@ impl CommandHandler for Predict {
         if let Some(out) = crate::choice_mixed::predict(ds, st, cmd)? {
             return Ok(out);
         }
+        if let Some(out) = crate::xmodels::predict(ds, st, cmd)? {
+            return Ok(out);
+        }
         if let Some(out) = crate::xtnl::predict(ds, st, cmd)? {
             return Ok(out);
         }

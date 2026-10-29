@@ -47,6 +47,8 @@ pub fn estat(ds: &mut DataSet, st: &mut Store, sub: &str, cmd: &Command) -> Opti
     let ecmd = st.e.macros.get("cmd").cloned().unwrap_or_default();
     match (ecmd.as_str(), sub) {
         ("mixed", "icc") | ("mixed", "recovariance") | ("mixed", "group") | ("mixed", "sd") => Some(crate::mixed::estat(ds, st, sub, cmd)),
+        ("xtgee", "wcorrelation") | ("xtgee", "wcor") => Some(crate::xt_gee::wcorrelation(st)),
+        ("meologit" | "meoprobit" | "menbreg" | "mecloglog" | "metobit" | "meintreg" | "mestreg", _) => crate::xt_re::estat(st, sub),
         _ => None,
     }
 }

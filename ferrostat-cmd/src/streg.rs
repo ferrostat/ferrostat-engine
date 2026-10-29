@@ -39,7 +39,7 @@ pub enum Dist {
 }
 
 impl Dist {
-    fn parse(s: &str) -> Result<Dist, String> {
+    pub fn parse(s: &str) -> Result<Dist, String> {
         let s = s.trim().to_lowercase();
         let pick = |full: &str, min: usize| s.len() >= min && full.starts_with(s.as_str());
         Ok(if pick("exponential", 1) {
@@ -59,7 +59,7 @@ impl Dist {
         })
     }
     /// Names of the ancillary parameters.
-    fn anc(self) -> &'static [&'static str] {
+    pub fn anc(self) -> &'static [&'static str] {
         match self {
             Dist::Exponential => &[],
             Dist::Weibull => &["ln_p"],
@@ -69,7 +69,7 @@ impl Dist {
             Dist::Ggamma => &["ln_sig", "kappa"],
         }
     }
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Dist::Exponential => "Exponential",
             Dist::Weibull => "Weibull",

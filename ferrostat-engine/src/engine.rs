@@ -439,6 +439,7 @@ impl Engine {
         list.extend(ferrostat_cmd::xtnl::handlers());
         list.extend(ferrostat_cmd::stcox::handlers());
         list.extend(ferrostat_cmd::choice_mixed::handlers());
+        list.extend(ferrostat_cmd::xmodels::handlers());
         list.extend(ferrostat_cmd::basetools::handlers());
         list.extend(ferrostat_cmd::data_utils::handlers());
         list.extend(ferrostat_cmd::did::handlers());

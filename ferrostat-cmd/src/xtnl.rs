@@ -39,6 +39,13 @@ pub fn handlers() -> Handlers {
     v.extend(crate::xtgls::handlers());
     v.extend(crate::xtdpd::handlers());
     v.extend(crate::xtdiag::handlers());
+    v.extend(crate::xt_desc::handlers());
+    v.extend(crate::xt_re::handlers());
+    v.extend(crate::xt_lin::handlers());
+    v.extend(crate::st_more::handlers());
+    v.extend(crate::xt_unit::handlers());
+    v.extend(crate::xt_front::handlers());
+    v.push(("xtgee", Box::new(crate::xt_gee::XtGee)));
     v
 }
 
