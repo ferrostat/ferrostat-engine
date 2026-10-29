@@ -402,6 +402,7 @@ impl<'a> Env<'a> {
         match lname.as_str() {
             "r" | "e" | "s" | "c" => return self.stored(&lname, args, row),
             "frval" => return crate::frames::frval(self, &arg_name(args.first()), &arg_name(args.get(1)), row),
+            "_by" | "_byindex" | "_bylastcall" | "_byn1" | "_byn2" if args.is_empty() => return Ok(Val::Num(by_fn(self, &lname))),
             "scalar" => {
                 let n = arg_name(args.first());
                 let st = self.st.ok_or_else(|| rc_err(111, "scalar not found"))?;
@@ -615,6 +616,19 @@ pub const C_GROUPS: &[(&str, &[&str])] = &[
     ("Other system values", &["pi", "e", "alpha", "ALPHA", "Mons", "Months", "Wdays", "Weekdays", "rc"]),
 ];
 
+/// `_by()`, `_byindex()`, `_bylastcall()`, `_byn1()`, `_byn2()` inside byable programs.
+fn by_fn(env: &Env, name: &str) -> f64 {
+    let mask = env.st.and_then(|s| s.by_mask.as_ref());
+    let get = |k: &str, d: f64| env.st.and_then(|s| s.settings.get(k)).and_then(|v| v.parse().ok()).unwrap_or(d);
+    match name {
+        "_by" => bool_f(mask.is_some()),
+        "_byindex" => if mask.is_some() { get("_byindex", 1.0) } else { 1.0 },
+        "_bylastcall" => if mask.is_some() { get("_bylastcall", 1.0) } else { 1.0 },
+        "_byn1" => mask.and_then(|m| m.iter().position(|&b| b)).map_or(1.0, |i| (i + 1) as f64),
+        _ => mask.and_then(|m| m.iter().rposition(|&b| b)).map_or(env.ds.n_obs as f64, |i| (i + 1) as f64),
+    }
+}
+
 /// Setting stored by `set` (see `Store::settings`), or its default.
 fn setting(env: &Env, key: &str, default: &str) -> String {
     env.st.and_then(|s| s.settings.get(key).cloned()).unwrap_or_else(|| default.to_string())
@@ -700,8 +714,12 @@ pub fn c_value(env: &Env, key: &str) -> Val {
         "max_matdim" => Val::Num(65534.0),
         "max_cmdlen" => Val::Num(4227159.0),
         "matsize" => setting_num(env, "matsize", 400.0),
+        // `version #` sets the interpreted version
+        "version" | "userversion" if st.map_or(false, |s| s.settings.contains_key("version")) => setting_num(env, "version", 18.0),
         // the first name is kept for existing do-files that query it
         "stata_version" | "version" | "userversion" => Val::Num(18.0),
+        "sortmethod" => Val::Str(setting(env, "sortmethod", "default")),
+        "sortrngstate" => Val::Str(setting(env, "sortrngstate", "on")),
         "bit" => Val::Num(if cfg!(target_pointer_width = "64") { 64.0 } else { 32.0 }),
         "processors" => Val::Num(env.st.and_then(|st| st.settings.get("processors")).and_then(|v| v.trim().parse::<f64>().ok()).map_or(processors(), |n| n.clamp(1.0, processors()))),
         "processors_lic" | "processors_mach" | "processors_max" => Val::Num(processors()),
@@ -723,6 +741,8 @@ pub fn c_value(env: &Env, key: &str) -> Val {
         "dirsep" => Val::Str("/".into()),
         "pwd" => Val::Str(ferrostat_core::vfs::current_dir()),
         "tmpdir" => Val::Str(ferrostat_core::vfs::temp_path("")),
+        "sysdir_base" | "sysdir_site" | "sysdir_plus" | "sysdir_personal" | "sysdir_oldplace" if st.map_or(false, |s| s.settings.contains_key(key)) => Val::Str(setting(env, key, "")),
+        "adopath" if st.map_or(false, |s| s.settings.contains_key("adopath")) => Val::Str(setting(env, key, "")),
         "sysdir_base" | "sysdir_site" => Val::Str(String::new()),
         "sysdir_plus" => Val::Str(sysdir("plus")),
         "sysdir_personal" => Val::Str(sysdir("personal")),

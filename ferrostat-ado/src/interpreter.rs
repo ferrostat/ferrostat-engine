@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use ferrostat_cmd::eval::{rc_err, Env, Val};
-use ferrostat_cmd::store::{Program, Results};
+use ferrostat_cmd::store::Results;
 use ferrostat_cmd::util;
 use ferrostat_cmd::varlist;
 use ferrostat_engine::engine::Engine;
@@ -72,6 +72,8 @@ pub struct AdoInterpreter {
     pub(crate) mata: crate::mata::MataState,
     /// `timer`: total seconds, number of on/off cycles, start (µs) if running
     pub(crate) timers: std::collections::BTreeMap<u32, (f64, u64, Option<i64>)>,
+    /// Files, postfiles, sersets, classes, trace and by state (progtools).
+    pub(crate) prog: crate::progtools::ProgState,
 }
 
 impl Default for AdoInterpreter {
@@ -104,6 +106,7 @@ impl AdoInterpreter {
             frmt_tables: Default::default(),
             mata: Default::default(),
             timers: Default::default(),
+            prog: Default::default(),
         }
     }
 
@@ -209,8 +212,9 @@ impl AdoInterpreter {
     }
 
     fn expand(&mut self, text: &str) -> Result<String, String> {
+        let text = if text.contains("`.") { crate::progclass::expand_refs(self, text)? } else { text.to_string() };
         let eng = &mut self.engine;
-        macros::expand(text, &eng.dataset, &mut eng.store)
+        macros::expand(&text, &eng.dataset, &mut eng.store)
     }
 
     fn eval_cond(&mut self, text: &str) -> Result<bool, String> {
@@ -285,6 +289,7 @@ impl AdoInterpreter {
             return Ok(Flow::Next);
         }
         let text = self.expand(&s.text)?;
+        crate::progtools::trace_line(self, &s.text, &text);
         if self.echo && self.depth == 0 {
             self.out.push(format!(". {}", s.text));
         }
@@ -339,6 +344,9 @@ impl AdoInterpreter {
                 }
                 if let Some(n) = num {
                     self.engine.store.settings.insert("version".into(), n.to_string());
+                } else if rest.trim().is_empty() {
+                    let v: f64 = self.engine.store.settings.get("version").and_then(|v| v.parse().ok()).unwrap_or(18.0);
+                    self.emit(&format!("version {v:.1}"));
                 }
                 return Ok(Flow::Next);
             }
@@ -351,6 +359,7 @@ impl AdoInterpreter {
                 let command = if verb == "xi" { xi_terms(&rest[i + 1..]) } else { rest[i + 1..].to_string() };
                 return self.exec_text(&command, body);
             }
+            "class" if body.is_some() => return crate::progclass::class_block(self, &rest, body.unwrap_or_default()),
             "by" | "bysort" => return self.by_prefix(&verb, &rest),
             "foreach" => return self.foreach(&rest, body.ok_or_else(|| rc_err(198, "foreach requires {"))?),
             "forvalues" => return self.forvalues(&rest, body.ok_or_else(|| rc_err(198, "forvalues requires {"))?),
@@ -492,6 +501,9 @@ impl AdoInterpreter {
         let byvars = varlist::expand(&self.engine.dataset, byvars_text)?;
         let sortvars = if sortvars_text.trim().is_empty() { Vec::new() } else { varlist::expand(&self.engine.dataset, &sortvars_text)? };
         let groups = self.engine.by_groups(&byvars, &sortvars, sort)?;
+        if let Some(f) = crate::progtools::by_program(self, &byvars, &groups, &command, &opts)? {
+            return Ok(f);
+        }
         let (cverb, _) = split_verb(&command);
         let cverb = self.engine.resolve_verb(&cverb);
         let res = if self.engine.is_groupwise(&cverb) {
@@ -595,14 +607,7 @@ impl AdoInterpreter {
                 Some(i) => (rest[..i].trim(), rest[i + 1..].to_lowercase()),
                 None => (rest.trim(), String::new()),
             };
-            if self.engine.store.programs.contains_key(name) {
-                return Err(rc_err(110, format!("program {name} already defined")));
-            }
-            let class = ["rclass", "eclass", "sclass"].iter().find(|c| opts.contains(*c)).map(|c| c.to_string()).unwrap_or_else(|| "nclass".into());
-            self.engine.store.programs.insert(
-                name.to_string(),
-                Program { name: name.to_string(), body: raw.to_vec(), class, byable: opts.contains("byable") },
-            );
+            crate::progtools::define_program(self, name, &opts, raw)?;
             return Ok(Flow::Next);
         }
         if first.starts_with("inp") {
@@ -650,8 +655,10 @@ impl AdoInterpreter {
         self.pending_r.push(if rclass { Some(Results::new()) } else { None });
         self.depth += 1;
         let saved_out = std::mem::take(&mut self.out);
+        let run = crate::progtools::program_start(self, &prog);
         let lines = script::logical_lines(&prog.body.join("\n"));
         let res = script::parse_block(&lines).and_then(|stmts| self.exec_block(&stmts));
+        crate::progtools::program_end(self, &prog, run);
         let produced = std::mem::replace(&mut self.out, saved_out);
         self.depth -= 1;
         let pending = self.pending_r.pop().flatten();

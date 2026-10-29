@@ -168,6 +168,9 @@ impl CommandHandler for Predict {
         if let Some(out) = crate::xmodels::predict(ds, st, cmd)? {
             return Ok(out);
         }
+        if let Some(out) = crate::r_rest::predict(ds, st, cmd)? {
+            return Ok(out);
+        }
         if let Some(out) = crate::xtnl::predict(ds, st, cmd)? {
             return Ok(out);
         }
@@ -1224,6 +1227,9 @@ impl CommandHandler for Estat {
             return r;
         }
         if let Some(r) = crate::binpost::estat(ds, st, sub.as_str(), cmd) {
+            return r;
+        }
+        if let Some(r) = crate::r_rest::estat(ds, st, sub.as_str(), cmd) {
             return r;
         }
         if ecmd == "arima" && sub == "aroots" {

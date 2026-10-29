@@ -305,6 +305,7 @@ impl<'a> MParser<'a> {
                     let m = self.sub_matrix(&args[0])?;
                     Matrix::row_vector(&m.diag()).with_names(vec!["r1".into()], m.colnames.clone())
                 }
+                "get" => crate::matcmd2::get(self.st, args.first().map(String::as_str).unwrap_or(""))?,
                 "inv" => self.sub_matrix(&args[0])?.inverse()?,
                 "invsym" | "syminv" => self.sub_matrix(&args[0])?.sym_inverse(1e-14).0,
                 "cholesky" => self.sub_matrix(&args[0])?.cholesky()?,
@@ -381,7 +382,9 @@ fn vjoin(a: &Matrix, b: &Matrix) -> Result<Matrix, String> {
 /// the name `r1` (`c1`) and are renumbered; joined names are otherwise kept.
 fn renumber(names: Vec<String>, prefix: &str) -> Vec<String> {
     let first = format!("{prefix}1");
-    if names.len() > 1 && names.iter().all(|n| *n == first) {
+    // `(1,2,3)` joins left to right: c1 c2 + c1 is a continued literal
+    let continued = names.len() > 2 && names.last() == Some(&first) && names[..names.len() - 1].iter().enumerate().all(|(i, n)| *n == format!("{prefix}{}", i + 1));
+    if names.len() > 1 && names.iter().all(|n| *n == first) || continued {
         return (1..=names.len()).map(|i| format!("{prefix}{i}")).collect();
     }
     names
@@ -585,7 +588,11 @@ impl CommandHandler for MatrixCmd {
                 st.matrices.insert(names[1].to_string(), Matrix::row_vector(&vals).with_names(vec!["r1".into()], en));
                 return Ok(String::new());
             }
-            _ => {}
+            _ => {
+                if let Some(r) = crate::matcmd2::subcommand(ds, st, &lfirst, rest, cmd) {
+                    return r;
+                }
+            }
         }
         // definition or element assignment
         let body = if lfirst == "define" || lfirst == "def" || lfirst == "input" || lfirst == "in" { rest } else { body };

@@ -18,11 +18,15 @@ pub mod resample;
 pub mod basetools;
 pub mod wyoung;
 pub mod fracpoly;
+pub mod r_rest;
 pub mod mlprog;
 pub mod parallel;
 pub mod python;
 pub mod lint;
 pub mod script;
+pub mod progtools;
+pub mod progfile;
+pub mod progclass;
 
 pub use interpreter::AdoInterpreter;
 pub mod session;

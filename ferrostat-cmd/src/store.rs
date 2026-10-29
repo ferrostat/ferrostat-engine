@@ -95,6 +95,9 @@ pub struct Program {
     /// rclass / eclass / sclass / nclass
     pub class: String,
     pub byable: bool,
+    /// The options of the `program define` line, lowercased
+    /// (byable(), properties(), sortpreserve, plugin).
+    pub opts: String,
 }
 
 #[derive(Debug, Clone)]

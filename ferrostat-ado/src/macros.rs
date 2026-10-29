@@ -529,7 +529,15 @@ pub fn macro_function(spec: &str, ds: &DataSet, st: &mut Store) -> Result<String
             })
         }
         Some("permname") | Some("tempvar") => Ok(w.get(1).cloned().unwrap_or_default()),
-        Some("sysdir") => Ok(".".into()),
+        Some("sysdir") => {
+            let code = w.get(1).map(|c| c.to_lowercase()).unwrap_or_default();
+            let env = ferrostat_cmd::eval::Env::with_store(ds, st);
+            Ok(match ferrostat_cmd::eval::c_value(&env, &format!("sysdir_{code}")) {
+                ferrostat_cmd::eval::Val::Str(s) => s,
+                _ => w.get(1).cloned().unwrap_or_default(),
+            })
+        }
+        Some("properties") => Ok(crate::progtools::properties(st, w.get(1).map(String::as_str).unwrap_or(""))),
         Some("environment") | Some("env") => Ok(std::env::var(w.get(1).cloned().unwrap_or_default()).unwrap_or_default()),
         Some("results") => Ok(String::new()),
         Some("r(scalars)") | Some("r(macros)") | Some("e(scalars)") | Some("e(macros)") | Some("e(matrices)") | Some("r(matrices)") => {

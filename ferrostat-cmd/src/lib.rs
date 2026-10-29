@@ -59,6 +59,7 @@ pub mod clogit;
 pub mod mixed;
 pub mod margins;
 pub mod matcmd;
+pub mod matcmd2;
 pub mod matrix;
 pub mod models;
 pub mod panel_ardl;
@@ -167,6 +168,12 @@ pub mod xm_gmm;
 pub mod xm_exact;
 pub mod xm_np;
 pub mod xm_roc;
+// remaining base-reference commands
+pub mod r_rest;
+pub mod r_trunc;
+pub mod r_ord;
+pub mod r_tools;
+pub mod r_more;
 
 pub use commands::CommandHandler;
 pub use store::Store;

@@ -161,14 +161,6 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             }
             String::new()
         }
-        "unab" | "tsunab" | "fvunab" => {
-            let colon = r.find(':').ok_or_else(|| rc_err(198, "unab lmacname : varlist"))?;
-            let name = r[..colon].trim();
-            let (list, _) = split_opts(&r[colon + 1..]);
-            let vars = varlist::expand(&me.engine.dataset, &list)?;
-            me.engine.store.set_local(name, vars.join(" "));
-            String::new()
-        }
         "numlist" => {
             let (text, opts) = split_opts(r);
             let vals = macros::numlist(&unquote(&text))?;
@@ -248,7 +240,7 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
         }
         "ssc" | "net" | "ado" => packages(me, verb, r)?,
         "cf" => cf(me, r)?,
-        "adopath" | "discard" | "more" | "pause" | "set_defaults" | "graph_set" => String::new(),
+        "more" | "set_defaults" | "graph_set" => String::new(),
         "timer" => timer(me, r)?,
         "sleep" => {
             let ms: u64 = r.parse().unwrap_or(0);
@@ -261,7 +253,6 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
         }
         "help" | "search" | "findit" => format!("help for {r}: see the Ferrostat documentation"),
         "about" => format!("Ferrostat {}", env!("CARGO_PKG_VERSION")),
-        "query" => String::new(),
         "error" => {
             let code: i32 = r.parse().map_err(|_| rc_err(198, "error #"))?;
             return Err(rc_err(code, error_text(code)));
@@ -285,10 +276,7 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
         "mata" | "mata:" => crate::mata::run_line(me, r)?,
         "python" => crate::python::command(me, r)?,
         "set" if crate::python::is_set_python(r) => crate::python::set_option(me, r)?,
-        _ => {
-            let _ = full;
-            return Ok(None);
-        }
+        _ => return crate::progtools::command(me, verb, rest, full),
     }))
 }
 
@@ -422,6 +410,9 @@ fn dir_listing(r: &str) -> Result<String, String> {
 /// Commands handled by the interpreter itself rather than the engine.
 pub const INTERP_COMMANDS: &[&str] = &[
     "wyoung", "local", "global", "macro", "display", "cls", "notes", "note", "char", "scalar", "program", "syntax", "args", "tokenize", "gettoken", "confirm", "return", "ereturn", "sreturn", "marksample", "markout", "tempvar", "tempname", "tempfile", "unab", "numlist", "do", "run", "include", "log", "cd", "pwd", "dir", "erase", "mkdir", "type", "copy", "shell", "which", "cf", "foreach", "forvalues", "while", "if", "capture", "quietly", "noisily", "by", "bysort", "putexcel", "eststo", "esttab", "estout", "estpost", "estadd", "putdocx", "putpdf", "dyndoc", "dyntext", "markdown", "html2docx", "error", "exit", "collect", "dtable", "etable", "lint",
+    // progtools
+    "file", "postfile", "post", "postclose", "postutil", "serset", "sysdir", "personal", "findfile", "tabdisp", "mark", "markin", "fvexpand", "_rmcoll", "rmcoll", "_rmdcoll", "makecns", "matcproc",
+    "signestimationsample", "checkestimationsample", "viewsource", "class", "classutil", "classexit", "unabcmd", "discard", "pause", "adopath", "tsunab", "fvunab",
 ];
 
 fn is_interp_command(n: &str) -> bool {

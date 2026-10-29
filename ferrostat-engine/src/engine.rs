@@ -440,6 +440,7 @@ impl Engine {
         list.extend(ferrostat_cmd::stcox::handlers());
         list.extend(ferrostat_cmd::choice_mixed::handlers());
         list.extend(ferrostat_cmd::xmodels::handlers());
+        list.extend(ferrostat_cmd::r_rest::handlers());
         list.extend(ferrostat_cmd::basetools::handlers());
         list.extend(ferrostat_cmd::data_utils::handlers());
         list.extend(ferrostat_cmd::did::handlers());
@@ -635,8 +636,11 @@ impl Engine {
                 self.store.scheme = if ferrostat_cmd::graph::is_scheme(&name) { name } else { String::new() };
                 Ok(String::new())
             }
+            "sortmethod" | "sortrngstate" | "trace" if !matches!(v.split(',').next().unwrap_or("").trim(), "" | "default" | "fsort" | "qsort" | "on" | "off" | "random") && v.trim().parse::<u64>().is_err() => {
+                Err(rc_err(198, format!("set {what} {} not allowed", v.trim())))
+            }
             // accepted for compatibility; no effect
-            "more" | "maxvar" | "matsize" | "linesize" | "pagesize" | "trace" | "tracedepth" | "logtype"
+            "sortrngstate" | "traceexpand" | "tracesep" | "traceindent" | "tracenumber" | "tracehilite" | "more" | "maxvar" | "matsize" | "linesize" | "pagesize" | "trace" | "tracedepth" | "logtype"
             | "output" | "processors" | "niceness" | "dp" | "emptycells" | "fvlabel" | "showbaselevels" | "cformat" | "pformat"
             | "sformat" | "maxiter" | "checksum" | "autotabgraphs" | "segmentsize" | "max_memory" | "min_memory" | "copycolor" | "locale_functions"
             | "locale_ui" | "charset" | "httpproxy" | "update_query" | "timeout1" | "timeout2" | "haverdir" | "odbcmgr" | "notifyuser"

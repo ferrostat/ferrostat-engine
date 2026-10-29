@@ -262,7 +262,9 @@ pub fn build(ds: &DataSet, st: &Store, cmd: &Command, spec: DesignSpec) -> Resul
                 let mut lv: Vec<f64> = rows.iter().map(|&i| vals[i]).collect();
                 lv.sort_by(f64::total_cmp);
                 lv.dedup();
-                let b = match base {
+                // `fvset base` applies to the default base (i.var)
+                let fv = if *base == Base::First { crate::r_tools::fvset_base(ds, v, &lv, &|l| rows.iter().filter(|&&i| vals[i] == l).count()) } else { None };
+                let b = if let Some(fb) = fv { fb } else { match base {
                     Base::First => lv.first().copied(),
                     Base::Last => lv.last().copied(),
                     Base::Value(x) => Some(*x),
@@ -277,7 +279,7 @@ pub fn build(ds: &DataSet, st: &Store, cmd: &Command, spec: DesignSpec) -> Resul
                         }
                         Some(best.1)
                     }
-                };
+                } };
                 levels.insert(v.clone(), (lv, b));
             }
         }
