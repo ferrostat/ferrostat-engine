@@ -186,6 +186,7 @@ pub mod r_more;
 pub mod dm_w3;
 pub mod w7b;
 pub mod w7d;
+pub mod w7c;
 
 pub use commands::CommandHandler;
 pub use store::Store;
