@@ -10,6 +10,7 @@ pub mod mi;
 pub mod mi_impute;
 pub mod mi_more;
 pub mod sp_user;
+pub mod pss_user;
 pub mod mata;
 pub mod frmttable;
 pub mod outreg;

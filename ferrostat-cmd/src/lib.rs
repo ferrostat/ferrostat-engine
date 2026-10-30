@@ -7,7 +7,7 @@ pub mod nlest;
 pub mod smallstat;
 pub mod smallstat2;
 pub mod pk;
-pub mod power;
+pub mod pss;
 pub mod postest2;
 pub mod pwcompare;
 pub mod coefplot;

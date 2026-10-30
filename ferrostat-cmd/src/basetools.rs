@@ -11,6 +11,6 @@ pub fn handlers() -> Vec<(&'static str, Box<dyn CommandHandler>)> {
     v.extend(crate::smallstat::handlers());
     v.extend(crate::smallstat2::handlers());
     v.extend(crate::pk::handlers());
-    v.extend(crate::power::handlers());
+    v.extend(crate::pss::handlers());
     v
 }
