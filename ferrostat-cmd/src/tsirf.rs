@@ -587,6 +587,7 @@ fn create(ds: &DataSet, st: &mut Store, cmd: &Command, name: &str) -> Result<Str
     if name.is_empty() || name.len() > 15 {
         return Err(rc_err(198, "irfname required (at most 15 characters)"));
     }
+    if matches!(st.e.macros.get("cmd").map(String::as_str), Some("dsge" | "dsgenl")) { let p = file_for(st, cmd, &mut msgs)?; msgs.push(crate::w7d::dsge::irf_create(st, cmd, name, &p)?); return Ok(msgs.join("\n")); }
     let e = tsvar::est_results(st, cmd)?;
     let model = model_from_e(&e)?;
     let path = file_for(st, cmd, &mut msgs)?;
