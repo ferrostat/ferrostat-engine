@@ -817,7 +817,7 @@ pub fn dyndoc(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
         let md = process(me, &text, &mut ctx)?;
         let body = markdown_to_html(&md);
         if to_docx {
-            write(&target, &html_to_docx(&body).to_bytes())
+            write(&target, &crate::rpt_w6::html_to_docx_set(me, &body).to_bytes())
         } else {
             write(&target, html_page(stem(&path), &body).as_bytes())
         }
@@ -843,7 +843,7 @@ pub fn dyntext(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
 }
 
 /// `markdown srcfile, saving(file) [replace docx]`.
-pub fn markdown(_me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
+pub fn markdown(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
     let (main, opts) = split_main(r);
     let path = unquote(&main);
     let text = vfs::read_to_string(&path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
@@ -852,20 +852,20 @@ pub fn markdown(_me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
     check_target(&target, &opts)?;
     let body = markdown_to_html(&text);
     if to_docx {
-        write(&target, &html_to_docx(&body).to_bytes())
+        write(&target, &crate::rpt_w6::html_to_docx_set(me, &body).to_bytes())
     } else {
         write(&target, html_page(stem(&path), &body).as_bytes())
     }
 }
 
 /// `html2docx srcfile [, saving(file) replace]`.
-pub fn html2docx(_me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
+pub fn html2docx(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
     let (main, opts) = split_main(r);
     let path = unquote(&main);
     let text = vfs::read_to_string(&path).map_err(|_| rc_err(601, format!("file {path} not found")))?;
     let target = opt_arg(&opts, "saving").map(|s| if s.contains('.') { s } else { with_ext(&s, "docx") }).unwrap_or_else(|| with_ext(&path, "docx"));
     check_target(&target, &opts)?;
-    write(&target, &html_to_docx(&text).to_bytes())
+    write(&target, &crate::rpt_w6::html_to_docx_set(me, &text).to_bytes())
 }
 
 #[cfg(test)]

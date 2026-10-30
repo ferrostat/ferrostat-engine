@@ -18,6 +18,10 @@ pub struct PutExcel {
     pub path: Option<String>,
     pub sheet: String,
     pub books: BTreeMap<String, Workbook>,
+    /// Formulas and pictures by workbook path.
+    pub extras: BTreeMap<String, crate::rpt_w6::xlsx_extra::Extras>,
+    /// `putexcel set ..., open`: changes are kept in memory until `putexcel save`.
+    pub open: bool,
 }
 
 fn opt_arg(opts: &[(String, Option<String>)], name: &str) -> Option<String> {
@@ -64,12 +68,25 @@ pub fn putexcel(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
             }
             None => book.sheets.push((sheet.clone(), BTreeMap::new())),
         }
+        if replace {
+            me.putexcel.extras.remove(&path);
+        } else if sheet_replace {
+            if let Some(e) = me.putexcel.extras.get_mut(&path) {
+                e.formulas.remove(&sheet);
+                e.images.remove(&sheet);
+            }
+        }
+        me.putexcel.open = has_opt(&opts, "open");
         me.putexcel.path = Some(path.clone());
         me.putexcel.sheet = sheet;
         me.putexcel.books.insert(path, book);
         return Ok(String::new());
     }
+    if first == "save" || first == "close" {
+        return crate::rpt_w6::xlsx_extra::save_close(me, first == "save");
+    }
     if first == "clear" {
+        me.putexcel.open = false;
         me.putexcel.path = None;
         return Ok(String::new());
     }
@@ -115,6 +132,17 @@ pub fn putexcel(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
         }
         let v = value.trim();
         let before = writes.len();
+        let sheet_now = me.putexcel.sheet.clone();
+        if let Some(w) = crate::rpt_w6::xlsx_extra::special(me, &path, &sheet_now, (row, col), v)? {
+            writes.extend(w);
+            if cellref.contains(':') {
+                targets.push(((row, col), range_end));
+            } else if writes.len() > before {
+                targets.push(((row, col), (row, col)));
+            }
+            continue;
+        }
+        crate::rpt_w6::xlsx_extra::forget(me, &path, &sheet_now, (row, col));
         let mat = v.strip_prefix("matrix(").or_else(|| v.strip_prefix("mat(")).and_then(|x| x.strip_suffix(')'));
         if let Some(inner) = mat {
             // options may also be given inside the parentheses: matrix(A, names)
@@ -212,7 +240,10 @@ pub fn putexcel(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
             }
         }
     }
-    ferrostat_core::vfs::write(&path, &book.to_bytes()).map_err(|e| rc_err(603, format!("could not write {path}: {e}")))?;
+    if me.putexcel.open {
+        return Ok(String::new());
+    }
+    crate::rpt_w6::xlsx_extra::write(me, &path)?;
     Ok(format!("file {path} saved"))
 }
 

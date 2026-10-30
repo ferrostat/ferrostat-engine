@@ -58,6 +58,7 @@ struct Model {
     waldtest: Option<i64>,
     #[allow(dead_code)]
     lf0: Option<(f64, f64)>,
+    svy: Option<crate::rpt_w6::mlsvy::SvyInfo>,
 }
 
 thread_local! {
@@ -233,7 +234,9 @@ fn model(me: &mut AdoInterpreter, args: &str) -> Result<String, String> {
         for w in words.iter().take(i) {
             off = args[off..].find(w.as_str()).map_or(off, |p| off + p + w.len());
         }
-        args[off..].to_string()
+        // a comma glued to the last equation (`/lnsig, opts`) starts the options
+        let glued = i > 2 && words[i - 1].ends_with(',');
+        format!("{}{}", if glued { "," } else { "" }, &args[off..])
     };
     let c = ferrostat_parser::parser::parse_line(&format!("ml {tail}")).map_err(|e| rc_err(198, e.message))?;
     let ds = &me.engine.dataset;
@@ -251,6 +254,7 @@ fn model(me: &mut AdoInterpreter, args: &str) -> Result<String, String> {
     if !c.has_opt("missing", 4) {
         util::markout(ds, &mut mask, &vars);
     }
+    let svy = crate::rpt_w6::mlsvy::prepare(ds, st, &c, &mut mask)?;
     let rows = util::rows(&mask);
     if rows.is_empty() {
         return Err(rc_err(2000, "no observations"));
@@ -298,6 +302,7 @@ fn model(me: &mut AdoInterpreter, args: &str) -> Result<String, String> {
         let s: f64 = w.iter().sum::<f64>() / w.len() as f64;
         w.iter_mut().for_each(|x| *x /= s);
     }
+    let (w, wtype) = crate::rpt_w6::mlsvy::weights(svy.as_ref(), ds, &rows, w, wtype);
     let vce_opt = c.opt("vce", 3).map(|s| s.trim().to_lowercase()).unwrap_or_default();
     let (vce, cluster) = if let Some(cl) = vce_opt.strip_prefix("cluster") {
         ("cluster".to_string(), Some(cl.trim().to_string()))
@@ -317,7 +322,7 @@ fn model(me: &mut AdoInterpreter, args: &str) -> Result<String, String> {
         (v.len() == 2).then(|| (v[0], v[1]))
     });
     let wexp = tail.find('[').and_then(|i| tail[i..].find(']').map(|j| tail[i + 1..i + j].to_string())).and_then(|s| s.split_once('=').map(|x| format!("= {}", x.1.trim()))).unwrap_or_default();
-    let m = Model { method, prog, eqs, rows, mask, w, wtype, wexp, b: vec![0.0; k], names, title, vce, cluster, iterate, x, off, log: Vec::new(), waldtest, lf0 };
+    let m = Model { method, prog, eqs, rows, mask, w, wtype, wexp, b: vec![0.0; k], names, title, vce, cluster, iterate, x, off, log: Vec::new(), waldtest, lf0, svy };
     put(m);
     Ok(String::new())
 }
@@ -767,7 +772,9 @@ fn maximize(me: &mut AdoInterpreter, args: &str) -> Result<String, String> {
         _ => m.rows.len() as f64,
     };
     let mut n_clust = None;
-    if m.vce != "oim" {
+    if let Some(sv) = &m.svy {
+        v = crate::rpt_w6::mlsvy::variance(&me.engine.dataset, sv, &m.rows, &m.w, scores.as_ref(), &vinv)?;
+    } else if m.vce != "oim" {
         let sc = scores.ok_or_else(|| rc_err(198, "vce(robust) requires an observation-level method (lf)"))?;
         let mut meat = Matrix::zeros(k, k);
         let (groups, factor): (Vec<Vec<usize>>, f64) = match &m.cluster {
@@ -822,7 +829,6 @@ fn maximize(me: &mut AdoInterpreter, args: &str) -> Result<String, String> {
         let w: f64 = (0..q).map(|a| (0..q).map(|c| m.b[first[a]] * inv[(a, c)] * m.b[first[c]]).sum::<f64>()).sum();
         (w, (q - dropped.len()) as f64)
     };
-    let st = &mut me.engine.store;
     let mut e = Results::new();
     e.set("N", n_eff);
     e.set("ll", ll);
@@ -867,6 +873,10 @@ fn maximize(me: &mut AdoInterpreter, args: &str) -> Result<String, String> {
     e.set_mat("V", v.with_names(m.names.clone(), m.names.clone()));
     e.set_mat("ilog", Matrix::row_vector(&log_lines.1));
     e.sample = Some(m.mask.clone());
+    if let Some(sv) = &m.svy {
+        crate::rpt_w6::mlsvy::post(&mut e, &me.engine.dataset, sv, &m.rows, &m.w);
+    }
+    let st = &mut me.engine.store;
     st.e = e;
     put(m);
     let mut out = log_lines.0;

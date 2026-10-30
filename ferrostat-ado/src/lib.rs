@@ -17,6 +17,8 @@ pub mod pdf;
 pub mod progcmd;
 pub mod putdocx;
 pub mod putexcel;
+// docx2*/pdf2txt, putdocx/putpdf collect, putexcel extras, ml svy
+pub mod rpt_w6;
 pub mod resample;
 // jackknife, statsby, rolling, nestreg, stepwise, linktest, ml, fp
 pub mod basetools;

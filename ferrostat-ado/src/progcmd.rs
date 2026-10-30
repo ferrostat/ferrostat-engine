@@ -257,6 +257,9 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             let code: i32 = r.parse().map_err(|_| rc_err(198, "error #"))?;
             return Err(rc_err(code, error_text(code)));
         }
+        "docx2pdf" | "docx2html" | "docx2txt" | "docx2markdown" | "docx2epub" | "pdf2txt" => crate::rpt_w6::command(me, verb, r)?,
+        "putdocx" | "putpdf" if crate::rpt_w6::is_collect(r) => crate::rpt_w6::put_collect(me, verb, r)?,
+        "set" if crate::rpt_w6::is_set_docx(r) => crate::rpt_w6::set_docx(me, r)?,
         "putexcel" => crate::putexcel::putexcel(me, r)?,
         "putdocx" => crate::putdocx::putdocx(me, r)?,
         "putpdf" => crate::putdocx::putpdf(me, r)?,
@@ -415,6 +418,7 @@ pub const INTERP_COMMANDS: &[&str] = &[
     // progtools
     "file", "postfile", "post", "postclose", "postutil", "serset", "sysdir", "personal", "findfile", "tabdisp", "mark", "markin", "fvexpand", "_rmcoll", "rmcoll", "_rmdcoll", "makecns", "matcproc",
     "putmata", "getmata", "dyngen",
+    "docx2pdf", "docx2html", "docx2txt", "docx2markdown", "docx2epub", "pdf2txt",
     "signestimationsample", "checkestimationsample", "viewsource", "class", "classutil", "classexit", "unabcmd", "discard", "pause", "adopath", "tsunab", "fvunab",
 ];
 

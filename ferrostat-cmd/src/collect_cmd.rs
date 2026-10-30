@@ -95,7 +95,12 @@ pub fn run(st: &mut Store, rest: &str) -> Result<String, String> {
     }
     if is("copy", 4) || is("rename", 6) {
         let (main, o) = split_main(args);
-        let w = split_words(&main);
+        let mut w = split_words(&main);
+        // `collect copy new [, name(source)]` copies the current (or named) collection
+        if w.len() == 1 && sub.starts_with("cop") {
+            let src = name_opt(&o).unwrap_or_else(|| cs.current.clone());
+            w.insert(0, src);
+        }
         if w.len() != 2 {
             return Err(rc_err(198, "two collection names required"));
         }
@@ -499,7 +504,39 @@ fn style(st: &mut Store, args: &str) -> Result<String, String> {
             c.style = Style::default_style();
             Ok(String::new())
         }
-        "showbase" | "showomit" | "showempty" | "column" | "title" | "notes" | "table" | "putdocx" | "putpdf" | "html" | "tex" | "smcl" | "save" | "composite" | "etable" | "dtable" | "_cons" | "tables" => Ok(String::new()),
+        "notes" => {
+            for (n, a) in &o {
+                let a = a.as_deref().map(unquote);
+                match n.to_lowercase().as_str() {
+                    "shownotes" | "show" => c.style.notes_hide = false,
+                    "noshownotes" | "noshow" | "hide" => c.style.notes_hide = true,
+                    "prefix" => c.style.notes_prefix = a.filter(|x| !x.is_empty()),
+                    "suffix" => c.style.notes_suffix = a.filter(|x| !x.is_empty()),
+                    "clear" => (c.style.notes_hide, c.style.notes_prefix, c.style.notes_suffix) = (false, None, None),
+                    "font" | "smcl" | "name" => {}
+                    x => return Err(rc_err(198, format!("collect style notes: option {x} not allowed"))),
+                }
+            }
+            Ok(String::new())
+        }
+        "txt" => {
+            if let Some(d) = opt_arg(&o, "delimiter", 3) {
+                let d = unquote(d.trim());
+                c.style.txt_delim = match d.to_lowercase().as_str() {
+                    "tab" => Some("\t".into()),
+                    "space" => Some(" ".into()),
+                    "comma" => Some(",".into()),
+                    "semicolon" => Some(";".into()),
+                    "" | "none" | "default" => None,
+                    _ => Some(d),
+                };
+            }
+            if has(&o, "clear", 5) {
+                c.style.txt_delim = None;
+            }
+            Ok(String::new())
+        }
+        "showbase" | "showomit" | "showempty" | "column" | "title" | "table" | "putdocx" | "putpdf" | "html" | "tex" | "smcl" | "save" | "composite" | "etable" | "dtable" | "_cons" | "tables" => Ok(String::new()),
         other => Err(rc_err(198, format!("collect style {other} invalid"))),
     }
 }
@@ -527,6 +564,18 @@ pub fn export(st: &mut Store, args: &str) -> Result<String, String> {
         return Err(rc_err(602, format!("file {path} already exists")));
     }
     let bytes: Vec<u8> = match kind.as_str() {
+        "txt" if r.style.txt_delim.is_some() => {
+            let d = r.style.txt_delim.clone().unwrap_or_default().replace("\\t", "\t");
+            let mut out: Vec<String> = Vec::new();
+            out.extend(r.title.iter().cloned());
+            for t in &r.tables {
+                out.extend(t.heading.iter().cloned());
+                let (g, _) = t.grid(&r.style);
+                out.extend(g.iter().map(|row| row.iter().map(|x| x.trim()).collect::<Vec<_>>().join(&d)));
+            }
+            out.extend(r.notes.iter().cloned());
+            (out.join("\n") + "\n").into_bytes()
+        }
         "txt" | "smcl" | "log" => (r.text() + "\n").into_bytes(),
         "md" | "markdown" => r.markdown().into_bytes(),
         "html" | "htm" => r.html().into_bytes(),

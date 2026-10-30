@@ -1239,6 +1239,7 @@ dependencies = [
  "ferrostat-core",
  "ferrostat-engine",
  "ferrostat-parser",
+ "flate2",
  "serde_json",
 ]
 
@@ -1329,6 +1330,7 @@ dependencies = [
  "ferrostat-core",
  "ferrostat-engine",
  "ferrostat-parser",
+ "flate2",
  "parquet",
 ]
 

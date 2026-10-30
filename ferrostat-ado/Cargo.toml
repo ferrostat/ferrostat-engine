@@ -12,3 +12,4 @@ ferrostat-engine = { path = "../ferrostat-engine" }
 ferrostat-cmd = { path = "../ferrostat-cmd" }
 chrono = { workspace = true }
 serde_json = "1"
+flate2 = "1"

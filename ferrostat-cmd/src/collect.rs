@@ -124,6 +124,12 @@ pub struct Style {
     pub first_sep: usize,
     pub sep: usize,
     pub stars: Option<Stars>,
+    /// `collect style notes`: hide the notes, or wrap each in a prefix/suffix.
+    pub notes_hide: bool,
+    pub notes_prefix: Option<String>,
+    pub notes_suffix: Option<String>,
+    /// `collect style txt, delimiter()`: cell delimiter of text exports.
+    pub txt_delim: Option<String>,
 }
 
 fn edit(spec: &str, nformat: Option<&str>, sformat: Option<&str>, minimum: Option<f64>) -> (Vec<Cond>, CellOpts) {
@@ -155,6 +161,10 @@ impl Style {
             first_sep: 1,
             sep: 1,
             stars: None,
+            notes_hide: false,
+            notes_prefix: None,
+            notes_suffix: None,
+            txt_delim: None,
         }
     }
 
@@ -655,6 +665,8 @@ impl Collection {
             }
         }
         notes.extend(self.notes.iter().cloned());
+        let st = &self.style;
+        let notes = if st.notes_hide { Vec::new() } else { notes.into_iter().map(|n| format!("{}{n}{}", st.notes_prefix.as_deref().unwrap_or(""), st.notes_suffix.as_deref().unwrap_or(""))).collect() };
         Ok(Rendered { title: self.title.clone(), tables, notes, style: self.style.clone() })
     }
 

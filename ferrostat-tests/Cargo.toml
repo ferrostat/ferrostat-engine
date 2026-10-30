@@ -15,6 +15,8 @@ ferrostat-cmd = { path = "../ferrostat-cmd" }
 ferrostat-ado = { path = "../ferrostat-ado" }
 
 [dev-dependencies]
+# t51_rpt writes Flate-compressed PDF streams
+flate2 = "1"
 # t22_columnar writes "foreign" parquet/arrow files (types the exporter never produces)
 arrow-array = { version = "60", default-features = false }
 arrow-schema = { version = "60", default-features = false }
