@@ -157,6 +157,7 @@ impl CommandHandler for Predict {
         if let Some(r) = crate::ts_more::predict(ds, st, cmd) {
             return r;
         }
+        if let Some(out) = crate::w7b::predict(ds, st, cmd)? { return Ok(out); }
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
         if ecmd == "arima" {
@@ -1209,6 +1210,7 @@ impl CommandHandler for Estat {
         if let Some(r) = crate::ts_more::estat(ds, st, sub.as_str(), cmd) {
             return r;
         }
+        if let Some(r) = crate::w7b::estat(ds, st, sub.as_str(), cmd) { return r; }
         let (b, v, ecmd) = need_e(st)?;
         let (b, v) = (b.clone(), v.clone());
         if let Some(r) = crate::sp_reg::estat(ds, st, sub.as_str(), cmd) {

@@ -184,6 +184,7 @@ pub mod r_tools;
 pub mod r_more;
 // remaining data-management commands (icd, vl, bcal, memory, snapshot, frame sets, ...)
 pub mod dm_w3;
+pub mod w7b;
 
 pub use commands::CommandHandler;
 pub use store::Store;
