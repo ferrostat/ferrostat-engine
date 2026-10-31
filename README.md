@@ -212,7 +212,7 @@ The page is static (HTML, CSS, JS and the `.wasm` module), so any static host wo
 
 - The engine runs in a Web Worker, so the page stays responsive; **Stop** cancels a long computation (the engine restarts with an empty dataset, files are kept).
 - Session files are saved in the browser's IndexedDB and restored on the next visit; *clear* in the Files panel deletes them.
-- `shell`/`!` and `python` are unavailable; `sleep` returns immediately.
+- `shell`/`!`, `python`, compiled plugins, `javacall` and network access (`ssc`, `net`, URLs) are unavailable; `sleep` returns immediately.
 - PNG and PDF graph exports are rasterised by the browser from the SVG rendering.
 
 ---
@@ -252,7 +252,7 @@ None: graph text uses an embedded copy of the DejaVu Sans font (`assets/fonts`, 
 
 Commands, prefixes and options follow the familiar conventions of do-file syntax, including minimal abbreviations, `[fw=]`/`[aw=]`/`[pw=]`/`[iw=]` weights and `in f/l` ranges. Error messages end with the usual return code (`r(111);`), which `capture` stores in `_rc`; in batch mode the process exit status is the return code of the failing command.
 
-Community packages that Ferrostat implements natively (`estout`/`esttab`/`eststo`, `coefplot`, `outreg2`, `frmttable`, `unique`, `reghdfe`/`ftools`, `ppmlhdfe`, `rdrobust`/`rdplot`, `rddensity`, `binscatter`, `gtools`, `fre`, `tabout`, `rangestat`, `carryforward`, `labutil`, `xtabond2`, `distinct`, `mdesc`, `winsor2`, `xtivreg2`/`ivreg2`, `xtpmg`, `spmap`, `shp2dta`, `spmat`) are reported by `which` and accepted by `ssc install`, which installs nothing. Other community packages are not downloaded.
+Community packages can be installed as usual: `ssc install`, `net from`/`net install`, `ado dir|describe|uninstall|update` and `adoupdate` download packages into the PLUS directory, and their `.ado`, Mata and help files are loaded from the ado-path (`help name` renders installed help files). Packages that Ferrostat implements natively (`estout`/`esttab`/`eststo`, `coefplot`, `outreg2`, `frmttable`, `unique`, `reghdfe`/`ftools`, `ppmlhdfe`, `rdrobust`/`rdplot`, `rddensity`, `binscatter`, `gtools`, `fre`, `tabout`, `rangestat`, `carryforward`, `labutil`, `xtabond2`, `distinct`, `mdesc`, `winsor2`, `xtivreg2`/`ivreg2`, `xtpmg`, `spmap`, `shp2dta`, `spmat`, `csdid`, `drdid`, …) are not replaced by default; `ssc install name, nonative` or `set ado_native off` installs the community version instead. `use`, `copy`, `import` and `insheet` also accept `http(s)://` URLs, and `set httpproxy…` configures a proxy.
 
 ---
 
@@ -338,20 +338,35 @@ cargo test --workspace
 - `ferrostat-tests/tests/gallery.rs` runs every example of the original graph gallery (109 graphs) on synthetic stand-ins for its datasets; the 5 examples needing VAR/VEC estimation are marked ignored.
 - Most newer commands are checked against closed-form results, limiting cases (a model with an extra component switched off must reproduce the simpler estimator) and cross-checks between commands.
 - CI builds and tests on Linux, Windows and macOS, and builds the WebAssembly version, on GitHub Actions (`.github/workflows/ci.yml`).
-- Tutorial suites: the do-files of public courses (the Göttingen *Economic analysis* course, UCLA OARC data-analysis examples, Princeton tutorials, *The Mixtape*, *Mostly Harmless Econometrics*) are run as acceptance tests; their datasets are not redistributed.
+- Tutorial suites: the do-files of public courses (the Göttingen *Economic analysis* course, UCLA OARC data-analysis examples, Princeton tutorials, *The Mixtape*, *Mostly Harmless Econometrics*) are run as acceptance tests; their datasets are not redistributed. In the latest run of the Göttingen course 68 of its 69 do-files run as intended; the remaining one needs `webuse` (see below).
 - Real-world validation: two research do-files (panel regressions, dynamic factor analysis, PMG/MG panel ARDL) were run unmodified apart from their machine-specific `cd`. Their results were compared with the logs of the original runs: all 686 coefficient rows of the regression tasks match (coefficient and standard error), as do the factor count and PMG/MG estimates and the Pesaran CD statistic.
 
 ---
 
 ## Known Limitations
 
-- Mata covers the common matrix language and `st_*` interface but not complex numbers or Mata classes (other than `xl()`), and views are copies. Python needs an external Python 3 and is unavailable in the browser.
-- `webuse` is disabled on purpose (its example datasets are not freely redistributable); `import haver` needs a proprietary data library and is not available.
-- In the browser build there is no network access, no `shell`, Python, compiled plugins or Java.
+### Not implemented, and why
+
+| Command | Status | Reason |
+|---|---|---|
+| `webuse` | disabled on purpose | it downloads the vendor's example datasets, which are not freely redistributable; use your own copies with `use` |
+| `import haver` (and the direct Haver variant) | not available | needs the proprietary Haver Analytics DLX library and a subscription |
+| `more`, `pause` | accepted, no effect | output is never paged; `pause` only prints its message in batch runs |
+| network commands, `shell`, `python`, `plugin`, `javacall` | native builds only | the browser version has no network access, processes or native libraries |
+| `doedit`, `db`, `window` dialogs and menus | desktop app only | in the terminal `doedit` opens `$EDITOR`; the other two print a pointer to the desktop app or to `help` |
+
+Every other command of the reference manuals is implemented (1,303 of 1,308 documented command names, 99.6%; core manuals 921 of 926). The remaining differences are in fidelity, listed below.
+
+### Fidelity and approximations
+
+- Mata covers the common matrix language and `st_*` interface but not complex numbers or Mata classes (other than `xl()`), and views are copies. Python needs an external Python 3.
+- Compiled plugins use a C interface rebuilt from public information: plugins compiled against Ferrostat's header (`plugin header using file.h`) work, binary compatibility with existing third-party plugins is not verified. `javacall` runs an external JVM (Java 11 or later) and supports a subset of the Java toolkit (no matrices, frames or command execution).
+- `.mlib`/`.mo` compiled Mata libraries in packages are not loaded (packages shipping Mata source work).
 - Several estimators were checked against closed-form results and against other Ferrostat estimators rather than against original output, and some output layouts were reconstructed from documentation; a systematic comparison is in progress. Known approximations: `xtcointtest` standardises Pedroni/Westerlund statistics with simulated null moments; `meta mvregress, jwriley` uses a simplified moment estimator; some `bayes:` models use a normal approximation of the likelihood (the output title says so); `heckoprobit` standard errors and `xthtaylor` coefficients differ slightly from published examples; `cate` has no generalized random forest; DSGE solutions are first order.
 - `fin` and a few rarely used commands (`xtswitchdid`, `gencohort`, `meta psycorr`) use a syntax of Ferrostat's own design.
 - `xtivreg` `be`/`fd`/`re` and `ivregress liml`/`gmm` are validated against independent textbook implementations; `xtivreg2` small-sample conventions under fixed effects with clustering have not been checked against original output.
 - Random numbers use the same default generator (64-bit Mersenne Twister) and start-up seed (123456789) as is customary, but whether every distribution produces identical draws for the same seed has not been verified yet.
+- Cosmetic differences in batch output: loop bodies are echoed command by command rather than as a numbered block, `set trace on` shows nothing for top-level loops, and `matrix list` does not abbreviate over-wide column names.
 - `graph combine` lays out graphs in a grid; only the `okabeito`, `classic` and `mono` schemes exist, and some styling options are accepted but ignored.
 
 ---
