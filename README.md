@@ -334,8 +334,9 @@ Rendering uses the open-source [`plotters`](https://crates.io/crates/plotters) c
 cargo test --workspace
 ```
 
-- `ferrostat-tests` drives the interpreter exactly as a user would and checks results against **independent reference values** computed by `ferrostat-tests/reference/reference.py`, a standard-library-only Python implementation of the textbook formulas (OLS, robust SEs, logit/probit/poisson MLE, t tests, chi-square, ANOVA, fixed effects, kernel density).
+- `ferrostat-tests` (about 1,100 tests in 74 files) drives the interpreter exactly as a user would and checks results against **independent reference values** computed by `ferrostat-tests/reference/reference.py`, a standard-library-only Python implementation of the textbook formulas (OLS, robust SEs, logit/probit/poisson MLE, t tests, chi-square, ANOVA, fixed effects, kernel density).
 - `ferrostat-tests/tests/gallery.rs` runs every example of the original graph gallery (109 graphs) on synthetic stand-ins for its datasets; the 5 examples needing VAR/VEC estimation are marked ignored.
+- Most newer commands are checked against closed-form results, limiting cases (a model with an extra component switched off must reproduce the simpler estimator) and cross-checks between commands.
 - CI builds and tests on Linux, Windows and macOS, and builds the WebAssembly version, on GitHub Actions (`.github/workflows/ci.yml`).
 - Tutorial suites: the do-files of public courses (the Göttingen *Economic analysis* course, UCLA OARC data-analysis examples, Princeton tutorials, *The Mixtape*, *Mostly Harmless Econometrics*) are run as acceptance tests; their datasets are not redistributed.
 - Real-world validation: two research do-files (panel regressions, dynamic factor analysis, PMG/MG panel ARDL) were run unmodified apart from their machine-specific `cd`. Their results were compared with the logs of the original runs: all 686 coefficient rows of the regression tasks match (coefficient and standard error), as do the factor count and PMG/MG estimates and the Pesaran CD statistic.
@@ -344,12 +345,13 @@ cargo test --workspace
 
 ## Known Limitations
 
-- Mata covers the common matrix language and `st_*` interface but not complex numbers or classes (other than `xl()`), and views are copies. Python needs an external Python 3 and is unavailable in the browser.
-- Community packages are not downloaded; only the natively implemented ones above are available.
-- Not yet implemented: `svy`, `mi`, Bayesian and SEM suites; linear mixed models and most `me` commands are in progress.
-- `xtivreg` `be`/`fd`/`re` and `ivregress liml`/`gmm` are validated against independent textbook implementations, not yet against original output; the random-effects variance components use the Swamy–Arora-type within/between 2SLS estimates (Baltagi, ch. 7).
-- `xtivreg2` reports the Kleibergen–Paap rk LM/Wald F (Anderson LM and Cragg–Donald F under i.i.d. errors), Hansen J/Sargan and the C endogeneity test. Stock–Yogo critical values (TSLS bias and size, from the published tables) are shown alongside. Its header follows `xtivreg`, and the small-sample conventions under fixed effects with clustering have not yet been checked against original output.
-- Random-number streams are reproducible within Ferrostat but differ from other software for the same seed.
+- Mata covers the common matrix language and `st_*` interface but not complex numbers or Mata classes (other than `xl()`), and views are copies. Python needs an external Python 3 and is unavailable in the browser.
+- `webuse` is disabled on purpose (its example datasets are not freely redistributable); `import haver` needs a proprietary data library and is not available.
+- In the browser build there is no network access, no `shell`, Python, compiled plugins or Java.
+- Several estimators were checked against closed-form results and against other Ferrostat estimators rather than against original output, and some output layouts were reconstructed from documentation; a systematic comparison is in progress. Known approximations: `xtcointtest` standardises Pedroni/Westerlund statistics with simulated null moments; `meta mvregress, jwriley` uses a simplified moment estimator; some `bayes:` models use a normal approximation of the likelihood (the output title says so); `heckoprobit` standard errors and `xthtaylor` coefficients differ slightly from published examples; `cate` has no generalized random forest; DSGE solutions are first order.
+- `fin` and a few rarely used commands (`xtswitchdid`, `gencohort`, `meta psycorr`) use a syntax of Ferrostat's own design.
+- `xtivreg` `be`/`fd`/`re` and `ivregress liml`/`gmm` are validated against independent textbook implementations; `xtivreg2` small-sample conventions under fixed effects with clustering have not been checked against original output.
+- Random numbers use the same default generator (64-bit Mersenne Twister) and start-up seed (123456789) as is customary, but whether every distribution produces identical draws for the same seed has not been verified yet.
 - `graph combine` lays out graphs in a grid; only the `okabeito`, `classic` and `mono` schemes exist, and some styling options are accepted but ignored.
 
 ---
@@ -386,16 +388,68 @@ This project exists to ensure long-term accessibility of statistical datasets an
 
 ## Contributing
 
-Contributions are welcome! Priority areas:
+Contributions are welcome — bug reports, fixes, new commands, documentation and test cases alike.
 
-- [ ] Time series: `arch`/`garch`, `sspace`, `dfactor`, `ucm`, `mswitch`, `forecast`
-- [ ] Survey data: `svy:` with the remaining estimators, poststratification, `svy: margins`
-- [ ] Multiple imputation: `mi impute` with `by()`, truncreg/intreg/nbreg methods, `mi import`/`export`, `mi merge`/`append`/`reshape`
-- [ ] `heckman`, `clogit`, `xtlogit`, `mixed` and the other multilevel models
-- [ ] Mata: complex numbers, classes and views
-- [ ] Graph schemes and the remaining styling options
+### Reporting a problem
 
-Please open an issue before large refactors.
+Open an issue with:
+
+- a minimal do-file that reproduces it (use `sysuse`-style synthetic data, `set obs`/`generate`, or a small attached `.dta` you are allowed to share),
+- what Ferrostat printed (copy the log, including the `r(#);` return code),
+- what you expected, and where the expected numbers come from (a textbook formula, a paper, another program's output),
+- the Ferrostat version (`about`) and front end (terminal, desktop or browser).
+
+Differences in numbers or in the layout of output tables are bugs too — please report them.
+
+### Getting started
+
+```bash
+git clone https://github.com/ferrostat/ferrostat-engine.git
+cd ferrostat-engine
+git checkout dev
+cargo build                       # debug build of every crate
+cargo run -p ferrostat-repl       # terminal REPL;  `-- --do file.do` runs a do-file
+cargo test --workspace            # full test suite (needs ~10 GB of free disk)
+```
+
+Before opening a pull request, also check the other two front ends still build:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo check -p ferrostat-wasm --target wasm32-unknown-unknown
+cargo check -p ferrostat-gui
+```
+
+Tip: on a small disk, build with `CARGO_INCREMENTAL=0`, and run a single test file with `cargo test -p ferrostat-tests --test <name>`.
+
+### Branches and pull requests
+
+- Day-to-day work happens on **`dev`**; open pull requests against `dev`.
+- `main` only receives tested merges from `dev`; every `v*` tag on `main` builds and publishes a release for all platforms (`.github/workflows/release.yml`).
+- CI (`ci.yml`) runs on pull requests, on `main` and on tags: build and tests on Linux, Windows and macOS plus the WebAssembly build.
+- Keep pull requests focused: one command family or one fix per pull request. Please open an issue first for large refactors or new dependencies.
+
+### Where things go
+
+- A new command: a module in `ferrostat-cmd/src/` (look at a similar command first and reuse the shared helpers — design matrices, the ML optimiser, coefficient tables, VCE options, `r()`/`e()` storage, `predict`/`estat` routing in `postest.rs`), registered through its module's `handlers()`. Interpreter-level commands (macros, programs, prefixes, Mata) live in `ferrostat-ado`.
+- Every behaviour change needs a test in `ferrostat-tests/tests/`. Tests drive the interpreter like a user (`Session::run`) and check numbers against **independently derived values**: closed-form results, limiting cases (e.g. a model with an extra component switched off must reproduce the simpler estimator), cross-checks between commands, or the stdlib-only Python reference in `ferrostat-tests/reference/`.
+- Use synthetic data in tests (generated in the test or small inline `input` blocks you wrote yourself).
+
+### Ground rules
+
+- **Clean-room only.** Do not copy code, help text, manuals, example datasets or output from proprietary software, and do not type numbers or data from proprietary documentation into tests. Community packages may be reimplemented from their papers and documentation; their source may be consulted only when its licence allows it, and must then be credited under [Provenance](#provenance).
+- **Portability.** All file access goes through `ferrostat_core::vfs` (the browser build has an in-memory file system). Engine code must not use `std::time::Instant`, unguarded threads, process spawning or native libraries without a `cfg(not(target_arch = "wasm32"))` gate and a clear error in the browser.
+- **Compatibility first.** Syntax, option names, abbreviations, stored results, return codes and the layout of printed output should match what existing do-files expect. When behaviour is reconstructed from memory rather than verified, say so in the pull request.
+- **Licence.** By contributing you agree that your contribution is licensed under GPL-3.0-or-later, like the rest of the project.
+
+### Areas where help is most useful
+
+- Checking results and output layouts against other software and filing differences (see [Known Limitations](#known-limitations) for the known ones)
+- Exactness of estimators that are currently approximate (listed under Known Limitations)
+- Mata: complex numbers, classes and views
+- Graph schemes and the remaining styling options
+- Speed of the models that still use numerical derivatives (gsem, IRT, FMM, panel ERMs)
+- Packaging (Homebrew, Scoop, Flathub, AUR, conda-forge) and documentation/examples
 
 ---
 
