@@ -251,8 +251,8 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             let _ = ms;
             String::new()
         }
-        "help" | "search" | "findit" => format!("help for {r}: see the Ferrostat documentation"),
-        "about" => format!("Ferrostat {}", env!("CARGO_PKG_VERSION")),
+        "help" | "search" | "findit" => crate::w8_prog::search(me, verb, r),
+        "about" => crate::w8_prog::about(me),
         "error" => {
             let code: i32 = r.parse().map_err(|_| rc_err(198, "error #"))?;
             return Err(rc_err(code, error_text(code)));
@@ -275,6 +275,12 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
         "estadd" => crate::estout::estadd(me, r)?,
         "frmttable" => crate::frmttable::frmttable(me, r)?,
         "collect" => crate::collect::collect(me, full)?,
+        "table" if crate::w8_table::has_command(r) => crate::w8_table::run(me, full)?,
+        "estat" if crate::w8_prog::estat_handler(me).is_some() => {
+            let h = crate::w8_prog::estat_handler(me).unwrap();
+            crate::w8_prog::estat(me, &h, r)?
+        }
+        "estat_default" => crate::w8_prog::estat_default(me, r)?,
         "dtable" | "etable" => crate::collect::dtable_etable(me, verb, full)?,
         "mata" | "mata:" => crate::mata::run_line(me, r)?,
         "python" => crate::python::command(me, r)?,
@@ -1231,8 +1237,28 @@ pub fn tokenize(text: &str, parse: Option<&str>) -> Vec<String> {
 fn gettoken(me: &mut AdoInterpreter, r: &str) -> Result<(), String> {
     let (spec, opts) = split_opts(r);
     let colon = spec.find(':').ok_or_else(|| rc_err(198, "gettoken emname : macname"))?;
-    let targets: Vec<String> = spec[..colon].split_whitespace().map(String::from).collect();
-    let src = spec[colon + 1..].trim().to_string();
+    // `(local)` / `(global)` designators may precede each macro name
+    let mut targets: Vec<(bool, String)> = Vec::new();
+    let mut global_next = false;
+    for w in spec[..colon].split_whitespace() {
+        match w {
+            "(local)" => global_next = false,
+            "(global)" => global_next = true,
+            _ => {
+                targets.push((global_next, w.to_string()));
+                global_next = false;
+            }
+        }
+    }
+    let src_spec = spec[colon + 1..].trim();
+    let (src_global, src) = if let Some(n) = src_spec.strip_prefix("(global)") {
+        (true, n.trim().to_string())
+    } else {
+        (false, src_spec.strip_prefix("(local)").unwrap_or(src_spec).trim().to_string())
+    };
+    if targets.is_empty() || targets.len() > 2 || src.is_empty() {
+        return Err(rc_err(198, "gettoken emname [restname] : macname"));
+    }
     let quotes = opts.iter().any(|(n, _)| n.starts_with("qu"));
     let parse: Vec<char> = opts
         .iter()
@@ -1241,13 +1267,13 @@ fn gettoken(me: &mut AdoInterpreter, r: &str) -> Result<(), String> {
         .map(|a| unquote(&a).chars().collect())
         .unwrap_or_else(|| vec![' ']);
     let st = &mut me.engine.store;
-    let text = st.local(&src).cloned().unwrap_or_default();
+    let text = if src_global { st.globals.get(&src).cloned() } else { st.local(&src).cloned() }.unwrap_or_default();
     let t = text.trim_start_matches(|c: char| c == ' ');
     // token: quoted string, or up to a parse character
     let (tok, rest) = if t.starts_with('"') || t.starts_with("`\"") {
         let w = split_top_level_words(t);
         let first = w.first().cloned().unwrap_or_default();
-        let rest = t[first.len()..].to_string();
+        let rest = t.get(first.len()..).unwrap_or("").to_string();
         (if quotes { first } else { unquote(&first) }, rest)
     } else {
         let mut depth = 0;
@@ -1265,13 +1291,18 @@ fn gettoken(me: &mut AdoInterpreter, r: &str) -> Result<(), String> {
         }
         (t[..end].to_string(), t[end..].to_string())
     };
-    if let Some(t1) = targets.first() {
-        st.set_local(t1, tok);
-    }
+    // only the two-target form assigns the remainder; the source macro is
+    // never modified (unless it is itself named as a target)
+    let mut set = |(global, name): &(bool, String), v: String| {
+        if *global {
+            st.globals.insert(name.clone(), v);
+        } else {
+            st.set_local(name, v);
+        }
+    };
+    set(&targets[0], tok);
     if let Some(t2) = targets.get(1) {
-        st.set_local(t2, rest);
-    } else {
-        st.set_local(&src, rest);
+        set(t2, rest);
     }
     Ok(())
 }
@@ -1392,8 +1423,16 @@ fn returns(me: &mut AdoInterpreter, verb: &str, r: &str) -> Result<String, Strin
     if prefix == 'e' && (sub == "post" || sub == "repost") {
         let (main, opts) = split_opts(rest);
         let names: Vec<&str> = main.split_whitespace().collect();
-        let b = names.first().and_then(|n| me.engine.store.matrices.get(*n).cloned());
-        let v = names.get(1).and_then(|n| me.engine.store.matrices.get(*n).cloned());
+        let mut b = names.first().and_then(|n| me.engine.store.matrices.get(*n).cloned());
+        let mut v = names.get(1).and_then(|n| me.engine.store.matrices.get(*n).cloned());
+        // `ereturn repost b = name V = name`
+        if main.contains('=') {
+            let flat = main.replace('=', " = ");
+            let w: Vec<&str> = flat.split_whitespace().collect();
+            let find = |key: &str| w.windows(3).find(|t| t[0] == key && t[1] == "=").and_then(|t| me.engine.store.matrices.get(t[2]).cloned());
+            b = find("b");
+            v = find("V");
+        }
         let mut e = if sub == "repost" { me.engine.store.e.clone() } else { Results::new() };
         if let Some(b) = b {
             e.set_mat("b", b);

@@ -154,6 +154,9 @@ impl<'a> MParser<'a> {
                         }
                         self.pos += 1;
                     }
+                    if depth > 0 {
+                        return Err(rc_err(198, "] expected"));
+                    }
                     let inner: String = self.s[start..self.pos - 1].iter().collect();
                     m = self.subscript(&m, &inner)?;
                 }
@@ -243,6 +246,9 @@ impl<'a> MParser<'a> {
             }
             self.pos += 1;
         }
+        if depth > 0 {
+            return Err(rc_err(198, "unmatched parenthesis"));
+        }
         let inner: String = self.s[start..self.pos - 1].iter().collect();
         let mut out = Vec::new();
         let mut rest = inner.as_str();
@@ -289,11 +295,31 @@ impl<'a> MParser<'a> {
             let args = self.args()?;
             let lname = name.to_lowercase();
             let num = |p: &Self, i: usize| -> Result<f64, String> { p.scalar(args.get(i).ok_or_else(|| rc_err(198, "too few arguments"))?) };
+            let arg = |i: usize| -> Result<&str, String> { args.get(i).map(String::as_str).ok_or_else(|| rc_err(198, "too few arguments")) };
+            // matrix dimensions: nonnegative integers within the matrix size limit
+            let dim = |x: f64| -> Result<usize, String> {
+                if !x.is_finite() || x < 0.0 || x > MAX_DIM as f64 {
+                    return Err(rc_err(3300, "argument out of range"));
+                }
+                Ok(x as usize)
+            };
             return Ok(match lname.as_str() {
-                "j" => Matrix::filled(num(self, 0)? as usize, num(self, 1)? as usize, num(self, 2)?),
-                "i" => Matrix::identity(num(self, 0)? as usize),
+                "j" => {
+                    let (r, c) = (dim(num(self, 0)?)?, dim(num(self, 1)?)?);
+                    if r.saturating_mul(c) > MAX_CELLS {
+                        return Err(rc_err(915, "matrix too large"));
+                    }
+                    Matrix::filled(r, c, num(self, 2)?)
+                }
+                "i" => {
+                    let n = dim(num(self, 0)?)?;
+                    if n.saturating_mul(n) > MAX_CELLS {
+                        return Err(rc_err(915, "matrix too large"));
+                    }
+                    Matrix::identity(n)
+                }
                 "diag" => {
-                    let v = self.sub_matrix(&args[0])?;
+                    let v = self.sub_matrix(arg(0)?)?;
                     if v.rows == 1 || v.cols == 1 {
                         let names = if v.rows == 1 { v.colnames.clone() } else { v.rownames.clone() };
                         Matrix::from_diag(&v.data).with_names(names.clone(), names)
@@ -302,16 +328,16 @@ impl<'a> MParser<'a> {
                     }
                 }
                 "vecdiag" => {
-                    let m = self.sub_matrix(&args[0])?;
+                    let m = self.sub_matrix(arg(0)?)?;
                     Matrix::row_vector(&m.diag()).with_names(vec!["r1".into()], m.colnames.clone())
                 }
                 "get" => crate::matcmd2::get(self.st, args.first().map(String::as_str).unwrap_or(""))?,
-                "inv" => self.sub_matrix(&args[0])?.inverse()?,
-                "invsym" | "syminv" => self.sub_matrix(&args[0])?.sym_inverse(1e-14).0,
-                "cholesky" => self.sub_matrix(&args[0])?.cholesky()?,
+                "inv" => self.sub_matrix(arg(0)?)?.inverse()?,
+                "invsym" | "syminv" => self.sub_matrix(arg(0)?)?.sym_inverse(1e-14).0,
+                "cholesky" => self.sub_matrix(arg(0)?)?.cholesky()?,
                 "hadamard" => {
-                    let a = self.sub_matrix(&args[0])?;
-                    let b = self.sub_matrix(&args[1])?;
+                    let a = self.sub_matrix(arg(0)?)?;
+                    let b = self.sub_matrix(arg(1)?)?;
                     if a.rows != b.rows || a.cols != b.cols {
                         return Err(conform());
                     }
@@ -320,7 +346,10 @@ impl<'a> MParser<'a> {
                     m
                 }
                 "corr" => {
-                    let a = self.sub_matrix(&args[0])?;
+                    let a = self.sub_matrix(arg(0)?)?;
+                    if a.rows != a.cols {
+                        return Err(conform());
+                    }
                     let mut m = a.clone();
                     for i in 0..a.rows {
                         for j in 0..a.cols {
@@ -330,7 +359,7 @@ impl<'a> MParser<'a> {
                     m
                 }
                 "nullmat" => {
-                    let n = args[0].trim();
+                    let n = arg(0)?.trim();
                     self.st.matrices.get(n).cloned().unwrap_or_else(|| Matrix::zeros(0, 0))
                 }
                 "r" | "e" => {
@@ -424,6 +453,11 @@ fn kron(a: &Matrix, b: &Matrix) -> Matrix {
     }
     m
 }
+
+/// Largest row/column count accepted by `J()` and `I()`.
+const MAX_DIM: usize = 65_534;
+/// Largest number of cells a `J()`/`I()` matrix may hold.
+const MAX_CELLS: usize = 100_000_000;
 
 /// Evaluate a matrix expression.
 pub fn eval_matrix(ds: &DataSet, st: &Store, text: &str) -> Result<Matrix, String> {
@@ -521,18 +555,40 @@ impl CommandHandler for MatrixCmd {
                 let eq = find_top_level(rest, '=').ok_or_else(|| rc_err(198, "= expected"))?;
                 let name = rest[..eq].trim().to_string();
                 let c = ferrostat_parser::parser::parse_line(&format!("accum {}", &rest[eq + 1..])).map_err(|e| rc_err(198, e))?;
-                let vars = varlist::expand(ds, &c.main)?;
-                let mut mask = util::touse(ds, st, &c)?;
-                let w = util::weights(ds, st, &c, &mut mask, "fai")?;
-                util::markout(ds, &mut mask, &vars);
-                let rows = util::rows(&mask);
                 let dev = c.has_opt("deviations", 3);
                 let nocons = c.has_opt("noconstant", 3);
-                let cols: Vec<Vec<f64>> = vars.iter().map(|v| rows.iter().map(|&i| ds.get_var(v).unwrap().num(i)).collect()).collect();
+                let mut mask = util::touse(ds, st, &c)?;
+                let w = util::weights(ds, st, &c, &mut mask, "fai")?;
+                // factor variables (i.x, ibn.x, x#z, c.x##c.z) and
+                // time-series operators go through the shared design builder
+                let fv = c.main.contains('.') || c.main.contains('#');
+                let (rows, mut cols, mut names) = if fv {
+                    let spec = crate::est::DesignSpec { depvar: None, indep: &c.main, noconstant: true, weights: "fai", extra: Vec::new() };
+                    let d = crate::est::build(ds, st, &c, spec)?;
+                    // base levels enter the cross-product as zero columns
+                    let cols: Vec<Vec<f64>> = d
+                        .cols
+                        .iter()
+                        .zip(&d.is_base)
+                        .map(|(col, &b)| if b { vec![0.0; col.len()] } else { col.clone() })
+                        .collect();
+                    (d.rows.clone(), cols, d.names.clone())
+                } else {
+                    let vars = varlist::expand(ds, &c.main)?;
+                    util::markout(ds, &mut mask, &vars);
+                    let rows = util::rows(&mask);
+                    let mut cols = Vec::with_capacity(vars.len());
+                    for v in &vars {
+                        let var = ds.get_var(v).ok_or_else(|| rc_err(111, format!("variable {v} not found")))?;
+                        if var.var_type.is_string() {
+                            return Err(rc_err(109, "type mismatch"));
+                        }
+                        cols.push(rows.iter().map(|&i| var.num(i)).collect::<Vec<f64>>());
+                    }
+                    (rows, cols, vars)
+                };
                 let ww: Vec<f64> = rows.iter().map(|&i| w.as_ref().map_or(1.0, |w| w.w[i])).collect();
                 let sw: f64 = ww.iter().sum();
-                let mut cols = cols;
-                let mut names = vars.clone();
                 if dev {
                     for c in cols.iter_mut() {
                         let m = c.iter().zip(&ww).map(|(x, w)| x * w).sum::<f64>() / sw;
@@ -601,7 +657,8 @@ impl CommandHandler for MatrixCmd {
         let rhs = body[eq + 1..].trim();
         if let Some(open) = lhs.find('[') {
             let name = lhs[..open].trim();
-            let inner = lhs[open + 1..lhs.rfind(']').ok_or_else(|| rc_err(198, "] expected"))?].to_string();
+            let close = lhs.rfind(']').filter(|&c| c > open).ok_or_else(|| rc_err(198, "] expected"))?;
+            let inner = lhs[open + 1..close].to_string();
             let p = MParser { s: Vec::new(), pos: 0, ds, st };
             let m = st.matrices.get(name).ok_or_else(|| rc_err(111, format!("matrix {name} not found")))?.clone();
             let (r, c) = match find_top_level(&inner, ',') {

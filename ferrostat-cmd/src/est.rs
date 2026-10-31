@@ -372,6 +372,7 @@ pub fn build(ds: &DataSet, st: &Store, cmd: &Command, spec: DesignSpec) -> Resul
         notes: Vec::new(),
         cluster: None,
     };
+    crate::w8::display::empty_cells(st, &mut d);
     drop_collinear(&mut d);
     Ok(d)
 }
@@ -753,7 +754,7 @@ pub struct TableSpec<'a> {
 }
 
 fn cell(v: f64) -> String {
-    fmt_g(v, 8)
+    crate::w8::display::coef(v)
 }
 
 thread_local! {
@@ -901,7 +902,7 @@ pub fn coef_table(s: &TableSpec) -> Vec<String> {
     let mut last_header = String::new();
     let mut last_eq = String::new();
     for (j, name) in s.names.iter().enumerate() {
-        if s.is_base[j] {
+        if s.is_base[j] && !crate::w8::display::show_base() {
             continue;
         }
         let (eq, nm) = match name.split_once(':') {
@@ -945,8 +946,9 @@ pub fn coef_table(s: &TableSpec) -> Vec<String> {
         }
         let b = s.b[j];
         let se = s.v[(j, j)].max(0.0).sqrt();
-        if s.omitted[j] {
-            out.push(format!("{:>lw$} | {:>10}  (omitted)", ab(&label), if s.eform.is_some() { "1" } else { "0" }));
+        if s.omitted[j] || s.is_base[j] {
+            let what = if s.is_base[j] { "base" } else if crate::w8::display::is_empty_cell(&nm) { "empty" } else { "omitted" };
+            out.push(format!("{:>lw$} | {:>10}  ({what})", ab(&label), if s.eform.is_some() { "1" } else { "0" }));
             continue;
         }
         let t = b / se;
@@ -960,12 +962,12 @@ pub fn coef_table(s: &TableSpec) -> Vec<String> {
             (b, se, b - crit * se, b + crit * se)
         };
         out.push(format!(
-            "{:>lw$} | {:>10}  {:>9}  {:>7.2}   {:.3}    {:>9}   {:>9}",
+            "{:>lw$} | {:>10}  {:>9}  {}   {}    {:>9}   {:>9}",
             ab(&label),
             cell(est),
             cell(sev),
-            t,
-            p,
+            crate::w8::display::stat(t),
+            crate::w8::display::pvalue(p),
             cell(lo),
             cell(hi)
         ));

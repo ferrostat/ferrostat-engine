@@ -1,5 +1,6 @@
 //! Random-number generation: 64-bit Mersenne Twister (MT19937-64) with
-//! derived generators for the common distributions.
+//! derived generators for the common distributions. `set rng` also selects
+//! KISS32 or stream-split MT64 (`mt64s`); see `crate::w8::rngkind`.
 
 const NN: usize = 312;
 const MM: usize = 156;
@@ -13,17 +14,25 @@ pub struct Rng {
     mti: usize,
     pub seed: u64,
     spare_normal: Option<f64>,
+    /// generator kind and stream (`set rng`, `set rngstream`)
+    pub kind: crate::w8::rngkind::Kind,
+    pub stream: u64,
+    pub(crate) kiss: [u32; 4],
 }
 
 impl Rng {
     pub fn new(seed: u64) -> Self {
-        let mut r = Rng { mt: vec![0; NN], mti: NN + 1, seed, spare_normal: None };
+        let mut r = Rng { mt: vec![0; NN], mti: NN + 1, seed, spare_normal: None, kind: Default::default(), stream: 1, kiss: [0; 4] };
         r.reseed(seed);
         r
     }
 
     pub fn reseed(&mut self, seed: u64) {
         self.seed = seed;
+        if self.kind != crate::w8::rngkind::Kind::Mt64 {
+            crate::w8::rngkind::reseed(self, seed);
+            return;
+        }
         self.mt[0] = seed;
         for i in 1..NN {
             self.mt[i] = 6364136223846793005u64
@@ -35,6 +44,9 @@ impl Rng {
     }
 
     pub fn next_u64(&mut self) -> u64 {
+        if self.kind == crate::w8::rngkind::Kind::Kiss32 {
+            return crate::w8::rngkind::kiss_u64(self);
+        }
         if self.mti >= NN {
             for i in 0..NN {
                 let x = (self.mt[i] & UM) | (self.mt[(i + 1) % NN] & LM);
@@ -177,9 +189,15 @@ impl Rng {
         }
     }
 
-    /// State string for `c(rngstate)` (seed only; full state is internal).
+    /// State string for `c(rngstate)`: the full generator state, restored
+    /// by `set rngstate`.
     pub fn state(&self) -> String {
-        format!("X{:016x}{:04x}", self.seed, self.mti)
+        crate::w8::rngkind::state(self)
+    }
+
+    /// MT internals for `crate::w8::rngkind`.
+    pub(crate) fn mt_parts(&mut self) -> (&mut Vec<u64>, &mut usize, &mut Option<f64>) {
+        (&mut self.mt, &mut self.mti, &mut self.spare_normal)
     }
 }
 

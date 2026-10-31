@@ -627,10 +627,8 @@ fn delta_table(st: &mut Store, cmd: &Command, title: &str, labels: &[String], f:
 
 pub fn estat(_ds: &mut DataSet, st: &mut Store, sub: &str, cmd: &Command) -> Option<Result<String, String>> {
     let ecmd = st.e.macros.get("cmd").cloned().unwrap_or_default();
+    // other estimators (mswitch, ...) have their own estat transition etc.
     if ecmd != "dsge" && ecmd != "dsgenl" {
-        if matches!(sub, "policy" | "transition" | "steady") {
-            return Some(Err(rc_err(321, format!("estat {sub} is available only after dsge and dsgenl"))));
-        }
         return None;
     }
     Some(estat_dsge(st, sub, cmd))

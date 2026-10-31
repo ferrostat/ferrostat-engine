@@ -247,7 +247,11 @@ impl AdoInterpreter {
             *last_if = None;
             return match &s.body {
                 Some(b) => self.exec_block(b),
-                None => self.exec_text(&rest, None),
+                // single-line `else cmd`: macros expand as in the `if` branch
+                None => {
+                    let cmd = self.expand(&rest)?;
+                    self.exec_text(&cmd, None)
+                }
             };
         }
         if first == "if" {
@@ -658,10 +662,12 @@ impl AdoInterpreter {
         self.pending_r.push(if rclass { Some(Results::new()) } else { None });
         self.depth += 1;
         let saved_out = std::mem::take(&mut self.out);
+        let pdepth = crate::w8_prog::program_enter(self, args);
         let run = crate::progtools::program_start(self, &prog);
         let lines = script::logical_lines(&prog.body.join("\n"));
         let res = script::parse_block(&lines).and_then(|stmts| self.exec_block(&stmts));
         crate::progtools::program_end(self, &prog, run);
+        crate::w8_prog::program_exit(self, pdepth);
         let produced = std::mem::replace(&mut self.out, saved_out);
         self.depth -= 1;
         let pending = self.pending_r.pop().flatten();

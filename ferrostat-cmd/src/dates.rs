@@ -37,8 +37,25 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 
 const EPOCH_1960: i64 = -3653; // days_from_civil(1960,1,1)
 
+/// Supported calendar range: 01jan0100 .. 31dec9999 (as `%td` values).
+pub const TD_MIN: f64 = -679_350.0;
+pub const TD_MAX: f64 = 2_936_549.0;
+const YEAR_MIN: f64 = 100.0;
+const YEAR_MAX: f64 = 9999.0;
+
+/// True when `td` (after flooring) is a representable calendar date.
+fn td_in_range(td: f64) -> bool {
+    td.is_finite() && (TD_MIN..TD_MAX + 1.0).contains(&td)
+}
+
 pub fn mdy(m: f64, d: f64, y: f64) -> f64 {
-    if !(1.0..=12.0).contains(&m) || d < 1.0 || m.fract() != 0.0 || d.fract() != 0.0 || y.fract() != 0.0 {
+    if !(1.0..=12.0).contains(&m)
+        || !(1.0..=31.0).contains(&d)
+        || !(YEAR_MIN..=YEAR_MAX).contains(&y)
+        || m.fract() != 0.0
+        || d.fract() != 0.0
+        || y.fract() != 0.0
+    {
         return SYSMISS;
     }
     let (m, d, y) = (m as i64, d as i64, y as i64);
@@ -52,7 +69,7 @@ pub fn mdy(m: f64, d: f64, y: f64) -> f64 {
 
 /// (year, month, day) of a %td date.
 pub fn ymd(td: f64) -> Option<(i64, i64, i64)> {
-    if !td.is_finite() || td >= SYSMISS {
+    if !td.is_finite() || td >= SYSMISS || !td_in_range(td) {
         return None;
     }
     Some(civil_from_days(td.floor() as i64 + EPOCH_1960))
@@ -69,7 +86,7 @@ pub fn day(td: f64) -> f64 {
 }
 /// Day of week, 0 = Sunday.
 pub fn dow(td: f64) -> f64 {
-    if td >= SYSMISS { SYSMISS } else { ((td.floor() as i64 + 5).rem_euclid(7)) as f64 }
+    if !td_in_range(td) { SYSMISS } else { ((td.floor() as i64 + 5).rem_euclid(7)) as f64 }
 }
 pub fn doy(td: f64) -> f64 {
     ymd(td).map_or(SYSMISS, |(y, _, _)| td.floor() - mdy(1.0, 1.0, y as f64) + 1.0)
@@ -100,31 +117,32 @@ pub fn hofd(td: f64) -> f64 {
     ymd(td).map_or(SYSMISS, |(y, m, _)| ((y - 1960) * 2 + if m <= 6 { 0 } else { 1 }) as f64)
 }
 pub fn dofm(tm: f64) -> f64 {
-    if tm >= SYSMISS {
+    if !tm.is_finite() || tm.abs() > 1e9 {
         return SYSMISS;
     }
     let t = tm.floor() as i64;
     mdy((t.rem_euclid(12) + 1) as f64, 1.0, (1960 + t.div_euclid(12)) as f64)
 }
 pub fn dofq(tq: f64) -> f64 {
-    if tq >= SYSMISS {
+    if !tq.is_finite() || tq.abs() > 1e9 {
         return SYSMISS;
     }
     let t = tq.floor() as i64;
     mdy((t.rem_euclid(4) * 3 + 1) as f64, 1.0, (1960 + t.div_euclid(4)) as f64)
 }
 pub fn dofy(ty: f64) -> f64 {
-    if ty >= SYSMISS { SYSMISS } else { mdy(1.0, 1.0, ty.floor()) }
+    if !ty.is_finite() || ty >= SYSMISS { SYSMISS } else { mdy(1.0, 1.0, ty.floor()) }
 }
 pub fn dofw(tw: f64) -> f64 {
-    if tw >= SYSMISS {
+    if !tw.is_finite() || tw.abs() > 1e9 {
         return SYSMISS;
     }
     let t = tw.floor() as i64;
-    mdy(1.0, 1.0, (1960 + t.div_euclid(52)) as f64) + (t.rem_euclid(52) * 7) as f64
+    let jan1 = mdy(1.0, 1.0, (1960 + t.div_euclid(52)) as f64);
+    if jan1 >= SYSMISS { SYSMISS } else { jan1 + (t.rem_euclid(52) * 7) as f64 }
 }
 pub fn dofh(th: f64) -> f64 {
-    if th >= SYSMISS {
+    if !th.is_finite() || th.abs() > 1e9 {
         return SYSMISS;
     }
     let t = th.floor() as i64;
@@ -209,6 +227,9 @@ pub fn date(s: &str, mask: &str, topyear: Option<f64>) -> f64 {
     if toks.len() == 1 && toks[0].len() == 8 && toks[0].chars().all(|c| c.is_ascii_digit()) {
         let t = &toks[0];
         let order: Vec<char> = mask.chars().filter(|c| "DMY".contains(*c)).collect();
+        if order.iter().map(|c| if *c == 'Y' { 4 } else { 2 }).sum::<usize>() != 8 {
+            return SYSMISS;
+        }
         let mut parts = Vec::new();
         let mut pos = 0;
         for c in &order {
@@ -248,7 +269,7 @@ pub fn date(s: &str, mask: &str, topyear: Option<f64>) -> f64 {
                     if t.len() <= 2 {
                         if let Some(cn) = century {
                             cn * 100 + v
-                        } else if let Some(top) = topyear {
+                        } else if let Some(top) = topyear.filter(|t| t.is_finite() && t.abs() < 1e9) {
                             let top = top as i64;
                             let mut yy = (top / 100) * 100 + v;
                             if yy > top {
@@ -312,8 +333,10 @@ pub fn format_date(v: f64, fmt: &str) -> String {
     match kind {
         'd' => {
             if custom.is_empty() {
-                let (y, m, d) = ymd(v).unwrap();
+                let Some((y, m, d)) = ymd(v) else { return out_of_range(v) };
                 format!("{:02}{}{}", d, MONTHS[(m - 1) as usize], y)
+            } else if ymd(v).is_none() {
+                out_of_range(v)
             } else {
                 custom_date(v, 0.0, custom)
             }
@@ -321,7 +344,7 @@ pub fn format_date(v: f64, fmt: &str) -> String {
         'c' => {
             let td = dofc(v);
             if custom.is_empty() {
-                let (y, m, d) = ymd(td).unwrap();
+                let Some((y, m, d)) = ymd(td) else { return out_of_range(v) };
                 format!(
                     "{:02}{}{} {:02}:{:02}:{:02}",
                     d,
@@ -331,10 +354,13 @@ pub fn format_date(v: f64, fmt: &str) -> String {
                     mm(v) as i64,
                     ss(v).floor() as i64
                 )
+            } else if ymd(td).is_none() {
+                out_of_range(v)
             } else {
                 custom_date(td, v, custom)
             }
         }
+        'm' | 'q' | 'h' | 'w' | 'y' if !period_in_range(v, kind) => out_of_range(v),
         'm' => {
             let t = v.floor() as i64;
             format!("{}m{}", 1960 + t.div_euclid(12), t.rem_euclid(12) + 1)
@@ -355,6 +381,29 @@ pub fn format_date(v: f64, fmt: &str) -> String {
         'b' => crate::dm_w3::bcal::format_b(v, custom),
         _ => format!("{v}"),
     }
+}
+
+/// Display of a value that is not a representable date: a dot, so a bogus
+/// value never masquerades as a calendar date (and never panics).
+fn out_of_range(_v: f64) -> String {
+    ".".into()
+}
+
+/// Whether a period value (`%tm`, `%tq`, `%th`, `%tw`, `%ty`) falls within
+/// years 0100..9999.
+fn period_in_range(v: f64, kind: char) -> bool {
+    if !v.is_finite() {
+        return false;
+    }
+    let per_year = match kind {
+        'm' => 12.0,
+        'q' => 4.0,
+        'h' => 2.0,
+        'w' => 52.0,
+        _ => return (YEAR_MIN..YEAR_MAX + 1.0).contains(&v),
+    };
+    let t = v.floor();
+    t >= (YEAR_MIN - 1960.0) * per_year && t < (YEAR_MAX + 1.0 - 1960.0) * per_year
 }
 
 fn custom_date(td: f64, tc: f64, spec: &str) -> String {
@@ -442,7 +491,7 @@ fn month_anniv(b: (i64, i64, i64), k: i64, feb28: bool) -> f64 {
 
 pub fn birthday(b: f64, y: f64, feb28: bool) -> f64 {
     match ymd(b) {
-        Some((by, bm, bd)) if y.fract() == 0.0 && y as i64 >= by => anniv(y as i64, bm, bd, feb28),
+        Some((by, bm, bd)) if y.fract() == 0.0 && y <= YEAR_MAX && y as i64 >= by => anniv(y as i64, bm, bd, feb28),
         _ => SYSMISS,
     }
 }
@@ -565,7 +614,7 @@ pub fn adjacent_weekday(td: f64, step: i64) -> f64 {
 
 /// Nearest leap year strictly after/before year `y`.
 pub fn adjacent_leap_year(y: f64, step: i64) -> f64 {
-    if y >= SYSMISS || y.fract() != 0.0 {
+    if !y.is_finite() || y >= SYSMISS || y.fract() != 0.0 || y.abs() > 1e12 {
         return SYSMISS;
     }
     let mut k = y as i64 + step;

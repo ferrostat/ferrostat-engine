@@ -449,6 +449,8 @@ impl Engine {
         list.extend(ferrostat_cmd::w7b::handlers());
         list.extend(ferrostat_cmd::w7d::handlers());
         list.extend(ferrostat_cmd::w7c::handlers());
+        list.extend(ferrostat_cmd::w7e::handlers());
+        list.extend(ferrostat_cmd::w8::handlers());
         let mut handlers = HashMap::new();
         for (n, h) in list {
             handlers.insert(n, h);
@@ -529,6 +531,9 @@ impl Engine {
                 }
                 Ok(String::new())
             }
+            // inside a program called with nopreserve the caller keeps the copy
+            "preserve" if self.store.local("__nopreserve").is_some() => Ok(String::new()),
+            "restore" if self.store.local("__nopreserve").and_then(|d| d.parse::<usize>().ok()).is_some_and(|d| self.store.preserved.len() <= d) => Ok(String::new()),
             "preserve" => {
                 self.store.preserved.push(self.dataset.clone());
                 Ok(String::new())
@@ -554,6 +559,7 @@ impl Engine {
             _ => {
                 let h = self.handlers.get(verb.as_str()).ok_or_else(|| rc_err(199, format!("command {} is unrecognized", cmd.verb)))?;
                 ferrostat_cmd::est::take_table();
+                ferrostat_cmd::w8::display::sync(&self.store);
                 let before = self.store.e.macros.clone();
                 let res = h.execute(&mut self.dataset, &mut self.store, &cmd);
                 // new estimation results remember the command line (e(cmdline))
@@ -577,6 +583,9 @@ impl Engine {
         let what = w.next().unwrap_or("").to_lowercase();
         let val: Vec<&str> = w.collect();
         let v = val.join(" ");
+        if let Some(r) = ferrostat_cmd::w8::set(&mut self.store, &what, &v) {
+            return r;
+        }
         match what.as_str() {
             "obs" => {
                 let n: f64 = v.trim().parse().map_err(|_| rc_err(198, "invalid number of observations"))?;
@@ -636,7 +645,7 @@ impl Engine {
             | "locale_ui" | "charset" | "httpproxy" | "update_query" | "timeout1" | "timeout2" | "haverdir" | "odbcmgr" | "notifyuser"
             | "include_bitmap" | "doublebuffer" | "reventries" | "varkeyboard" | "showomitted" | "showemptycells" | "lstretch" | "coeftabresults"
             | "fvwrap" | "fvwrapon" | "collect_label" | "collect_style" | "table_style" | "dots" | "iterlog" | "python_exec" | "rng" | "rngstream"
-            | "parallel_transport" | "sortseed" | "sortmethod" | "matacache" | "matafavor" | "matastrict" | "matalnum" | "mataoptimize" | "matalibs" | "matamofirst" => {
+            | "parallel_transport" | "clevel" | "sortseed" | "sortmethod" | "matacache" | "matafavor" | "matastrict" | "matalnum" | "mataoptimize" | "matalibs" | "matamofirst" => {
                 let v = v.split(',').next().unwrap_or("").trim();
                 if !v.is_empty() {
                     self.store.settings.insert(what.clone(), v.to_string());

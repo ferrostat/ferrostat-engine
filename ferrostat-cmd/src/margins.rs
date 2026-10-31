@@ -1152,7 +1152,8 @@ impl CommandHandler for Margins {
                 label = "_cons".into();
             }
             last_block = Some(block_of[r]);
-            out.push(format!("{:>12} | {:>10}  {:>9}  {:>7.2}   {:.3}    {:>9}   {:>9}", abbrev(&label, 12), g9(est[r]), g9(se), t, p, g9(lo), g9(hi)));
+            let c = crate::w8::display::coef;
+            out.push(format!("{:>12} | {:>10}  {:>9}  {}   {}    {:>9}   {:>9}", abbrev(&label, 12), c(est[r]), c(se), crate::w8::display::stat(t), crate::w8::display::pvalue(p), c(lo), c(hi)));
         }
         out.push("-".repeat(78));
         if any_factor_dydx {

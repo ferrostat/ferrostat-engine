@@ -141,7 +141,7 @@ fn pattern_dates(pat: &str, fmt: &str, lo: i64, hi: i64) -> Result<Vec<i64>, Str
     if !pat.contains('*') {
         return Ok(vec![parse_date(pat, fmt)?]);
     }
-    let (y0, y1) = (dates::ymd(lo as f64).unwrap().0, dates::ymd(hi as f64).unwrap().0);
+    let (y0, y1) = (year_of(lo)?, year_of(hi)?);
     let mut out = Vec::new();
     for y in y0..=y1 {
         let d = dates::date(&pat.replace('*', &y.to_string()), &mask(fmt), None);
@@ -256,7 +256,7 @@ pub fn parse(name: &str, text: &str) -> Result<Calendar, String> {
                 let k: i64 = w[1].trim_start_matches('+').parse().map_err(|_| format!("{}: invalid number", w[1]))?;
                 let dw = dow_of(&w[2]).ok_or_else(|| format!("{}: invalid day of week", w[2]))?;
                 let months: Vec<i64> = if w[4] == "*" { (1..=12).collect() } else { vec![month_of(&w[4]).ok_or_else(|| format!("{}: invalid month", w[4]))?] };
-                let (y0, y1) = (dates::ymd(lo as f64).unwrap().0, dates::ymd(hi as f64).unwrap().0);
+                let (y0, y1) = (year_of(lo)?, year_of(hi)?);
                 for y in y0..=y1 {
                     for &m in &months {
                         let first = dates::mdy(m as f64, 1.0, y as f64) as i64;
@@ -313,8 +313,13 @@ fn fmt_td(d: i64) -> String {
     dates::format_date(d as f64, "%td")
 }
 
+/// Calendar year of a `%td` date, or an error for an unrepresentable date.
+fn year_of(d: i64) -> Result<i64, String> {
+    dates::ymd(d as f64).map(|x| x.0).ok_or_else(|| format!("{d}: date out of range"))
+}
+
 fn date_text(d: i64, fmt: &str) -> String {
-    let (y, m, dd) = dates::ymd(d as f64).unwrap();
+    let Some((y, m, dd)) = dates::ymd(d as f64) else { return d.to_string() };
     match fmt {
         "mdy" => format!("{}{:02}{y}", MON[(m - 1) as usize], dd),
         "dmy" => format!("{dd:02}{}{y}", MON[(m - 1) as usize]),

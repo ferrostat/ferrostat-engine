@@ -1,4 +1,6 @@
 pub mod collect;
+pub mod w8_table;
+pub mod w8_prog;
 pub mod docx;
 pub mod dyndoc;
 // dyngen blocks, putmata / getmata
@@ -26,6 +28,7 @@ pub mod basetools;
 pub mod wyoung;
 pub mod fracpoly;
 pub mod r_rest;
+pub mod bayes_prefix;
 pub mod mlprog;
 pub mod parallel;
 pub mod python;

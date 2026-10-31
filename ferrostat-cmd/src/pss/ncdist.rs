@@ -134,7 +134,8 @@ mod tests {
         // ncp>0: mean of noncentral chi2 is df+ncp; median check by consistency
         let p = ncchi2(1.0, 4.0, 3.841459);
         let z = 1.959964;
-        let exact = 1.0 - (dist::normal(z - 2.0) - dist::normal(-z - 2.0));
+        // CDF of a 1-df noncentral chi2 with ncp 4 = P(|Z + 2| < z)
+        let exact = dist::normal(z - 2.0) - dist::normal(-z - 2.0);
         assert!((p - exact).abs() < 1e-6);
         let f = ncf(1.0, 1e7, 4.0, 3.841459);
         assert!((f - exact).abs() < 1e-4);

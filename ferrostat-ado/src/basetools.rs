@@ -63,6 +63,7 @@ pub(crate) fn intercept(me: &mut AdoInterpreter, verb_raw: &str, rest: &str, _te
     if let Some(f) = crate::wyoung::intercept(me, &v, rest)? {
         return Ok(Some(f));
     }
+    if let Some(f) = crate::bayes_prefix::intercept(me, &v, rest)? { return Ok(Some(f)); }
     if let Some(f) = crate::r_rest::intercept(me, &v, rest)? {
         return Ok(Some(f));
     }
