@@ -48,6 +48,17 @@ fn get_macro(st: &Store, name: &str) -> String {
 
 /// Expand all macros in `text`.
 pub fn expand(text: &str, ds: &DataSet, st: &mut Store) -> Result<String, String> {
+    // `\`` and `\$` stand for a literal backtick and dollar sign (they delay
+    // expansion: `local exp "\`name'"` stores the reference itself)
+    const TICK: char = '\u{E000}';
+    const DOLLAR: char = '\u{E001}';
+    let escaped = text.contains("\\`") || text.contains("\\$");
+    let text = if escaped { text.replace("\\`", &TICK.to_string()).replace("\\$", &DOLLAR.to_string()) } else { text.to_string() };
+    let s = expand_inner(&text, ds, st)?;
+    Ok(if escaped { s.replace(TICK, "`").replace(DOLLAR, "$") } else { s })
+}
+
+fn expand_inner(text: &str, ds: &DataSet, st: &mut Store) -> Result<String, String> {
     let mut s = expand_globals(text, st);
     // innermost-first expansion of `...'
     let mut guard = 0;

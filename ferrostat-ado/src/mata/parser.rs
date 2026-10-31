@@ -591,7 +591,12 @@ impl<'a> Parser<'a> {
             if self.eat_op("[") {
                 let mut idx = Vec::new();
                 loop {
-                    idx.push(self.expr(false)?);
+                    // an empty subscript (`x[,1]`, `x[1,]`) selects all rows/columns
+                    if self.is_op(",") || self.is_op("]") {
+                        idx.push(Expr::Miss(0));
+                    } else {
+                        idx.push(self.expr(false)?);
+                    }
                     if !self.eat_op(",") {
                         break;
                     }

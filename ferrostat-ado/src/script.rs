@@ -29,9 +29,7 @@ fn strip_block_comments(text: &str) -> String {
                 i += 2;
                 continue;
             }
-            if c[i] == '\n' {
-                out.push('\n');
-            }
+            // a comment spanning lines joins them (`/*` ... `*/` continuation)
             i += 1;
             continue;
         }
@@ -96,7 +94,10 @@ pub fn logical_lines(text: &str) -> Vec<String> {
         if cur.is_empty() && trimmed.starts_with('*') {
             continue;
         }
-        if trimmed.to_lowercase().starts_with("#delimit") || trimmed.to_lowercase().starts_with("#d ") || trimmed.eq_ignore_ascii_case("#d;") {
+        // `#delimit` and its abbreviations (`#d`, `#delim`, ...)
+        let w0 = trimmed.split_whitespace().next().unwrap_or("").to_lowercase();
+        let w0 = w0.trim_end_matches(';');
+        if w0.len() >= 2 && "#delimit".starts_with(w0) {
             let arg = trimmed.split_whitespace().nth(1).unwrap_or(";");
             delimit = arg.starts_with(';') || trimmed.ends_with(';');
             if trimmed.ends_with("cr") {
@@ -195,7 +196,7 @@ pub fn is_program_header(line: &str) -> bool {
         return false;
     }
     let p = w[0].as_str();
-    if !(p == "program" || p == "pr" || p == "prog" || p == "progr" || p == "progra") {
+    if !(p == "program" || p == "pr" || p == "prog" || p == "progr" || p == "progra") || crate::w11_plugin::is_plugin_header(line) {
         return false;
     }
     match w.get(1).map(String::as_str) {
@@ -216,6 +217,8 @@ fn is_raw_block(line: &str) -> bool {
         || first == "input" && !line.contains(',') || first == "inp"
         || first == "mata" && !line.trim_end().ends_with(':') && (w.len() == 1 || w[1] == "{")
         || first == "mata:" && w.len() == 1
+        // `mata :` (blank before the colon) opens a block too
+        || first == "mata" && w.len() == 2 && w[1] == ":" && line.split_whitespace().count() == 2
         || first == "python" && w.len() == 1
         || first == "python:" && w.len() == 1
 }

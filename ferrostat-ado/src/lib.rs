@@ -35,8 +35,14 @@ pub mod python;
 pub mod lint;
 pub mod script;
 pub mod progtools;
+pub mod w10_net;
+pub mod w10_smcl;
 pub mod progfile;
 pub mod progclass;
+// viewer, editor, dialogs and window requests; compiled and Java plugins
+pub mod w11_ui;
+pub mod w11_plugin;
+pub mod w11_java;
 
 pub use interpreter::AdoInterpreter;
 pub mod session;

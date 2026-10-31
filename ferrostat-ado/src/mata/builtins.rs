@@ -228,6 +228,10 @@ pub fn format(fmt: &str, args: &[Val]) -> R<String> {
                     i += 1;
                 }
             } else if i < c.len() {
+                // `%20us`, `%-12uds`: Unicode (display) widths
+                if c[i] == 'u' && matches!(c.get(i + 1), Some('s') | Some('d')) {
+                    i += if c.get(i + 1) == Some(&'d') && c.get(i + 2) == Some(&'s') { 2 } else { 1 };
+                }
                 i += 1;
                 if i < c.len() && c[i] == 'c' && "fg".contains(c[i - 1]) {
                     i += 1;
@@ -911,7 +915,7 @@ pub fn call(ev: &mut Ev, name: &str, a: Vec<Val>, omitted: &[bool]) -> R<Option<
         "stritrim" => str_elementwise(a1()?, |s| s.split(' ').filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")),
         "strreverse" | "ustrreverse" => str_elementwise(a1()?, |s| s.chars().rev().collect()),
         "strproper" | "ustrproper" => host_function(ev, "proper", &a),
-        "substr" | "usubstr" => {
+        "substr" | "usubstr" | "udsubstr" => {
             nargs(&a, 2, 3, name)?;
             let b = sc(&a[1])?;
             let l = match a.get(2) {
@@ -999,6 +1003,8 @@ pub fn call(ev: &mut Ev, name: &str, a: Vec<Val>, omitted: &[bool]) -> R<Option<
         "printf" | "errprintf" => {
             let f = ss(a1()?)?;
             let s = format(&f, &a[1..])?;
+            // printf output is SMCL: render directives such as {txt}, {c |}
+            let s = if s.contains('{') { crate::progcmd::smcl_text(&s) } else { s };
             ev.print(&s);
             Ok(None)
         }
@@ -1008,7 +1014,7 @@ pub fn call(ev: &mut Ev, name: &str, a: Vec<Val>, omitted: &[bool]) -> R<Option<
             match v {
                 Val::S(m) => {
                     for s in &m.d {
-                        ev.print(&format!("{}\n", strip_smcl(s)));
+                        ev.print(&format!("{}\n", crate::progcmd::smcl_text(s)));
                     }
                 }
                 Val::R(m) => {
@@ -1063,31 +1069,6 @@ pub fn call(ev: &mut Ev, name: &str, a: Vec<Val>, omitted: &[bool]) -> R<Option<
     }
 }
 
-fn strip_smcl(s: &str) -> String {
-    let mut out = String::new();
-    let mut depth = 0;
-    let c: Vec<char> = s.chars().collect();
-    let mut i = 0;
-    while i < c.len() {
-        if c[i] == '{' {
-            // keep the text of `{bf:text}`-style directives
-            let close = c[i..].iter().position(|&x| x == '}').map(|p| p + i);
-            if let Some(cl) = close {
-                let inner: String = c[i + 1..cl].iter().collect();
-                if let Some((_, t)) = inner.split_once(':') {
-                    out.push_str(t);
-                }
-                i = cl + 1;
-                continue;
-            }
-            depth += 1;
-        }
-        out.push(c[i]);
-        i += 1;
-    }
-    let _ = depth;
-    out
-}
 
 fn rank(m: &Mat<f64>) -> usize {
     let mut a = m.clone();

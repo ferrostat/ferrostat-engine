@@ -91,12 +91,18 @@ pub fn command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &str) -> R
         "signestimationsample" => sign_sample(me, r)?,
         "checkestimationsample" => check_sample(me)?,
         "tabdisp" => tabdisp(me, r)?,
-        "window" | "win" | "wind" | "windo" => window(me, r)?,
+        "window" | "win" | "wind" | "windo" => match crate::w11_ui::window(me, r) {
+            Some(res) => res?,
+            None => window(me, r)?,
+        },
+        "view" => crate::w11_ui::view(me, r)?,
+        "doedit" => crate::w11_ui::doedit(me, r)?,
+        "db" => crate::w11_ui::db(me, r)?,
         "class" => return Err(rc_err(198, "class definitions must be followed by { ... }")),
         "classutil" => crate::progclass::classutil(me, r)?,
         "classexit" => crate::progclass::classexit(me, r)?,
-        "plugin" => return Err(rc_err(199, "plugin: compiled plugins are not supported by Ferrostat")),
-        "javacall" => return Err(rc_err(199, "javacall: Java plugins are not supported by Ferrostat")),
+        "plugin" => crate::w11_plugin::plugin(me, r)?,
+        "javacall" => crate::w11_java::javacall(me, r)?,
         _ => return Ok(None),
     }))
 }

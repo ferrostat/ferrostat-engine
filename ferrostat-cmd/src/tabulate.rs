@@ -141,6 +141,10 @@ fn one_way(ds: &mut DataSet, st: &mut Store, cmd: &Command, v: &str) -> Result<S
         st.matrices.insert(m.trim().to_string(), Matrix::col_vector(&cats.iter().map(|c| c.0.num()).collect::<Vec<_>>()));
     }
     st.r = r;
+    // `nofreq` on a one-way table leaves nothing to show
+    if cmd.has_opt("nofreq", 5) {
+        return Ok(String::new());
+    }
     Ok(out.join("\n"))
 }
 

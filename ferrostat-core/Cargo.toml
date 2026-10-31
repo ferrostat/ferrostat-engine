@@ -9,3 +9,8 @@ license.workspace = true
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
+
+# blocking HTTP(S) client for the network commands (pure-Rust TLS);
+# the browser build has no network layer
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }

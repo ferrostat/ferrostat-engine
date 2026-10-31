@@ -8,6 +8,8 @@ use egui_extras::{Column, TableBuilder};
 use ferrostat_ado::session::{EntryKind, Session};
 use ferrostat_ado::syntax::{self, Kind};
 
+mod w11_viewer;
+
 const GRAPH_W: u32 = 800;
 const GRAPH_H: u32 = 600;
 
@@ -29,11 +31,14 @@ struct App {
     /// hover readouts of the graph shown (screen positions and values)
     graph_hover: Option<ferrostat_cmd::hover::HoverMap>,
     scroll_to_end: bool,
+    /// viewers, dialogs and other interpreter requests (view, doedit, db, window)
+    w11: w11_viewer::W11Gui,
 }
 
 impl App {
     fn new() -> Self {
         let mut session = Session::new();
+        w11_viewer::attach(&mut session);
         session.transcript.push(ferrostat_ado::session::Entry {
             kind: EntryKind::Output,
             text: format!("Ferrostat {} — statistics engine\nType commands below, or use the File menu.", env!("CARGO_PKG_VERSION")),
@@ -54,6 +59,7 @@ impl App {
             graph_tex: None,
             graph_hover: None,
             scroll_to_end: true,
+            w11: Default::default(),
         }
     }
 
@@ -77,6 +83,7 @@ impl App {
             self.show_graph = false;
         }
         self.scroll_to_end = true;
+        w11_viewer::drain(self);
     }
 
     fn quoted(p: &std::path::Path) -> String {
@@ -140,6 +147,7 @@ impl App {
                 ui.checkbox(&mut self.show_editor, "Do-file editor");
                 ui.checkbox(&mut self.show_graph, "Graph");
             });
+            w11_viewer::user_menu(self, ui);
             ui.menu_button("Results", |ui| {
                 if ui.button("Clear results").clicked() {
                     self.session.transcript.clear();
@@ -509,6 +517,7 @@ impl eframe::App for App {
         if self.show_graph {
             self.graph_window(&ctx);
         }
+        w11_viewer::show(self, &ctx);
     }
 }
 

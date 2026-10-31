@@ -74,6 +74,8 @@ pub struct AdoInterpreter {
     pub(crate) timers: std::collections::BTreeMap<u32, (f64, u64, Option<i64>)>,
     /// Files, postfiles, sersets, classes, trace and by state (progtools).
     pub(crate) prog: crate::progtools::ProgState,
+    /// Front-end requests, user menu and plugins (view, doedit, db, window, plugin).
+    pub(crate) w11: crate::w11_ui::W11State,
 }
 
 impl Default for AdoInterpreter {
@@ -107,6 +109,7 @@ impl AdoInterpreter {
             mata: Default::default(),
             timers: Default::default(),
             prog: Default::default(),
+            w11: Default::default(),
         }
     }
 
@@ -754,6 +757,9 @@ impl AdoInterpreter {
     }
 
     fn dispatch_inner(&mut self, verb: &str, verb_raw: &str, rest: &str, full: &str) -> Result<String, String> {
+        if let Some(out) = crate::w10_net::pre_dispatch(self, verb, verb_raw, rest)? {
+            return Ok(out);
+        }
         if let Some(out) = crate::progcmd::interp_command(self, verb, rest, full)? {
             return Ok(out);
         }
@@ -769,6 +775,7 @@ impl AdoInterpreter {
             return self.dispatch_inner("list", "list", &line[4..], &line);
         }
         if verb == "egen" {
+            crate::w10_net::autoload_egen(self, rest);
             if let Some((prog, args)) = user_egen(rest, |p| self.engine.store.programs.contains_key(p)) {
                 return self.run_program(&prog, &args);
             }
@@ -781,6 +788,9 @@ impl AdoInterpreter {
             return self.engine.execute(&cmd);
         }
         // a command with a trailing native ado: allow programs with abbreviations disabled
+        if crate::w10_net::autoload(self, verb_raw)? {
+            return self.run_program(verb_raw, rest.trim());
+        }
         Err(rc_err(199, format!("command {verb_raw} is unrecognized")))
     }
 }

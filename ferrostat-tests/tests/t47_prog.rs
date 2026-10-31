@@ -70,8 +70,9 @@ fn sortpreserve_and_properties() {
     assert_eq!(s.run("display \"`p'\"").trim(), "svyb swml");
     s.run("local p : properties nonesuch");
     assert_eq!(s.run("display \"[`p']\"").trim(), "[]");
+    // plugin programs load pl.plugin (absent here)
     let e = s.try_run("program define pl, plugin\nend").unwrap_err();
-    assert!(e.contains("not supported"), "{e}");
+    assert!(e.contains("pl.plugin") && e.contains("r(601)"), "{e}");
 }
 
 #[test]
@@ -581,7 +582,7 @@ fn settings_window_pause_discard_plugins() {
     s.run("discard");
     assert_eq!(s.scalar("missing(e(N))"), 1.0);
     let e = s.try_run("plugin call myplug").unwrap_err();
-    assert!(e.contains("not supported") && e.contains("r(199)"), "{e}");
+    assert!(e.contains("not found") && e.contains("r(199)"), "{e}");
     let e = s.try_run("javacall a b").unwrap_err();
-    assert!(e.contains("not supported"), "{e}");
+    assert!(e.contains("jars()"), "{e}");
 }

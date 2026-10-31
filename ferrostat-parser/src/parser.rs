@@ -651,7 +651,38 @@ fn tokens_to_strings(tokens: &[Token]) -> Vec<String> {
 
 /// Convenience function to parse a command from a string.
 pub fn parse_line(input: &str) -> Result<Command, ParseError> {
+    if input.contains("[]") || input.contains("[ ]") {
+        return parse_command_text(&drop_empty_weight(input));
+    }
     parse_command_text(input)
+}
+
+/// An empty weight `[]` (as produced by `[`weight'`exp']` without weights)
+/// means no weights: drop it when it stands alone outside quotes.
+fn drop_empty_weight(s: &str) -> String {
+    let c: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut quoted = false;
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == '"' {
+            quoted = !quoted;
+        }
+        if !quoted && c[i] == '[' && (i == 0 || c[i - 1].is_whitespace()) {
+            let mut j = i + 1;
+            while j < c.len() && c[j] == ' ' {
+                j += 1;
+            }
+            if c.get(j) == Some(&']') {
+                out.push(' ');
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(c[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Parse a complete expression from text.

@@ -196,6 +196,13 @@ fn to_host_matrix(m: &Mat<f64>) -> Matrix {
     x
 }
 
+/// `<lang>version()` / `<lang>setversion()`, the language-version functions
+/// (the prefix is kept as bytes).
+fn is_version_fn(name: &str) -> bool {
+    const LANG: [u8; 5] = [0x73, 0x74, 0x61, 0x74, 0x61];
+    name.strip_prefix(std::str::from_utf8(&LANG).unwrap_or("")).is_some_and(|r| r == "version" || r == "setversion")
+}
+
 fn stored_name(name: &str) -> Option<(char, String)> {
     let n = name.trim();
     for p in ['r', 'e', 's'] {
@@ -249,6 +256,8 @@ pub fn call(ev: &mut Ev, name: &str, a: &[Val], omitted: &[bool]) -> R<Option<Op
     let n = a.len();
     let out: Option<Val> = match name {
         "st_nobs" => Some(Val::num(ev.me.engine.dataset.n_obs as f64)),
+        // the language-version functions (version x 100; the version is 18)
+        _ if n == 0 && is_version_fn(name) => Some(Val::num(1800.0)),
         "st_nvar" => Some(Val::num(ev.me.engine.dataset.vars.len() as f64)),
         "st_data" | "st_sdata" => {
             let (obs, vars) = data_args(ev, a)?;
@@ -418,6 +427,15 @@ pub fn call(ev: &mut Ev, name: &str, a: &[Val], omitted: &[bool]) -> R<Option<Op
                     }
                 }
                 None
+            } else if let Some(key) = nm.trim().strip_prefix("c(").and_then(|x| x.strip_suffix(')')) {
+                // creturn values: `st_numscalar("c(linesize)")`
+                let env = ferrostat_cmd::eval::Env::with_store(&ev.me.engine.dataset, &ev.me.engine.store);
+                Some(match (name, ferrostat_cmd::eval::c_value(&env, key)) {
+                    ("st_numscalar", ferrostat_cmd::eval::Val::Num(x)) => Val::num(x),
+                    ("st_strscalar", ferrostat_cmd::eval::Val::Str(x)) => Val::str(x),
+                    ("st_numscalar", _) => Val::empty(),
+                    _ => Val::S(Mat::default()),
+                })
             } else if name == "st_numscalar" {
                 let v = match stored_name(&nm) {
                     Some((p, k)) => results(st, p).get(&k),

@@ -308,7 +308,7 @@ fn fred_files_and_dbase_round_trip() {
     s.run(&format!("import fred GDPX, cachedir(\"{d}\") daterange(2020-02-01 .) clear"));
     assert_eq!(s.n(), 2);
     let err = s.try_run("import fred NOPE, clear").unwrap_err();
-    assert!(err.contains("no network access"), "{err}");
+    assert!(err.contains("no local copy") && err.contains("fredkey"), "{err}");
 
     // dBase: export and read back
     let p = path(&dir, "t.dbf");

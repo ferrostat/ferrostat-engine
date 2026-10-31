@@ -237,6 +237,11 @@ pub fn getmata(me: &mut AdoInterpreter, rest: &str) -> Result<String, String> {
         let rows = st.scalars.remove("__gm_r").unwrap_or(0.0) as usize;
         let cols = st.scalars.remove("__gm_c").unwrap_or(0.0) as usize;
         let ty = st.str_scalars.remove("__gm_t").unwrap_or_default();
+        // `stub*`: one variable per column, stub1, stub2, ...
+        let vars: Vec<String> = match vars.as_slice() {
+            [one] if one.ends_with('*') => (1..=cols).map(|k| format!("{}{k}", one.trim_end_matches('*'))).collect(),
+            _ => vars,
+        };
         if cols != vars.len() {
             return Err(rc_err(503, format!("{mat} has {cols} column{}, {} variable{} specified", if cols == 1 { "" } else { "s" }, vars.len(), if vars.len() == 1 { "" } else { "s" })));
         }
@@ -270,5 +275,7 @@ pub fn getmata(me: &mut AdoInterpreter, rest: &str) -> Result<String, String> {
         }
     }
     me.engine.store.data_changed = true;
-    Ok(format!("({} variable{} created or replaced: {})", made.len(), if made.len() == 1 { "" } else { "s" }, made.join(" ")))
+    // getmata is silent on success
+    let _ = made;
+    Ok(String::new())
 }

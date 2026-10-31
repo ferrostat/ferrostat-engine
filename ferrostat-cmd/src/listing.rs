@@ -180,6 +180,12 @@ impl CommandHandler for List {
             let labelled = labels && !var.value_label_name.is_empty();
             right.push(!(left_fmt || labelled));
         }
+        // `subvarname`: column headers from the characteristic [varname]
+        let names: Vec<String> = vars
+            .iter()
+            .map(|v| if cmd.has_opt("subvarname", 6) { ds.characteristics.get(v).and_then(|c| c.get("varname")).cloned().unwrap_or_else(|| v.clone()) } else { v.clone() })
+            .collect();
+        let vars = &names;
         let widths: Vec<usize> = vars
             .iter()
             .zip(&cols)

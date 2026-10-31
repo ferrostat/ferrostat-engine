@@ -1,6 +1,7 @@
 pub mod dataset;
 pub mod dta;
 pub mod missing;
+pub mod net;
 pub mod value_label;
 pub mod var;
 pub mod vfs;

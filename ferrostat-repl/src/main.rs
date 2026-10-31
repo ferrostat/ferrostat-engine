@@ -93,6 +93,7 @@ fn main() {
 
     println!("Ferrostat {} — statistics engine", env!("CARGO_PKG_VERSION"));
     println!("Type a command, or 'exit' to quit.");
+    ferrostat_ado::w11_ui::terminal_attach(&mut interp);
     let stdin = io::stdin();
     loop {
         print!("{}", if interp.is_pending() { "> " } else { ". " });
@@ -103,7 +104,10 @@ fn main() {
             Ok(_) => {}
         }
         let r = interp.run_line(line.trim_end_matches(['\n', '\r']));
-        if print_result(&mut interp, r) {
+        let done = print_result(&mut interp, r);
+        // editor / web browser requests (doedit, view browse)
+        ferrostat_ado::w11_ui::terminal_service(&mut interp).iter().filter(|m| !m.is_empty()).for_each(|m| println!("{m}"));
+        if done {
             break;
         }
     }

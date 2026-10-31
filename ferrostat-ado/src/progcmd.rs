@@ -39,7 +39,7 @@ const PACKAGE_COMMANDS: &[(&str, &[&str])] = &[
 const NOOP_PACKAGES: &[&str] = &["ietoolkit", "iefieldkit", "moremata", "egenmore"];
 
 /// Native commands providing `pkg`, or None when the package is unknown.
-fn package_commands(me: &AdoInterpreter, pkg: &str) -> Option<Vec<String>> {
+pub(crate) fn package_commands(me: &AdoInterpreter, pkg: &str) -> Option<Vec<String>> {
     if NOOP_PACKAGES.contains(&pkg) {
         return Some(Vec::new());
     }
@@ -48,33 +48,6 @@ fn package_commands(me: &AdoInterpreter, pkg: &str) -> Option<Vec<String>> {
         return (!have.is_empty()).then_some(have);
     }
     (NATIVE_PACKAGES.contains(&pkg) || me.engine.is_command(pkg)).then(|| vec![pkg.to_string()])
-}
-
-/// `ssc`, `net` and `ado`: packages are never downloaded; packages whose
-/// commands are built in are accepted.
-fn packages(me: &AdoInterpreter, verb: &str, r: &str) -> Result<String, String> {
-    let (body, _opts) = split_opts(r);
-    let w: Vec<String> = body.split_whitespace().map(|x| unquote(x).to_lowercase()).collect();
-    let sub = w.first().map(String::as_str).unwrap_or("");
-    let pkg = w.get(1).map(String::as_str).unwrap_or("");
-    let installing = matches!((verb, sub), ("ssc", "install") | ("ssc", "inst") | ("net", "install") | ("net", "get") | ("ssc", "describe") | ("ssc", "d") | ("ssc", "des") | ("net", "describe"));
-    if installing {
-        if pkg.is_empty() {
-            return Err(rc_err(198, "package name required"));
-        }
-        // net install takes a path or URL; the package is its last component
-        let pkg = pkg.rsplit(['/', '\\']).next().unwrap_or(pkg).trim_end_matches(".pkg");
-        return match package_commands(me, pkg) {
-            Some(cmds) if cmds.is_empty() => Ok(format!("package {pkg}: built-in features cover it; nothing to install")),
-            Some(cmds) => Ok(format!("package {pkg}: provided natively ({}); nothing to install", cmds.join(", "))),
-            None => Err(rc_err(601, format!("package {pkg} is not available; community packages are not downloaded"))),
-        };
-    }
-    Ok(match (verb, sub) {
-        ("ado", "dir") | ("ado", "") | ("ado", "describe") => "(no user-installed packages)".into(),
-        ("ssc", "update") | ("ado", "update") => "(all packages up to date)".into(),
-        _ => String::new(),
-    })
 }
 
 pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &str) -> Result<Option<String>, String> {
@@ -146,7 +119,7 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
                 me.temp_counter += 1;
                 let val = format!("__{:06}", me.temp_counter);
                 let val = if verb == "tempfile" {
-                    let p = std::path::PathBuf::from(vfs::temp_path(&format!("ferrostat_{}_{}", process_id(), val)));
+                    let p = std::path::PathBuf::from(vfs::temp_path(&format!("ferrostat_{}_{}.tmp", process_id(), val)));
                     me.tempfiles.push(p.clone());
                     p.display().to_string()
                 } else {
@@ -230,6 +203,8 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             let name = r.split(',').next().unwrap_or("").trim();
             if me.engine.is_command(name) || is_interp_command(name) {
                 format!("built-in command:  {name}")
+            } else if let Some(p) = crate::w10_net::which_ado(me, name) {
+                p
             } else if me.engine.store.programs.contains_key(name) {
                 format!("{name} (program in memory)")
             } else if NATIVE_PACKAGES.contains(&name) {
@@ -238,7 +213,8 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
                 return Err(rc_err(111, format!("command {name} not found as either built-in or ado-file")));
             }
         }
-        "ssc" | "net" | "ado" => packages(me, verb, r)?,
+        "ssc" | "net" | "ado" | "adoupdate" | "update" => crate::w10_net::command(me, verb, r)?,
+        "c_local" => crate::w10_net::c_local(me, r)?,
         "cf" => cf(me, r)?,
         "more" | "set_defaults" | "graph_set" => String::new(),
         "timer" => timer(me, r)?,
@@ -251,7 +227,8 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
             let _ = ms;
             String::new()
         }
-        "help" | "search" | "findit" => crate::w8_prog::search(me, verb, r),
+        "help" | "whelp" | "search" | "findit" => crate::w10_net::help_search(me, verb, r),
+        "set" if crate::w10_net::is_set_net(r) => crate::w10_net::set_net(me, r)?,
         "about" => crate::w8_prog::about(me),
         "error" => {
             let code: i32 = r.parse().map_err(|_| rc_err(198, "error #"))?;
@@ -426,6 +403,10 @@ pub const INTERP_COMMANDS: &[&str] = &[
     "putmata", "getmata", "dyngen",
     "docx2pdf", "docx2html", "docx2txt", "docx2markdown", "docx2epub", "pdf2txt",
     "signestimationsample", "checkestimationsample", "viewsource", "class", "classutil", "classexit", "unabcmd", "discard", "pause", "adopath", "tsunab", "fvunab",
+    // w10_net
+    "ssc", "net", "ado", "adoupdate", "update", "help", "whelp", "search", "findit", "c_local",
+    // w11_ui, w11_plugin, w11_java
+    "view", "doedit", "db", "plugin", "javacall", "window",
 ];
 
 fn is_interp_command(n: &str) -> bool {
@@ -582,7 +563,7 @@ pub fn smcl_text(s: &str) -> String {
                         "c" | "char" => out.push(match arg {
                             "|" => '|',
                             "-" => '-',
-                            "+" => '+',
+                            "+" | "TT" | "BT" | "LT" | "RT" | "TLC" | "TRC" | "BLC" | "BRC" => '+',
                             _ => ' ',
                         }),
                         "help" | "browse" | "cmd" | "hi" | "title" | "bf" | "it" | "ul" => {
@@ -1202,6 +1183,7 @@ fn program_cmd(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
             }
             Ok(out.join("\n"))
         }
+        _ if crate::w11_plugin::is_plugin_def(r) => crate::w11_plugin::define(me, r),
         _ => Err(rc_err(198, "program definitions must end with end")),
     }
 }
@@ -1492,7 +1474,19 @@ fn returns(me: &mut AdoInterpreter, verb: &str, r: &str) -> Result<String, Strin
             }
         }
         "local" | "loc" => {
-            let v = if let Some(e) = value_text.strip_prefix('=') { macros::eval_to_macro(&me.engine.dataset, &me.engine.store, e)? } else { unquote(value_text) };
+            // `return local name: extended_fcn` (e.g. `: copy local x`)
+            let (name, ext) = match name.strip_suffix(':') {
+                Some(n) => (n.to_string(), true),
+                None => (name.clone(), false),
+            };
+            let v = if ext {
+                let eng = &mut me.engine;
+                macros::expand(&format!("`:{value_text}'"), &eng.dataset, &mut eng.store)?
+            } else if let Some(e) = value_text.strip_prefix('=') {
+                macros::eval_to_macro(&me.engine.dataset, &me.engine.store, e)?
+            } else {
+                unquote(value_text)
+            };
             if target_is_pending {
                 me.pending_r.last_mut().unwrap().as_mut().unwrap().set_str(&name, v);
             } else {
@@ -1524,6 +1518,13 @@ fn results_mut(me: &mut AdoInterpreter, prefix: char) -> &mut Results {
     }
 }
 
+/// The `name=lclname` part of a syntax element such as `anything(name=x)`.
+fn syntax_name_opt(spec: &str) -> Option<String> {
+    let open = spec.find('(')?;
+    let args = spec[open + 1..].trim_end_matches(')');
+    args.split([' ', ',']).find_map(|a| a.trim().strip_prefix("name=").map(|n| n.trim().to_string())).filter(|n| !n.is_empty())
+}
+
 /// `syntax` for user programs.
 fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
     let zero = me.engine.store.local("0").cloned().unwrap_or_default();
@@ -1553,7 +1554,8 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
     let spec_main = spec_main.replace("[,", " ");
     // `=exp` / `=/exp`: the expression after the first top-level `=`
     let mut main_text = cmd.main.clone();
-    if let Some(k) = spec_main.find('=') {
+    // (only an `=exp` element, not the `=` of `varlist(default=none)`)
+    if let Some(k) = spec_main.find("=exp").or_else(|| spec_main.find("=/exp")) {
         let optional = spec_main[..k].trim_end().ends_with('[');
         let raw = spec_main[k + 1..].starts_with('/');
         match find_top_level(&cmd.main, '=') {
@@ -1596,7 +1598,8 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
                 }
                 return Err(rc_err(100, "varlist required"));
             }
-            let name = if lower.starts_with("newvar") { "varlist" } else { "varlist" };
+            let custom = syntax_name_opt(&inner);
+            let name = custom.as_deref().unwrap_or("varlist");
             let v = if lower.starts_with("new") { text.to_string() } else { varlist::expand(&me.engine.dataset, text)?.join(" ") };
             if lower.contains("numeric") && !lower.starts_with("new") {
                 for x in v.split_whitespace() {
@@ -1626,7 +1629,9 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
             if main_text.trim().is_empty() && !optional {
                 return Err(rc_err(100, format!("{n} required")));
             }
-            st.set_local(n, main_text.trim());
+            // `anything(name=values)` stores the text in local `values`
+            let target = syntax_name_opt(&inner).unwrap_or_else(|| n.to_string());
+            st.set_local(&target, main_text.trim());
         } else if lower == "if" {
             st.set_local("if", cmd.if_raw.as_ref().map(|i| format!("if {i}")).unwrap_or_default());
         } else if lower == "in" {
@@ -1705,7 +1710,7 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
                 let mut parts = argspec.split_whitespace();
                 let kind = parts.next().unwrap_or("").to_lowercase();
                 let default = parts.next().unwrap_or("").to_string();
-                let v = if matches!(kind.as_str(), "integer" | "real" | "cilevel") {
+                let v = if matches!(kind.as_str(), "int" | "integer" | "real" | "cilevel") {
                     if kind == "cilevel" { macro_number(st.level) } else { default }
                 } else {
                     String::new()

@@ -108,7 +108,9 @@ impl CommandHandler for Outfile {
         let comma = cmd.has_opt("comma", 2);
         let wide = cmd.has_opt("wide", 1);
         let labels = !cmd.has_opt("nolabel", 3);
-        let quote = !cmd.has_opt("noquote", 3);
+        // `runtogether`: values written without separators or quotes
+        let together = cmd.has_opt("runtogether", 3);
+        let quote = !cmd.has_opt("noquote", 3) && !together;
         let mut out = String::new();
         if cmd.has_opt("dictionary", 4) {
             out.push_str("infile dictionary {\n");
@@ -128,7 +130,10 @@ impl CommandHandler for Outfile {
             }
             count += 1;
             let cells: Vec<String> = vars.iter().map(|n| cell(ds, ds.get_var(n).unwrap(), i, labels, quote)).collect();
-            if comma {
+            if together {
+                out.push_str(&cells.concat());
+                out.push('\n');
+            } else if comma {
                 out.push_str(&cells.join(","));
                 out.push('\n');
             } else if wide {

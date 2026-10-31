@@ -9,6 +9,9 @@ mod imp {
     use std::io::{self, Write};
 
     pub fn read(path: &str) -> io::Result<Vec<u8>> {
+        if crate::net::is_url(path) {
+            return crate::net::fetch_url(path);
+        }
         std::fs::read(path)
     }
     pub fn write(path: &str, data: &[u8]) -> io::Result<()> {
@@ -30,6 +33,9 @@ mod imp {
         std::fs::create_dir_all(path)
     }
     pub fn copy(a: &str, b: &str) -> io::Result<()> {
+        if crate::net::is_url(a) {
+            return std::fs::write(b, crate::net::fetch_url(a)?);
+        }
         std::fs::copy(a, b).map(|_| ())
     }
     /// (name, is_dir) entries of a directory.
@@ -109,6 +115,9 @@ mod imp {
     }
 
     pub fn read(path: &str) -> io::Result<Vec<u8>> {
+        if crate::net::is_url(path) {
+            return crate::net::fetch_url(path);
+        }
         let p = norm(path);
         FILES.with(|f| f.borrow().get(&p).cloned()).ok_or_else(|| not_found(&p))
     }
@@ -209,6 +218,9 @@ mod imp {
 }
 
 pub use imp::*;
+
+/// Download an http:// or https:// address (see [`crate::net`]).
+pub use crate::net::fetch_url;
 
 pub fn read_to_string(path: &str) -> io::Result<String> {
     let b = read(path)?;

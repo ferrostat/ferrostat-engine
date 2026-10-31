@@ -190,6 +190,8 @@ pub mod w7c;
 pub mod w7e;
 pub mod w7f;
 pub mod w8;
+// viewer support (SMCL rendering) shared by view, help and the front ends
+pub mod w11;
 
 pub use commands::CommandHandler;
 pub use store::Store;

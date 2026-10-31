@@ -2,10 +2,11 @@
 //! web service (JSON `observations` responses or two-column CSV downloads),
 //! and `export dbase`.
 //!
-//! This build has no network layer, so the series are read from local files
-//! named `<series>.json` or `<series>.csv`, looked up in the directory given
-//! by `cachedir()` (or the global setting `set fredcache`), or in the current
-//! directory. Without such files the command fails with a clear message.
+//! Series are read from local files named `<series>.json` or `<series>.csv`,
+//! looked up in the directory given by `cachedir()` (or the global setting
+//! `set fredcache`), or in the current directory; when no local copy exists
+//! and an API key is set (`set fredkey`), they are downloaded from the FRED
+//! web service.
 
 use std::collections::BTreeMap;
 
@@ -17,6 +18,9 @@ use crate::dates;
 use crate::eval::rc_err;
 use crate::store::Store;
 use crate::util;
+
+/// FRED observations API (used when `set fredkey` is set and no local copy exists).
+const FRED_API: &str = "https://api.stlouisfed.org/fred/series/observations";
 
 /// (date as %td, value) pairs of one series.
 pub fn parse_series(text: &str) -> Result<Vec<(f64, f64)>, String> {
@@ -93,13 +97,26 @@ pub fn import(rest: &str, ds: &mut DataSet, st: &mut Store, cmd: &Command) -> Re
                 }
             })
             .collect();
-        let path = candidates.iter().find(|p| vfs::exists(p)).ok_or_else(|| {
-            rc_err(
-                631,
-                format!("series {s}: no network access in this build and no local copy found ({}); download the series and point cachedir() to its folder", candidates.join(", ")),
-            )
-        })?;
-        let text = vfs::read_to_string(path).map_err(|e| rc_err(603, format!("{path}: {e}")))?;
+        let (path, text) = match candidates.iter().find(|p| vfs::exists(p)) {
+            Some(path) => (path.clone(), vfs::read_to_string(path).map_err(|e| rc_err(603, format!("{path}: {e}")))?),
+            // online: the FRED web service, with the key from `set fredkey`
+            None => match st.settings.get("fredkey").filter(|k| !k.trim().is_empty()) {
+                Some(key) => {
+                    let url = format!("{FRED_API}?series_id={s}&api_key={}&file_type=json", key.trim());
+                    let body = vfs::fetch_url(&url).map_err(|e| {
+                        let shown = e.to_string().replace(key.trim(), "<key>");
+                        rc_err(if e.kind() == std::io::ErrorKind::NotFound { 601 } else { 631 }, format!("series {s}: {shown}"))
+                    })?;
+                    (format!("FRED series {s}"), String::from_utf8_lossy(&body).into_owned())
+                }
+                None => {
+                    return Err(rc_err(
+                        631,
+                        format!("series {s}: no local copy found ({}); set fredkey <key> to download it, or download the series and point cachedir() to its folder", candidates.join(", ")),
+                    ))
+                }
+            },
+        };
         let obs = parse_series(&text).map_err(|e| rc_err(610, format!("{path}: {e}")))?;
         for (d, x) in obs {
             if (range.0 < SYSMISS && d < range.0) || (range.1 < SYSMISS && d > range.1) {
