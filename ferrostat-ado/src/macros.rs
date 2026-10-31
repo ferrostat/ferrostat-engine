@@ -212,9 +212,22 @@ fn expand_globals(text: &str, st: &Store) -> String {
     while i < chars.len() {
         if chars[i] == '$' && (i == 0 || chars[i - 1] != '\\') {
             if chars.get(i + 1) == Some(&'{') {
-                if let Some(close) = chars[i + 2..].iter().position(|&c| c == '}') {
-                    let name: String = chars[i + 2..i + 2 + close].iter().collect();
-                    out.push_str(st.globals.get(&name).map(String::as_str).unwrap_or(""));
+                // matching `}` (names may nest: `${x${i}}`)
+                let mut depth = 0usize;
+                let close = chars[i + 2..].iter().position(|&c| {
+                    match c {
+                        '{' => depth += 1,
+                        '}' if depth == 0 => return true,
+                        '}' => depth -= 1,
+                        _ => {}
+                    }
+                    false
+                });
+                if let Some(close) = close {
+                    // globals inside the braces are expanded first: `${x$i}`
+                    let raw: String = chars[i + 2..i + 2 + close].iter().collect();
+                    let name = if raw.contains('$') { expand_globals(&raw, st) } else { raw };
+                    out.push_str(st.globals.get(name.trim()).map(String::as_str).unwrap_or(""));
                     i += close + 3;
                     continue;
                 }
@@ -606,6 +619,66 @@ pub fn numlist(text: &str) -> Result<Vec<f64>, String> {
         }
     }
     Ok(out)
+}
+
+/// One bound of a numlist range check: `>0`, `>=1`, `<100`, `<=99`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RangeCheck {
+    pub op: &'static str,
+    pub bound: f64,
+}
+
+impl RangeCheck {
+    pub fn parse(w: &str) -> Option<RangeCheck> {
+        let (op, rest) = [">=", "<=", ">", "<"].iter().find_map(|op| w.strip_prefix(op).map(|r| (*op, r)))?;
+        Some(RangeCheck { op, bound: rest.trim().parse().ok()? })
+    }
+
+    fn ok(&self, x: f64) -> bool {
+        match self.op {
+            ">" => x > self.bound,
+            ">=" => x >= self.bound,
+            "<" => x < self.bound,
+            _ => x <= self.bound,
+        }
+    }
+}
+
+/// Constraints on a numlist (from `syntax ... numlist(...)` or `numlist, ...`).
+#[derive(Debug, Clone, Default)]
+pub struct NumlistRules {
+    pub min: Option<usize>,
+    pub max: Option<usize>,
+    pub integer: bool,
+    pub ascending: bool,
+    pub descending: bool,
+    pub missing_ok: bool,
+    pub range: Vec<RangeCheck>,
+}
+
+/// Check an expanded numlist against `rules`, with the standard numlist
+/// return codes 122-127.
+pub fn check_numlist(vals: &[f64], rules: &NumlistRules) -> Result<(), String> {
+    if rules.min.is_some_and(|m| vals.len() < m) {
+        return Err(rc_err(122, "invalid numlist has too few elements"));
+    }
+    if rules.max.is_some_and(|m| vals.len() > m) {
+        return Err(rc_err(123, "invalid numlist has too many elements"));
+    }
+    let ordered = |up: bool| vals.windows(2).all(|w| if up { w[0] <= w[1] } else { w[0] >= w[1] });
+    if (rules.ascending && !ordered(true)) || (rules.descending && !ordered(false)) {
+        return Err(rc_err(124, "invalid numlist has elements out of order"));
+    }
+    if !rules.missing_ok && vals.iter().any(|v| ferrostat_core::missing::is_missing(*v)) {
+        return Err(rc_err(127, "invalid numlist has missing values"));
+    }
+    if vals.iter().any(|&v| !ferrostat_core::missing::is_missing(v) && !rules.range.iter().all(|c| c.ok(v))) {
+        return Err(rc_err(125, "invalid numlist has elements outside of allowed range"));
+    }
+    if rules.integer && vals.iter().any(|v| v.fract() != 0.0) {
+        return Err(rc_err(126, "invalid numlist has noninteger elements"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

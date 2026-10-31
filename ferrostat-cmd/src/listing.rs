@@ -391,20 +391,91 @@ impl CommandHandler for Codebook {
             out.push("-".repeat(79));
             out.push(format!("{:>20}: {}", "Type", if var.var_type.is_string() { format!("String ({})", var.var_type.type_str()) } else { format!("Numeric ({})", var.var_type.type_str()) }));
             let rows = util::rows(&mask);
-            let nmiss = rows.iter().filter(|&&i| var.data[i].is_missing() || (var.var_type.is_string() && var.str_at(i).is_empty())).count();
-            let mut uniq: Vec<String> = rows.iter().map(|&i| cell_text(ds, var, i, false)).collect();
-            uniq.sort();
-            uniq.dedup();
-            if !var.var_type.is_string() {
-                let x: Vec<f64> = rows.iter().map(|&i| var.num(i)).filter(|x| !is_missing(*x)).collect();
-                let lo = x.iter().cloned().fold(f64::INFINITY, f64::min);
-                let hi = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                out.push(format!("{:>20}: [{},{}]{:>20}units: 1", "Range", crate::format::fmt_g(lo, 9), crate::format::fmt_g(hi, 9), ""));
+            let is_str = var.var_type.is_string();
+            let nmiss = rows.iter().filter(|&&i| var.data[i].is_missing() || (is_str && var.str_at(i).is_empty())).count();
+            if is_str {
+                // unique values among the non-empty strings
+                let mut uniq: Vec<&str> = rows.iter().map(|&i| var.str_at(i)).filter(|s| !s.is_empty()).collect();
+                uniq.sort_unstable();
+                uniq.dedup();
+                out.push(String::new());
+                out.push(format!("{:>20}: {:<26}missing \"\": {}/{}", "Unique values", uniq.len(), nmiss, rows.len()));
+                if !uniq.is_empty() {
+                    out.push(String::new());
+                    let k = uniq.len();
+                    let picks: Vec<&str> = [k / 8, 3 * k / 8, 5 * k / 8, 7 * k / 8].iter().map(|&j| uniq[j.min(k - 1)]).collect();
+                    let mut picks = picks;
+                    picks.dedup();
+                    for (n, ex) in picks.iter().enumerate() {
+                        out.push(format!("{:>20}  \"{}\"", if n == 0 { "Examples:" } else { "" }, ex));
+                    }
+                }
+                continue;
             }
-            out.push(format!("{:>20}: {}{:>20}missing .: {}/{}", "Unique values", uniq.len(), "", nmiss, rows.len()));
+            // numeric: unique values exclude missing values
+            let mut x: Vec<f64> = rows.iter().map(|&i| var.num(i)).filter(|x| !is_missing(*x)).collect();
+            x.sort_by(f64::total_cmp);
+            let mut uniq = x.clone();
+            uniq.dedup();
+            out.push(String::new());
+            if !x.is_empty() {
+                let lo = x[0];
+                let hi = x[x.len() - 1];
+                out.push(format!("{:>20}: {:<26}units: {}", "Range", format!("[{},{}]", crate::format::fmt_g(lo, 9), crate::format::fmt_g(hi, 9)), crate::format::fmt_g(codebook_units(&uniq), 9)));
+            }
+            out.push(format!("{:>20}: {:<26}missing .: {}/{}", "Unique values", uniq.len(), nmiss, rows.len()));
+            if uniq.is_empty() {
+                continue;
+            }
+            let labels = ds.value_labels.get(&var.value_label_name);
+            if uniq.len() <= 9 {
+                // few distinct values: tabulate them
+                out.push(String::new());
+                out.push(format!("{:>20}: Freq.  {}", "Tabulation", if labels.is_some() { "Numeric  Label" } else { "Value" }));
+                for u in &uniq {
+                    let f = x.iter().filter(|&&v| v == *u).count();
+                    let lab = labels.and_then(|l| l.lookup(*u)).unwrap_or_default();
+                    if labels.is_some() {
+                        out.push(format!("{:>20}  {:>5}  {:>7}  {}", "", f, crate::format::fmt_g(*u, 9), lab));
+                    } else {
+                        out.push(format!("{:>20}  {:>5}  {}", "", f, crate::format::fmt_g(*u, 9)));
+                    }
+                }
+                if nmiss > 0 {
+                    out.push(format!("{:>20}  {:>5}  {}", "", nmiss, if labels.is_some() { "      .  " } else { "." }.trim_end()));
+                }
+            } else {
+                out.push(String::new());
+                out.push(format!("{:>20}: {}", "Mean", crate::format::fmt_g(util::mean(&x), 7)));
+                out.push(format!("{:>20}: {}", "Std. dev.", crate::format::fmt_g(util::variance(&x).sqrt(), 7)));
+                out.push(String::new());
+                let ps: Vec<String> = [10.0, 25.0, 50.0, 75.0, 90.0].iter().map(|&p| format!("{:>10}", crate::format::fmt_g(util::pctile_sorted(&x, p), 7))).collect();
+                out.push(format!("{:>20}: {:>9}{:>10}{:>10}{:>10}{:>10}", "Percentiles", "10%", "25%", "50%", "75%", "90%"));
+                out.push(format!("{:>21}{}", "", ps.join("")));
+            }
         }
         Ok(out.join("\n"))
     }
+}
+
+/// The `units` line of `codebook`: the largest power of ten (down to 1e-8)
+/// that divides every value.
+fn codebook_units(uniq: &[f64]) -> f64 {
+    let top = uniq.iter().map(|v| v.abs()).fold(0.0, f64::max);
+    if top == 0.0 {
+        return 1.0;
+    }
+    let mut u = 10f64.powi(top.log10().floor().min(8.0) as i32);
+    while u > 1e-8 {
+        if uniq.iter().all(|v| {
+            let q = v / u;
+            (q - q.round()).abs() < 1e-6
+        }) {
+            return u;
+        }
+        u /= 10.0;
+    }
+    u
 }
 
 pub struct Misstable;

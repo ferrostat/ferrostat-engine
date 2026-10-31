@@ -404,15 +404,15 @@ impl CommandHandler for Tostring {
             nv.format = format!("%{w}s");
             nv.data = strs.into_iter().map(Value::Str).collect();
             let nn = newnames.as_ref().map(|n| n[k].clone());
+            let old_type = var.var_type.type_str();
             replace_or_add(ds, v, nn.as_deref(), nv)?;
-            out.push(format!("{v} was {} now str{w}", var_type_name(ds, v)));
+            out.push(match &nn {
+                Some(n) => format!("{n} generated as str{w}"),
+                None => format!("{v} was {old_type} now str{w}"),
+            });
         }
         Ok(out.join("\n"))
     }
-}
-
-fn var_type_name(_ds: &DataSet, _v: &str) -> String {
-    "numeric".into()
 }
 
 /// Shortest decimal representation that round-trips (like `%17.0g`).

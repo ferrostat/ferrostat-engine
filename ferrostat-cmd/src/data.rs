@@ -297,7 +297,7 @@ impl CommandHandler for Replace {
             if newvals.iter().any(|&(_, x)| !fits(var.var_type, x)) {
                 let nt = promote(var.var_type, need);
                 if nt != var.var_type {
-                    promoted = Some(nt);
+                    promoted = Some((var.var_type, nt));
                     var.var_type = nt;
                 }
             }
@@ -309,9 +309,9 @@ impl CommandHandler for Replace {
                 }
                 var.data[i] = new;
             }
-            if let Some(nt) = promoted {
+            if let Some((old_type, nt)) = promoted {
                 st.data_changed = true;
-                return Ok(format!("variable {name} was {} now {}\n({} made)", "promoted", nt.type_str(), plural(changes, "real change")));
+                return Ok(format!("variable {name} was {} now {}\n({} made)", old_type.type_str(), nt.type_str(), plural(changes, "real change")));
             }
         }
         st.data_changed = true;

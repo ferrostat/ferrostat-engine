@@ -342,11 +342,26 @@ impl<'a> Env<'a> {
     }
 
     fn eval_index(&self, base: &Expr, idx: &Expr, row: usize) -> Result<Val, String> {
+        let st = self.st;
+        // `r(table)[4,2]`, `e(b)[1,1]`: an element of a stored-result matrix
+        if let Expr::Call(class, args) = base {
+            let class = class.to_lowercase();
+            if matches!(class.as_str(), "r" | "e" | "s") && args.len() == 1 {
+                let key = arg_name(args.first());
+                let st = st.ok_or_else(|| rc_err(111, format!("{class}({key}) not found")))?;
+                let res = match class.as_str() {
+                    "r" => &st.r,
+                    "e" => &st.e,
+                    _ => &st.s,
+                };
+                let m = res.matrices.get(&key).ok_or_else(|| rc_err(111, format!("matrix {class}({key}) not found")))?;
+                return self.matrix_element(m, idx, row);
+            }
+        }
         let name = match base {
             Expr::Var(n) => n.as_str(),
             _ => return Err(rc_err(198, "invalid subscript")),
         };
-        let st = self.st;
         if name == "_b" || name == "_coef" || name == "_se" {
             let coef = coef_name(idx);
             let st = st.ok_or_else(|| rc_err(301, "last estimates not found"))?;
@@ -372,20 +387,28 @@ impl<'a> Env<'a> {
             return Ok(self.cell(vi, j));
         }
         if let Some(m) = st.and_then(|s| s.matrices.get(name)) {
-            let (i, j) = match idx {
-                Expr::String(s) => {
-                    let (a, b) = s.split_once(',').unwrap_or((s, "1"));
-                    let ev = |t: &str| -> Result<f64, String> {
-                        let e = ferrostat_parser::parser::parse_expression(t).map_err(|e| e.to_string())?;
-                        self.eval(&e, row)?.num()
-                    };
-                    (ev(a)?, ev(b)?)
-                }
-                other => (self.eval(other, row)?.num()?, 1.0),
-            };
-            return Ok(Val::Num(m.el(i as usize - 1, j as usize - 1)));
+            return self.matrix_element(m, idx, row);
         }
         Err(rc_err(111, format!("{name} not found")))
+    }
+
+    /// `M[i,j]` (or `M[i]`) for a matrix; out-of-range subscripts are an error.
+    fn matrix_element(&self, m: &crate::matrix::Matrix, idx: &Expr, row: usize) -> Result<Val, String> {
+        let (i, j) = match idx {
+            Expr::String(s) => {
+                let (a, b) = s.split_once(',').unwrap_or((s, "1"));
+                let ev = |t: &str| -> Result<f64, String> {
+                    let e = ferrostat_parser::parser::parse_expression(t).map_err(|e| e.to_string())?;
+                    self.eval(&e, row)?.num()
+                };
+                (ev(a)?, ev(b)?)
+            }
+            other => (self.eval(other, row)?.num()?, 1.0),
+        };
+        if !(i >= 1.0 && j >= 1.0) {
+            return Ok(Val::Num(SYSMISS));
+        }
+        Ok(Val::Num(m.el(i as usize - 1, j as usize - 1)))
     }
 
     fn missing_like(&self, vi: usize) -> Val {

@@ -137,10 +137,28 @@ pub fn interp_command(me: &mut AdoInterpreter, verb: &str, rest: &str, full: &st
         "numlist" => {
             let (text, opts) = split_opts(r);
             let vals = macros::numlist(&unquote(&text))?;
+            let mut rules = macros::NumlistRules::default();
+            for (o, a) in &opts {
+                let a = a.as_deref().unwrap_or("").trim();
+                match o.as_str() {
+                    "min" => rules.min = a.parse().ok(),
+                    "max" => rules.max = a.parse().ok(),
+                    "int" | "integer" => rules.integer = true,
+                    "a" | "ascending" => rules.ascending = true,
+                    "d" | "descending" => rules.descending = true,
+                    "missingokay" => rules.missing_ok = true,
+                    "range" => rules.range.extend(a.split_whitespace().filter_map(macros::RangeCheck::parse)),
+                    _ => {}
+                }
+            }
+            macros::check_numlist(&vals, &rules)?;
+            let mut vals = vals;
+            if opts.iter().any(|(o, _)| o == "sort") {
+                vals.sort_by(|a, b| a.total_cmp(b));
+            }
             let mut res = Results::new();
             res.set_str("numlist", vals.iter().map(|v| macro_number(*v)).collect::<Vec<_>>().join(" "));
             me.engine.store.r = res;
-            let _ = opts;
             String::new()
         }
         "do" | "run" | "include" => {
@@ -474,10 +492,11 @@ fn define_macro(me: &mut AdoInterpreter, global: bool, r: &str) -> Result<(), St
         macros::macro_function(f.trim(), &eng.dataset, &mut eng.store)?
     } else {
         let t = rest.trim();
-        // strip one level of outer quotes when they enclose the whole text
-        if t.starts_with("`\"") && t.ends_with("\"'") {
+        // a leading and a trailing quote are removed, even when they do not
+        // pair up: `local x "a" "b"` stores `a" "b`
+        if t.len() >= 4 && t.starts_with("`\"") && t.ends_with("\"'") {
             t[2..t.len() - 2].to_string()
-        } else if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') && split_top_level_words(t).len() == 1 {
+        } else if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
             t[1..t.len() - 1].to_string()
         } else {
             t.to_string()
@@ -597,6 +616,8 @@ pub fn display(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
     let mut fmt: Option<String> = None;
     let mut dup = 1usize;
     let mut newline_end = true;
+    // after `_asis`, strings are written without SMCL interpretation
+    let mut asis = false;
     while !s.is_empty() {
         s = s.trim_start().to_string();
         if s.is_empty() {
@@ -606,14 +627,16 @@ pub fn display(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
         // compound or simple string
         if s.starts_with("`\"") {
             let end = macros::compound_end(&s).ok_or_else(|| rc_err(198, "unmatched quote"))?;
-            out.push_str(&smcl_text(&s[2..end]).repeat(dup));
+            let text = if asis { s[2..end].to_string() } else { smcl_text(&s[2..end]) };
+            out.push_str(&text.repeat(dup));
             dup = 1;
             s = s[end + 2..].to_string();
             continue;
         }
         if s.starts_with('"') {
             let end = s[1..].find('"').map(|i| i + 1).ok_or_else(|| rc_err(198, "unmatched quote"))?;
-            out.push_str(&smcl_text(&s[1..end]).repeat(dup));
+            let text = if asis { s[1..end].to_string() } else { smcl_text(&s[1..end]) };
+            out.push_str(&text.repeat(dup));
             dup = 1;
             s = s[end + 1..].to_string();
             continue;
@@ -678,6 +701,10 @@ pub fn display(me: &mut AdoInterpreter, r: &str) -> Result<String, String> {
                     true
                 }
                 "_request" => true,
+                "_asis" => {
+                    asis = true;
+                    true
+                }
                 _ => false,
             };
             if handled {
@@ -1547,6 +1574,8 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
         }
         found
     };
+    // options declared outside `[ ]` are required
+    let opts_depth = comma.map_or(0, |i| bracket_depth(&spec[..i]));
     let (spec_main, spec_opts) = match comma {
         Some(i) => (spec[..i].trim_end().trim_end_matches('[').to_string(), spec[i + 1..].to_string()),
         None => (spec.to_string(), String::new()),
@@ -1632,8 +1661,13 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
             // `anything(name=values)` stores the text in local `values`
             let target = syntax_name_opt(&inner).unwrap_or_else(|| n.to_string());
             st.set_local(&target, main_text.trim());
-        } else if lower == "if" {
-            st.set_local("if", cmd.if_raw.as_ref().map(|i| format!("if {i}")).unwrap_or_default());
+        } else if lower == "if" || lower == "if/" {
+            // `[if/]` stores the expression without the leading `if`
+            let raw = lower == "if/";
+            if cmd.if_raw.is_none() && !optional {
+                return Err(rc_err(100, "if required"));
+            }
+            st.set_local("if", cmd.if_raw.as_ref().map(|i| if raw { i.trim().to_string() } else { format!("if {i}") }).unwrap_or_default());
         } else if lower == "in" {
             let text = cmd.in_range.as_ref().map(|r| match r {
                 ferrostat_parser::InRange::Single(a) => format!("in {a}"),
@@ -1667,7 +1701,7 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
     // options
     let given = cmd.opts.clone();
     let mut used = vec![false; given.len()];
-    for item in split_top_level_words(&spec_opts.replace(['[', ']'], " ")) {
+    for (item, required) in option_items(&spec_opts, opts_depth) {
         if item == "*" {
             continue;
         }
@@ -1677,7 +1711,7 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
         };
         let neg = decl.starts_with("no") && decl.chars().nth(2).map_or(false, |c| c.is_uppercase());
         let full = decl.to_lowercase();
-        let min = decl.chars().take_while(|c| c.is_uppercase() || (neg && decl.starts_with("no") && false)).count();
+        let min = decl.chars().take_while(|c| c.is_uppercase()).count();
         let min = if neg { 2 + decl[2..].chars().take_while(|c| c.is_uppercase()).count() } else if min == 0 { full.len() } else { min };
         let local_name = if neg { full[2..].to_string() } else { full.clone() };
         let hit = given.iter().enumerate().find(|(_, (n, _))| {
@@ -1689,23 +1723,15 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
             (Some((i, (_, a))), Some(argspec)) => {
                 used[i] = true;
                 let a = a.clone().unwrap_or_default();
-                let kind = argspec.split_whitespace().next().unwrap_or("string").to_lowercase();
-                let val = match kind.as_str() {
-                    "varlist" | "varname" => varlist::expand(&me.engine.dataset, &a)?.join(" "),
-                    "numlist" => macros::numlist(&a)?.into_iter().map(macro_number).collect::<Vec<_>>().join(" "),
-                    _ => a.trim().to_string(),
-                };
-                let st = &mut me.engine.store;
-                if argspec.to_lowercase().contains("passthru") {
-                    st.set_local(&local_name, format!("{}({})", local_name, a));
-                } else {
-                    st.set_local(&local_name, val);
-                }
+                let val = syntax_option_value(me, &local_name, &argspec, &a)?;
+                me.engine.store.set_local(&local_name, val);
             }
             (Some((i, _)), None) => {
                 used[i] = true;
                 st.set_local(&local_name, if neg { format!("no{local_name}") } else { local_name.clone() });
             }
+            (None, Some(_)) if required => return Err(rc_err(198, format!("option {local_name}() required"))),
+            (None, None) if required => return Err(rc_err(198, format!("option {full} required"))),
             (None, Some(argspec)) => {
                 let mut parts = argspec.split_whitespace();
                 let kind = parts.next().unwrap_or("").to_lowercase();
@@ -1755,6 +1781,183 @@ fn syntax(me: &mut AdoInterpreter, spec: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Number of `[` left open in `s` (outside parentheses and quotes).
+fn bracket_depth(s: &str) -> i32 {
+    let mut depth = 0i32;
+    let mut paren = 0i32;
+    let mut quoted = false;
+    for c in s.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' if !quoted => paren += 1,
+            ')' if !quoted => paren -= 1,
+            '[' if !quoted && paren == 0 => depth += 1,
+            ']' if !quoted && paren == 0 => depth -= 1,
+            _ => {}
+        }
+    }
+    depth.max(0)
+}
+
+/// The option declarations of a `syntax` specification, each with whether it
+/// is required (declared outside `[ ]`). `depth` is the bracket depth at the
+/// comma that starts the option list.
+fn option_items(spec_opts: &str, depth: i32) -> Vec<(String, bool)> {
+    let mut depth = depth;
+    let mut paren = 0i32;
+    let mut quoted = false;
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut cur_required = depth <= 0;
+    let mut flush = |cur: &mut String, req: bool, out: &mut Vec<(String, bool)>| {
+        if !cur.trim().is_empty() {
+            out.push((cur.trim().to_string(), req));
+        }
+        cur.clear();
+    };
+    for c in spec_opts.chars() {
+        if quoted {
+            cur.push(c);
+            if c == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                quoted = true;
+                cur.push(c);
+            }
+            '(' => {
+                paren += 1;
+                cur.push(c);
+            }
+            ')' => {
+                paren -= 1;
+                cur.push(c);
+            }
+            '[' | ']' if paren == 0 => {
+                flush(&mut cur, cur_required, &mut out);
+                depth += if c == '[' { 1 } else { -1 };
+            }
+            c if c.is_whitespace() && paren == 0 => flush(&mut cur, cur_required, &mut out),
+            c => {
+                if cur.is_empty() {
+                    cur_required = depth <= 0;
+                }
+                cur.push(c);
+            }
+        }
+    }
+    flush(&mut cur, cur_required, &mut out);
+    out
+}
+
+/// The value `syntax` stores for an option given as `name(arg)` and declared
+/// with argument type `argspec` (`integer 5`, `numlist >0 max=1`, `string`, ...).
+fn syntax_option_value(me: &mut AdoInterpreter, name: &str, argspec: &str, a: &str) -> Result<String, String> {
+    let lspec = argspec.to_lowercase();
+    let kind = lspec.split_whitespace().next().unwrap_or("string").to_string();
+    let bad = || rc_err(198, format!("option {name}() incorrectly specified"));
+    let modifier = |key: &str| -> Option<usize> {
+        lspec.split_whitespace().find_map(|w| w.strip_prefix(key)).and_then(|v| v.parse().ok())
+    };
+    Ok(match kind.as_str() {
+        "int" | "integer" => {
+            let t = a.trim();
+            let v: f64 = t.parse().map_err(|_| bad())?;
+            if v.fract() != 0.0 || !v.is_finite() {
+                return Err(bad());
+            }
+            macro_number(v)
+        }
+        "real" => {
+            let t = a.trim();
+            let v: f64 = t.parse().map_err(|_| bad())?;
+            macro_number(v)
+        }
+        "numlist" => {
+            let vals = macros::numlist(a)?;
+            macros::check_numlist(&vals, &numlist_rules(&lspec))?;
+            vals.into_iter().map(macro_number).collect::<Vec<_>>().join(" ")
+        }
+        "varlist" | "varname" => {
+            let v = varlist::expand(&me.engine.dataset, a)?;
+            let max = if kind == "varname" { Some(1) } else { modifier("max=") };
+            if max.is_some_and(|m| v.len() > m) {
+                return Err(rc_err(103, "too many variables specified"));
+            }
+            if modifier("min=").is_some_and(|m| v.len() < m) {
+                return Err(rc_err(102, "too few variables specified"));
+            }
+            let want_num = lspec.split_whitespace().any(|w| w == "numeric");
+            let want_str = lspec.split_whitespace().any(|w| w == "string");
+            for x in &v {
+                if let Some(var) = me.engine.dataset.get_var(util::base_name(x)) {
+                    let is_str = var.var_type.is_string();
+                    if (want_num && is_str) || (want_str && !is_str) {
+                        return Err(rc_err(109, "type mismatch"));
+                    }
+                }
+            }
+            v.join(" ")
+        }
+        "name" | "namelist" => {
+            let words: Vec<&str> = a.split_whitespace().collect();
+            let max = if kind == "name" { Some(modifier("max=").unwrap_or(1)) } else { modifier("max=") };
+            if max.is_some_and(|m| words.len() > m) || modifier("min=").is_some_and(|m| words.len() < m) {
+                return Err(bad());
+            }
+            let valid = |w: &str| {
+                let mut c = w.chars();
+                c.next().is_some_and(|f| f.is_alphabetic() || f == '_') && c.all(|x| x.is_alphanumeric() || x == '_')
+            };
+            if !words.iter().all(|w| valid(w)) {
+                return Err(rc_err(198, format!("{} invalid name", words.iter().find(|w| !valid(w)).unwrap_or(&""))));
+            }
+            words.join(" ")
+        }
+        _ if lspec.split_whitespace().any(|w| w == "passthru") => format!("{name}({a})"),
+        // `string asis` keeps quotes and blanks as typed
+        _ if lspec.split_whitespace().any(|w| w == "asis") => a.to_string(),
+        _ => strip_outer_quotes(a.trim()).to_string(),
+    })
+}
+
+/// `"text"` or `` `"text"' `` -> `text`; anything else unchanged.
+fn strip_outer_quotes(s: &str) -> &str {
+    if let Some(inner) = s.strip_prefix("`\"").and_then(|x| x.strip_suffix("\"'")) {
+        return inner;
+    }
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') && !s[1..s.len() - 1].contains('"') {
+        return &s[1..s.len() - 1];
+    }
+    s
+}
+
+/// The checks a `numlist` element of `syntax` asks for (`min=3 >10 integer`).
+fn numlist_rules(lspec: &str) -> macros::NumlistRules {
+    let mut r = macros::NumlistRules::default();
+    for w in lspec.split_whitespace().skip(1) {
+        if let Some(v) = w.strip_prefix("min=") {
+            r.min = v.parse().ok();
+        } else if let Some(v) = w.strip_prefix("max=") {
+            r.max = v.parse().ok();
+        } else if w == "integer" {
+            r.integer = true;
+        } else if w == "ascending" {
+            r.ascending = true;
+        } else if w == "descending" {
+            r.descending = true;
+        } else if w == "missingokay" {
+            r.missing_ok = true;
+        } else if let Some(c) = macros::RangeCheck::parse(w) {
+            r.range.push(c);
+        }
+    }
+    r
+}
+
 fn marksample(me: &mut AdoInterpreter, r: &str) -> Result<(), String> {
     let (main, opts) = split_opts(r);
     let name = main.trim().to_string();
@@ -1765,7 +1968,10 @@ fn marksample(me: &mut AdoInterpreter, r: &str) -> Result<(), String> {
     }
     me.engine.store.set_local(&name, var.clone());
     let st = &me.engine.store;
-    let text = format!("__m {} {}", st.local("if").cloned().unwrap_or_default(), st.local("in").cloned().unwrap_or_default());
+    // after `syntax ... [if/]` the local holds the bare expression
+    let if_text = st.local("if").cloned().unwrap_or_default();
+    let if_text = if if_text.trim().is_empty() || if_text.trim_start().starts_with("if ") { if_text } else { format!("if {if_text}") };
+    let text = format!("__m {} {}", if_text, st.local("in").cloned().unwrap_or_default());
     let cmd = parse_line(&text).map_err(|e| rc_err(198, e.message))?;
     let mut mask = util::touse(&me.engine.dataset, &me.engine.store, &cmd)?;
     if !opts.iter().any(|(n, _)| n.starts_with("nov")) {

@@ -194,6 +194,8 @@ pub struct Graph {
     /// Choropleth polygons (spmap) and their legend.
     pub polygons: Vec<MapPolygon>,
     pub map_legend: Vec<(String, (u8, u8, u8))>,
+    /// Heading above the map legend (spmap `legtitle()`).
+    pub map_legend_title: String,
     /// Sub-graphs laid out in a grid (graph combine).
     pub children: Vec<Graph>,
     pub cols: usize,
@@ -3006,7 +3008,11 @@ where
         chart.draw_series(std::iter::once(Polygon::new(p.points.clone(), col.filled()))).map_err(e)?;
         chart.draw_series(std::iter::once(PathElement::new(p.points.clone(), BLACK.stroke_width(1)))).map_err(e)?;
     }
-    // legend in the bottom-left corner
+    // legend in the bottom-left corner, under its title
+    if !g.map_legend_title.is_empty() && !g.map_legend.is_empty() {
+        let y = (h as i32) - 20 - 18 * (g.map_legend.len() + 1) as i32;
+        root.draw(&Text::new(g.map_legend_title.clone(), (10, y), ("sans-serif", 12))).map_err(e)?;
+    }
     for (k, (label, c)) in g.map_legend.iter().enumerate() {
         let y = (h as i32) - 20 - 18 * (g.map_legend.len() - k) as i32;
         let col = RGBColor(c.0, c.1, c.2);

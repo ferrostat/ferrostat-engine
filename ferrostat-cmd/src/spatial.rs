@@ -421,6 +421,29 @@ pub fn color_rgb(name: &str) -> (u8, u8, u8) {
     }
 }
 
+/// Nine-class sequential palettes (ColorBrewer); fewer classes take evenly
+/// spaced entries.
+const PALETTES: &[(&str, [u32; 9])] = &[
+    ("blues", [0xf7fbff, 0xdeebf7, 0xc6dbef, 0x9ecae1, 0x6baed6, 0x4292c6, 0x2171b5, 0x08519c, 0x08306b]),
+    ("greens", [0xf7fcf5, 0xe5f5e0, 0xc7e9c0, 0xa1d99b, 0x74c476, 0x41ab5d, 0x238b45, 0x006d2c, 0x00441b]),
+    ("reds", [0xfff5f0, 0xfee0d2, 0xfcbba1, 0xfc9272, 0xfb6a4a, 0xef3b2c, 0xcb181d, 0xa50f15, 0x67000d]),
+    ("greys", [0xffffff, 0xf0f0f0, 0xd9d9d9, 0xbdbdbd, 0x969696, 0x737373, 0x525252, 0x252525, 0x000000]),
+    ("oranges", [0xfff5eb, 0xfee6ce, 0xfdd0a2, 0xfdae6b, 0xfd8d3c, 0xf16913, 0xd94801, 0xa63603, 0x7f2704]),
+    ("purples", [0xfcfbfd, 0xefedf5, 0xdadaeb, 0xbcbddc, 0x9e9ac8, 0x807dba, 0x6a51a3, 0x54278f, 0x3f007d]),
+];
+
+/// `n` colours of a named sequential palette (`Blues`, `Greens`, ...).
+pub fn palette(name: &str, n: usize) -> Option<Vec<(u8, u8, u8)>> {
+    let lname = name.trim().to_lowercase();
+    let (_, p) = PALETTES.iter().find(|(k, _)| *k == lname)?;
+    let rgb = |c: u32| ((c >> 16) as u8, (c >> 8) as u8, c as u8);
+    Some(match n {
+        0 => Vec::new(),
+        1 => vec![rgb(p[4])],
+        _ => (0..n).map(|j| rgb(p[((j as f64) * 8.0 / (n - 1) as f64).round().min(8.0) as usize])).collect(),
+    })
+}
+
 pub struct Spmap;
 
 impl CommandHandler for Spmap {
@@ -463,6 +486,7 @@ impl CommandHandler for Spmap {
         };
         let nclass = if method == "unique" { breaks.len() } else { breaks.len().saturating_sub(1).max(1) };
         let colors: Vec<(u8, u8, u8)> = match cmd.opt("fcolor", 2) {
+            Some(c) if c.split_whitespace().count() == 1 && palette(c, nclass).is_some() => palette(c, nclass).unwrap_or_default(),
             Some(c) => c.split_whitespace().map(color_rgb).collect(),
             None => (0..nclass).map(|j| {
                 let v = (230.0 - 200.0 * j as f64 / (nclass.max(2) - 1) as f64) as u8;
@@ -495,17 +519,40 @@ impl CommandHandler for Spmap {
                 }
             }
         }
-        let legend: Vec<(String, (u8, u8, u8))> = (0..nclass)
-            .map(|j| {
-                let label = if method == "unique" {
-                    crate::format::fmt_g(breaks[j], 8)
-                } else {
-                    format!("({},{}]", crate::format::fmt_g(breaks[j], 6), crate::format::fmt_g(breaks[j + 1], 6))
-                };
-                (label, colors.get(j).copied().unwrap_or((128, 128, 128)))
-            })
-            .collect();
+        // legend: value labels with leglabel(), observation counts with legcount
+        let leglabel = cmd.opt("leglabel", 4).map(|s| s.trim().to_string());
+        let labels = leglabel.as_ref().and_then(|l| ds.value_labels.get(l));
+        let legcount = cmd.has_opt("legcount", 6);
+        let mut counts = vec![0usize; nclass];
+        for i in 0..ds.n_obs {
+            if mask[i] {
+                if let Some(c) = class_of(vals[i]) {
+                    if c < nclass {
+                        counts[c] += 1;
+                    }
+                }
+            }
+        }
+        let show_legend = !cmd.opt("legenda", 6).is_some_and(|v| v.trim().eq_ignore_ascii_case("off"));
+        let legend: Vec<(String, (u8, u8, u8))> = if !show_legend {
+            Vec::new()
+        } else {
+            (0..nclass)
+                .map(|j| {
+                    let mut label = if method == "unique" {
+                        labels.and_then(|l| l.lookup(breaks[j]).map(str::to_string)).unwrap_or_else(|| crate::format::fmt_g(breaks[j], 8))
+                    } else {
+                        format!("({},{}]", crate::format::fmt_g(breaks[j], 6), crate::format::fmt_g(breaks[j + 1], 6))
+                    };
+                    if legcount {
+                        label = format!("{label} ({})", counts[j]);
+                    }
+                    (label, colors.get(j).copied().unwrap_or((128, 128, 128)))
+                })
+                .collect()
+        };
         let mut g = Graph { title: cmd.opt("title", 2).map(|t| util::unquote(t.split(',').next().unwrap_or(t))).unwrap_or_default(), polygons: polys, map_legend: legend, legend: true, ..Default::default() };
+        g.map_legend_title = cmd.opt("legtitle", 4).map(util::unquote).unwrap_or_default();
         g.name = cmd.opt("name", 4).map(|s| s.split(',').next().unwrap().trim().to_string()).unwrap_or_else(|| "Graph".into());
         st.graphs.insert(g.name.clone(), g.clone());
         st.graph = Some(g);
