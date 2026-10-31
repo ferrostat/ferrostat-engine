@@ -1232,7 +1232,7 @@ checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 
 [[package]]
 name = "ferrostat-ado"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "chrono",
  "ferrostat-cmd",
@@ -1245,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "ferrostat-cmd"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1269,7 +1269,7 @@ dependencies = [
 
 [[package]]
 name = "ferrostat-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1278,7 +1278,7 @@ dependencies = [
 
 [[package]]
 name = "ferrostat-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ferrostat-cmd",
  "ferrostat-core",
@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "ferrostat-gui"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "eframe",
  "egui_extras",
@@ -1300,7 +1300,7 @@ dependencies = [
 
 [[package]]
 name = "ferrostat-parser"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ferrostat-core",
  "regex",
@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "ferrostat-repl"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ferrostat-ado",
  "ferrostat-cmd",
@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "ferrostat-tests"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "arrow-array",
  "arrow-ipc",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "ferrostat-wasm"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ferrostat-ado",
  "ferrostat-cmd",
