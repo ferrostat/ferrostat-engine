@@ -450,6 +450,7 @@ impl Engine {
         list.extend(ferrostat_cmd::w7d::handlers());
         list.extend(ferrostat_cmd::w7c::handlers());
         list.extend(ferrostat_cmd::w7e::handlers());
+        list.extend(ferrostat_cmd::w7f::handlers());
         list.extend(ferrostat_cmd::w8::handlers());
         let mut handlers = HashMap::new();
         for (n, h) in list {

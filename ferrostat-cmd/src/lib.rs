@@ -188,6 +188,7 @@ pub mod w7b;
 pub mod w7d;
 pub mod w7c;
 pub mod w7e;
+pub mod w7f;
 pub mod w8;
 
 pub use commands::CommandHandler;
