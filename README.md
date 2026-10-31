@@ -123,6 +123,13 @@ Missing values sort above all numbers (`.` < `.a` < … < `.z`), arithmetic with
 | Spatial | `spset`, `spmatrix`, `spregress` (GS2SLS, ML), `spivregress`, `spxtregress`, `estat impact`, `estat moran`, `grmap` |
 | Tables | `collect` (tags, `get`, `label`, `style`, `layout`, `preview`, `export` to .docx/.xlsx/.html/.md/.tex/.txt), `table` results stored in collections, `dtable`, `etable` |
 | Documents | `putdocx` (.docx: styled paragraphs, text, images, tables from data/matrices/estimates, page breaks, append), `putpdf` (basic PDF), `dyndoc`/`dyntext` (dynamic Markdown with `dd_do`/`dd_display`/`dd_graph`/skip/ignore/remove/include tags to HTML, .docx or text), `markdown`, `html2docx` |
+| Bayesian analysis | `bayesmh` (adaptive Metropolis–Hastings, Gibbs blocks, hierarchical priors, random effects, multiple chains), `bayes:` prefix for regression, binary, count, ordinal, survival, multilevel and VAR models, `bayesstats` (summary, ess, ic, grubin, ppvalues), `bayestest`, `bayesgraph`, `bayespredict`, `bayesirf`, `bayesfcast`, `bayesselect` |
+| SEM, IRT, mixtures | `sem` (path syntax, groups and invariance, ml/mlmv/adf, Satorra–Bentler; `estat gof/mindices/teffects/…`), `gsem` (generalized families, multilevel latents, latent classes), `irt` (1pl, 2pl, 3pl, grm, nrm, pcm, gpcm, rsm, hybrid; `irtgraph`), `difmh`, `diflogistic`, `fmm` prefix |
+| Lasso & choice models | `lasso`, `elasticnet`, `sqrtlasso` (cv, adaptive, plugin, bic), `ds*`/`po*`/`xpo*` inference, `lassoknots`/`lassocoef`/`cvplot`/`coefpath`; `cmset`, `cmclogit`, `cmmixlogit`, `cmmprobit`, `cmrologit`, `cmroprobit`, `nlogit` |
+| Extended regression & causal | `eregress`, `eprobit`, `eoprobit`, `eintreg` and panel `xte*` versions, `etregress`, `etpoisson`, `eteffects`, `hdidregress`, `lateffects`, `cate`, `telasso`, `mediate`, `stteffects` |
+| Meta-analysis & model averaging | `meta set/esize/summarize/forestplot/funnelplot/bias/trimfill/regress/mvregress/meregress`; `bmaregress` with `bmastats`, `bmagraph`, `bmapredict` |
+| Power & designs | `power` (24 methods incl. cluster designs, tables and graphs), `ciwidth`, `gsdesign`/`gsbounds` (group-sequential bounds) |
+| DSGE & finance | `dsge`, `dsgenl` (`estat policy/transition/stable/steady`, `irf`); `fin returns/summarize/portfolio/regress capm/regress fmb/valrisk` |
 
 ---
 
